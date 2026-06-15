@@ -244,6 +244,7 @@ public struct ArtistDetailView: View {
 
 // MARK: - Preview
 
+#if DEBUG
 #Preview {
     NavigationStack {
         ArtistDetailView(artist: Artist.previewArtists[0])
@@ -255,3 +256,5 @@ public struct ArtistDetailView: View {
             ))
     }
 }
+
+#endif

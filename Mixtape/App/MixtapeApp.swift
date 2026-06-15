@@ -13,6 +13,10 @@ struct MixtapeApp: App {
     @StateObject private var dependencies = AppDependencies()
     @StateObject private var theme = ThemeManager.shared
 
+    #if os(macOS)
+    @StateObject private var updater = UpdaterController()
+    #endif
+
     var body: some Scene {
         mainWindow
     }
@@ -36,6 +40,11 @@ struct MixtapeApp: App {
         #if os(macOS)
         .defaultSize(width: 1200, height: 740)
         .windowResizability(.contentSize)
+        .commands {
+            CommandGroup(after: .appInfo) {
+                CheckForUpdatesView(updater: updater)
+            }
+        }
         #endif
     }
 

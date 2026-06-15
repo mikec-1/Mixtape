@@ -198,6 +198,7 @@ private struct AlbumTrackRow: View {
 
 // MARK: - Preview
 
+#if DEBUG
 #Preview {
     NavigationStack {
         AlbumDetailView(album: Album.previewAlbums[0])
@@ -209,3 +210,5 @@ private struct AlbumTrackRow: View {
             ))
     }
 }
+
+#endif

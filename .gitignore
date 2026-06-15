@@ -27,6 +27,10 @@ DerivedData/
 *.xcscmblueprint
 *.xccheckout
 
+# ─── Release artifacts ───────────────────────────────
+*.dmg
+*.xcarchive
+
 # ─── Secrets / local config ──────────────────────────
 *.local.xcconfig
 Secrets.xcconfig

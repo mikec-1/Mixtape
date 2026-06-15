@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		277381152FDF935F005192E6 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; platformFilters = (macos, ); productRef = 277381142FDF935F005192E6 /* Sparkle */; };
 		27BE1FAD2FD8D3A50008511A /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = 27BE1FAC2FD8D3A50008511A /* Supabase */; };
 /* End PBXBuildFile section */
 
@@ -41,6 +42,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				27BE1FAD2FD8D3A50008511A /* Supabase in Frameworks */,
+				277381152FDF935F005192E6 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -92,6 +94,7 @@
 			name = Mixtape;
 			packageProductDependencies = (
 				27BE1FAC2FD8D3A50008511A /* Supabase */,
+				277381142FDF935F005192E6 /* Sparkle */,
 			);
 			productName = Mixtape;
 			productReference = 27BE1F312FD8C92A0008511A /* Mixtape.app */;
@@ -123,6 +126,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				27BE1FAA2FD8D2E60008511A /* XCRemoteSwiftPackageReference "supabase-swift" */,
+				277381132FDF935F005192E6 /* XCRemoteSwiftPackageReference "Sparkle" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 27BE1F322FD8C92A0008511A /* Products */;
@@ -407,6 +411,14 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		277381132FDF935F005192E6 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.9.3;
+			};
+		};
 		27BE1FAA2FD8D2E60008511A /* XCRemoteSwiftPackageReference "supabase-swift" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/supabase/supabase-swift";
@@ -418,6 +430,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		277381142FDF935F005192E6 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 277381132FDF935F005192E6 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
 		27BE1FAC2FD8D3A50008511A /* Supabase */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 27BE1FAA2FD8D2E60008511A /* XCRemoteSwiftPackageReference "supabase-swift" */;

@@ -2,6 +2,13 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- Sparkle auto-update (macOS only; ignored on iOS) -->
+	<key>SUFeedURL</key>
+	<string>https://mikec-1.github.io/Mixtape/appcast.xml</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUPublicEDKey</key>
+	<string>Axi5/vurmFfaB2/44dTXduXerRGHiTniGjWsg9/Z/S4=</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
