@@ -36,3 +36,6 @@ DerivedData/
 Secrets.xcconfig
 .env
 .env.*
+
+# Local release tooling
+scripts/
