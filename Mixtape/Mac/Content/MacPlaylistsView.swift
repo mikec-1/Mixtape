@@ -19,9 +19,6 @@ struct MacPlaylistsView: View {
     // New playlist sheet
     @State private var showNewSheet          = false
 
-    // Join shared playlist sheet
-    @State private var showJoinShared        = false
-
     // Edit playlist sheet
     @State private var editTarget:           Playlist?  = nil
 
@@ -41,22 +38,11 @@ struct MacPlaylistsView: View {
         // Toolbar + button
         .toolbar {
             ToolbarItem(placement: .automatic) {
-                Button { showJoinShared = true } label: {
-                    Image(systemName: "person.badge.plus")
-                }
-                .help("Join Shared Playlist")
-            }
-            ToolbarItem(placement: .automatic) {
                 Button { showNewSheet = true } label: {
                     Image(systemName: "plus")
                 }
                 .help("New Playlist")
             }
-        }
-        // Join shared playlist sheet
-        .sheet(isPresented: $showJoinShared) {
-            JoinSharedPlaylistSheet()
-                .environmentObject(deps)
         }
         // New playlist sheet
         .sheet(isPresented: $showNewSheet) {

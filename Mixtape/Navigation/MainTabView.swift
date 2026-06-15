@@ -8,7 +8,7 @@ public struct MainTabView: View {
     @EnvironmentObject private var deps:   AppDependencies
     @EnvironmentObject private var engine: PlaybackEngine
 
-    @State private var selectedTab: AppTab = .home
+    @State private var selectedTab: AppTab = .library
 
     #if os(iOS)
     // Review queue for enrichment candidates found during iOS import.
@@ -37,12 +37,6 @@ public struct MainTabView: View {
     private var tabContent: some View {
         ZStack(alignment: .bottom) {
             TabView(selection: $selectedTab) {
-                NavigationStack {
-                    HomeView(onQuickLink: handleQuickLink)
-                }
-                .tag(AppTab.home)
-                .tabItem { Label("Home", systemImage: "house.fill") }
-
                 LibraryView(libraryService: deps.libraryService)
                     .tag(AppTab.library)
                     .tabItem { Label("Library", systemImage: MixtapeIcons.library) }
@@ -95,14 +89,6 @@ public struct MainTabView: View {
             }
         }
         .animation(.spring(response: 0.3, dampingFraction: 0.88), value: deps.toastMessage)
-    }
-
-    // MARK: - Quick-link routing
-
-    /// Home quick-links jump to the Library tab (which hosts Songs/Albums/
-    /// Artists/Playlists on iOS).
-    private func handleQuickLink(_ link: HomeQuickLink) {
-        selectedTab = .library
     }
 
     // MARK: - Tab Bar Appearance (iOS only)
@@ -184,7 +170,7 @@ private struct PlaylistAddedToast: View {
 // MARK: - App Tab
 
 public enum AppTab: Hashable {
-    case home, library, search, nowPlaying, settings
+    case library, search, nowPlaying, settings
 }
 
 // MARK: - Preview

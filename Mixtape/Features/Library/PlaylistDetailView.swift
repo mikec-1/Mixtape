@@ -19,8 +19,6 @@ public struct PlaylistDetailView: View {
     @State private var showDeleteConfirm = false
     // Add to Playlist sheet
     @State private var trackForAddToPlaylist: Track? = nil
-    // Collaborative share sheet
-    @State private var showCollabShare = false
 
     /// Always fetches the freshest version of this playlist from the live library,
     /// falling back to the captured `let playlist` only if the library hasn't loaded yet.
@@ -98,14 +96,6 @@ public struct PlaylistDetailView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .background(Color.mixBackground.ignoresSafeArea())
-        // Pull the latest shared track list when opening a collaborative playlist.
-        // No-op for non-shared playlists.
-        .task(id: playlist.id) {
-            await PlaylistSharingService.shared.refreshSharedPlaylist(
-                localPlaylistID:  playlist.id,
-                libraryService:   deps.libraryService
-            )
-        }
         .navigationTitle(playlist.name)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
@@ -129,11 +119,6 @@ public struct PlaylistDetailView: View {
                     if !playlist.isSystem {
                         Divider()
                         Button {
-                            showCollabShare = true
-                        } label: {
-                            Label("Share Collaboratively", systemImage: "person.2.wave.2")
-                        }
-                        Button {
                             renameText = playlist.name
                             showRenameAlert = true
                         } label: {
@@ -151,17 +136,6 @@ public struct PlaylistDetailView: View {
                 }
             }
             #else
-            // macOS: collaborative share — user-created playlists only
-            if !playlist.isSystem {
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        showCollabShare = true
-                    } label: {
-                        Label("Share Collaboratively", systemImage: "person.2.wave.2")
-                    }
-                    .help("Share this playlist with a join code")
-                }
-            }
             // macOS: visible download button — enabled when a track is selected (single-click)
             ToolbarItem(placement: .primaryAction) {
                 Button {
@@ -206,11 +180,6 @@ public struct PlaylistDetailView: View {
         // Add to Playlist sheet
         .sheet(item: $trackForAddToPlaylist) { track in
             AddToPlaylistSheet(track: track, sourcePlaylistID: playlist.id)
-                .environmentObject(deps)
-        }
-        // Collaborative share sheet
-        .sheet(isPresented: $showCollabShare) {
-            ShareCollaborativeSheet(playlist: livePlaylist, tracks: tracks)
                 .environmentObject(deps)
         }
     }

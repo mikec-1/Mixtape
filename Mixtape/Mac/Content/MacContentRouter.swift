@@ -46,16 +46,7 @@ struct MacContentRouter: View {
                 .environmentObject(engine)
                 .environmentObject(appState)
         } else {
-            switch appState.selection ?? .home {
-            case .home:
-                HomeView { link in
-                    switch link {
-                    case .songs:     appState.selection = .songs
-                    case .albums:    appState.selection = .albums
-                    case .artists:   appState.selection = .artists
-                    case .playlists: appState.selection = .playlists
-                    }
-                }
+            switch appState.selection ?? .songs {
             case .songs:
                 MacSongsView(searchText: appState.searchText)
             case .albums:

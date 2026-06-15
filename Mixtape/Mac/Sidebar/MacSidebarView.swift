@@ -48,17 +48,6 @@ struct MacSidebarView: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(spacing: 0) {
-                    // Home — standalone, above the (reorderable) Library section.
-                    MacSidebarRow(
-                        item:       .home,
-                        isSelected: appState.selection == .home
-                    ) {
-                        appState.selection = .home
-                        appState.selectedAlbum = nil
-                        appState.selectedPlaylist = nil
-                    }
-                    .padding(.top, 12)
-
                     // Section header
                     Text("Library")
                         .font(.system(size: 11, weight: .semibold))

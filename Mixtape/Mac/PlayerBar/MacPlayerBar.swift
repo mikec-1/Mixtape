@@ -24,8 +24,6 @@ struct MacPlayerBar: View {
     @EnvironmentObject private var appState: MacAppState
     @EnvironmentObject private var deps:     AppDependencies
 
-    @State private var showLyrics = false
-
     var body: some View {
         VStack(spacing: 0) {
             Divider()
@@ -228,20 +226,6 @@ struct MacPlayerBar: View {
             Divider()
                 .frame(height: 18)
                 .padding(.horizontal, 2)
-
-            // ── Lyrics button ─────────────────────────────────────────────
-            BarIconButton(
-                icon: "quote.bubble",
-                isActive: showLyrics,
-                help: "Lyrics"
-            ) {
-                showLyrics.toggle()
-            }
-            .disabled(engine.queue.currentTrack == nil)
-            .popover(isPresented: $showLyrics, arrowEdge: .top) {
-                MacLyricsPopover()
-                    .environmentObject(engine)
-            }
 
             // ── Queue button ──────────────────────────────────────────────
             BarIconButton(

@@ -14,10 +14,6 @@ public struct SettingsView: View {
     @EnvironmentObject private var theme: ThemeManager
     @AppStorage("haptics.enabled") private var hapticsEnabled = true
     @State private var showFolderPicker = false
-    @State private var showEqualizer = false
-    @State private var showAccount = false
-    @State private var showLastFm = false
-    @ObservedObject private var scrobbler = LastFmScrobbler.shared
 
     public init(
         authService:    SupabaseAuthService,
@@ -35,32 +31,6 @@ public struct SettingsView: View {
 
     public var body: some View {
         settingsContent
-            #if os(iOS)
-            .sheet(isPresented: $showEqualizer) {
-                NavigationStack {
-                    ScrollView {
-                        EqualizerView(equalizer: deps.equalizer)
-                    }
-                    .background(Color.mixBackground.ignoresSafeArea())
-                    .navigationTitle("Equalizer")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbarColorScheme(.dark, for: .navigationBar)
-                    .toolbar {
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("Done") { showEqualizer = false }
-                                .foregroundStyle(Color.mixPrimary)
-                        }
-                    }
-                }
-            }
-            #endif
-            // Manage Account — presented from the account section on both platforms.
-            .sheet(isPresented: $showAccount) {
-                accountSheet
-            }
-            .sheet(isPresented: $showLastFm) {
-                LastFmConnectView()
-            }
             // Sign out
             .confirmationDialog(
                 "Sign Out",
@@ -115,45 +85,6 @@ public struct SettingsView: View {
             }
     }
 
-    // MARK: - Manage Account sheet (shared chrome, platform-specific toolbar)
-
-    @ViewBuilder
-    private var accountSheet: some View {
-        #if os(iOS)
-        NavigationStack {
-            AccountSettingsView()
-                .background(Color.mixBackground.ignoresSafeArea())
-                .navigationTitle("Account")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbarColorScheme(.dark, for: .navigationBar)
-                .toolbar {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { showAccount = false }
-                            .foregroundStyle(Color.mixPrimary)
-                    }
-                }
-        }
-        #else
-        VStack(spacing: 0) {
-            HStack {
-                Text("Account")
-                    .font(.mixTitle2)
-                    .foregroundStyle(Color.mixTextPrimary)
-                Spacer()
-                Button("Done") { showAccount = false }
-                    .foregroundStyle(Color.mixPrimary)
-            }
-            .padding(16)
-
-            Divider().background(Color.mixSeparator)
-
-            AccountSettingsView()
-        }
-        .frame(minWidth: 460, minHeight: 480)
-        .background(Color.mixBackground)
-        #endif
-    }
-
     // MARK: - Settings content (platform-aware wrapper)
 
     @ViewBuilder
@@ -164,9 +95,7 @@ public struct SettingsView: View {
                 profileSection
                 accountSection
                 appearanceSection
-                playbackSection
                 syncSection
-                lastFmSection
                 exportSection
                 if vm.isDeveloper {
                     librarySection
@@ -252,21 +181,6 @@ public struct SettingsView: View {
     private var accountSection: some View {
         Section {
             if vm.currentUser != nil {
-                // Manage Account — presents the auth team's AccountSettingsView.
-                Button {
-                    showAccount = true
-                } label: {
-                    settingsRow(
-                        title: "Manage Account",
-                        systemImage: "person.crop.circle",
-                        showsChevron: true
-                    )
-                }
-                #if os(macOS)
-                .buttonStyle(.plain)
-                #endif
-                .listRowBackground(Color.mixSurface)
-
                 Button(role: .destructive) {
                     vm.showSignOutConfirm = true
                 } label: {
@@ -295,13 +209,6 @@ public struct SettingsView: View {
             }
             .listRowBackground(Color.mixSurface)
 
-            VStack(alignment: .leading, spacing: 12) {
-                rowLabel(title: "Accent colour", systemImage: "paintpalette.fill", tint: .mixPrimary, titleColor: .mixTextPrimary)
-                accentSwatches
-            }
-            .padding(.vertical, 4)
-            .listRowBackground(Color.mixSurface)
-
             #if os(iOS)
             Toggle(isOn: $hapticsEnabled) {
                 rowLabel(title: "Haptic feedback", systemImage: "hand.tap.fill", tint: .mixPrimary, titleColor: .mixTextPrimary)
@@ -311,127 +218,6 @@ public struct SettingsView: View {
             #endif
         } header: {
             SectionHeader("Appearance")
-        }
-    }
-
-    private var accentSwatches: some View {
-        let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 8)
-        return LazyVGrid(columns: columns, spacing: 12) {
-            ForEach(AppAccent.allCases) { accent in
-                Button {
-                    theme.accent = accent
-                    Haptics.play(.selection)
-                } label: {
-                    Circle()
-                        .fill(accent.color)
-                        .frame(width: 30, height: 30)
-                        .overlay {
-                            Circle()
-                                .strokeBorder(Color.mixTextPrimary, lineWidth: theme.accent == accent ? 2.5 : 0)
-                                .padding(-3)
-                        }
-                        .overlay {
-                            if theme.accent == accent {
-                                Image(systemName: "checkmark")
-                                    .font(.system(size: 12, weight: .bold))
-                                    .foregroundStyle(.white)
-                            }
-                        }
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-
-    private var playbackSection: some View {
-        Section {
-            #if os(macOS)
-            // Inline EQ on macOS Preferences — it fits the wider layout.
-            EqualizerView(equalizer: deps.equalizer)
-                .listRowInsets(EdgeInsets())
-                .listRowBackground(Color.mixBackground)
-            #else
-            Button {
-                showEqualizer = true
-            } label: {
-                settingsRow(
-                    title: "Equalizer",
-                    systemImage: "slider.vertical.3",
-                    showsChevron: true,
-                    trailingText: deps.equalizer.isEnabled ? deps.equalizer.preset.rawValue : "Off"
-                )
-            }
-            .listRowBackground(Color.mixSurface)
-            #endif
-
-            Picker(selection: Binding(
-                get: { deps.playbackEngine.crossfadeMode },
-                set: { deps.playbackEngine.setCrossfadeMode($0) }
-            )) {
-                ForEach(CrossfadeMode.allCases) { Text($0.title).tag($0) }
-            } label: {
-                rowLabel(title: "Crossfade", systemImage: "wand.and.rays")
-            }
-            .listRowBackground(Color.mixSurface)
-
-            if deps.playbackEngine.crossfadeMode == .crossfade {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        rowLabel(title: "Crossfade length", systemImage: "timer")
-                        Spacer()
-                        Text("\(Int(deps.playbackEngine.crossfadeDuration))s")
-                            .font(.mixLabel)
-                            .foregroundStyle(Color.mixTextSecondary)
-                    }
-                    Slider(
-                        value: Binding(
-                            get: { deps.playbackEngine.crossfadeDuration },
-                            set: { deps.playbackEngine.setCrossfadeDuration($0) }
-                        ),
-                        in: 2...12, step: 1
-                    )
-                    .tint(Color.mixPrimary)
-                }
-                .padding(.vertical, 4)
-                .listRowBackground(Color.mixSurface)
-            }
-        } header: {
-            SectionHeader("Playback")
-        }
-    }
-
-    private var lastFmSection: some View {
-        Section {
-            Button {
-                showLastFm = true
-            } label: {
-                settingsRow(
-                    title: "Account",
-                    systemImage: "waveform",
-                    showsChevron: true,
-                    trailingText: scrobbler.isConfigured
-                        ? (scrobbler.username ?? "Connected")
-                        : "Not connected"
-                )
-            }
-            #if os(macOS)
-            .buttonStyle(.plain)
-            #endif
-            .listRowBackground(Color.mixSurface)
-
-            settingsRow(title: "Scrobble what I play", systemImage: "dot.radiowaves.left.and.right") {
-                Toggle("", isOn: $scrobbler.isEnabled)
-                    .labelsHidden()
-                    .tint(Color.mixPrimary)
-                    .disabled(!scrobbler.isConfigured)
-            }
-            .listRowBackground(Color.mixSurface)
-        } header: {
-            SectionHeader("Last.fm")
-        } footer: {
-            Text("Scrobble your listens to Last.fm. Tap Account to connect with your own API key.")
-                .font(.mixCaption)
-                .foregroundStyle(Color.mixTextTertiary)
         }
     }
 

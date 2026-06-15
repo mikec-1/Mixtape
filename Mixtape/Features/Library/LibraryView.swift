@@ -9,7 +9,6 @@ public struct LibraryView: View {
     @StateObject private var vm: LibraryViewModel
 
     @State private var showPlaylistEditorSheet = false
-    @State private var showJoinShared = false
 
     public init(libraryService: LibraryService) {
         _vm = StateObject(wrappedValue: LibraryViewModel(libraryService: libraryService))
@@ -71,10 +70,6 @@ public struct LibraryView: View {
                 PlaylistEditorSheet()
                     .environmentObject(deps)
             }
-            .sheet(isPresented: $showJoinShared) {
-                JoinSharedPlaylistSheet()
-                    .environmentObject(deps)
-            }
         }
     }
 
@@ -110,15 +105,6 @@ public struct LibraryView: View {
                         .environmentObject(deps)
                 } label: {
                     SmartPlaylistsEntryRow()
-                }
-                .buttonStyle(.plain)
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-
-                Button {
-                    showJoinShared = true
-                } label: {
-                    JoinSharedEntryRow()
                 }
                 .buttonStyle(.plain)
                 .padding(.horizontal, 16)
@@ -173,37 +159,6 @@ private struct SmartPlaylistsEntryRow: View {
                     .font(.mixBodyBold)
                     .foregroundStyle(Color.mixTextPrimary)
                 Text("Auto-updating rule-based playlists")
-                    .font(.mixLabel)
-                    .foregroundStyle(Color.mixTextSecondary)
-            }
-            Spacer()
-            Image(systemName: MixtapeIcons.forward)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Color.mixTextTertiary)
-        }
-        .padding(.vertical, 8)
-        .contentShape(Rectangle())
-    }
-}
-
-// MARK: - Join Shared Entry
-
-private struct JoinSharedEntryRow: View {
-    var body: some View {
-        HStack(spacing: 12) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.mixPrimary.opacity(0.15))
-                    .frame(width: 48, height: 48)
-                Image(systemName: "person.badge.plus")
-                    .font(.system(size: 20))
-                    .foregroundStyle(Color.mixPrimary)
-            }
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Join Shared Playlist")
-                    .font(.mixBodyBold)
-                    .foregroundStyle(Color.mixTextPrimary)
-                Text("Add a playlist someone shared with a code")
                     .font(.mixLabel)
                     .foregroundStyle(Color.mixTextSecondary)
             }

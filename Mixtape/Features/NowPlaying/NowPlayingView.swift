@@ -15,9 +15,6 @@ public struct NowPlayingView: View {
     @EnvironmentObject private var deps:   AppDependencies
     @Environment(\.dismiss)  private var dismiss
 
-    /// Lyrics resolution + caching.
-    @StateObject private var lyricsService = LyricsService.shared
-
     /// True while the user is dragging the seek slider (freeze timer updates).
     @State private var isScrubbing = false
     @State private var scrubValue:  Double = 0
@@ -25,12 +22,7 @@ public struct NowPlayingView: View {
     /// Ambient background colours derived from current artwork.
     @State private var ambientColors: [Color] = ArtworkColors.fallback
 
-    /// Lyrics for the current track (nil = not yet resolved this appearance).
-    @State private var lyrics: TrackLyrics?
-    @State private var isLoadingLyrics = false
-
     /// Sheets / panels.
-    @State private var showLyrics  = false
     @State private var showUpNext  = false
 
     public var body: some View {
@@ -97,13 +89,8 @@ public struct NowPlayingView: View {
         VStack(spacing: 0) {
             dragHandle
             Spacer(minLength: 12)
-            if showLyrics {
-                lyricsPanel
-                Spacer(minLength: 20)
-            } else {
-                artworkView
-                Spacer(minLength: 28)
-            }
+            artworkView
+            Spacer(minLength: 28)
             trackInfo
             Spacer(minLength: 22)
             seekBar
@@ -149,45 +136,6 @@ public struct NowPlayingView: View {
         .shadow(color: .black.opacity(0.45), radius: 28, y: 14)
         .scaleEffect(engine.state.isPlaying ? 1.0 : 0.92)
         .animation(.spring(response: 0.45, dampingFraction: 0.7), value: engine.state.isPlaying)
-    }
-
-    // MARK: - Lyrics Panel
-
-    private var lyricsPanel: some View {
-        VStack(spacing: 0) {
-            if isLoadingLyrics {
-                Spacer()
-                ProgressView()
-                    .tint(Color.mixTextSecondary)
-                Spacer()
-            } else if let lyrics, lyrics.hasSynced {
-                SyncedLyricsView(lines: lyrics.synced, currentTime: engine.currentTime) { time in
-                    engine.seek(to: time)
-                    scrubValue = time
-                }
-            } else if let plain = lyrics?.plain, !plain.isEmpty {
-                ScrollView {
-                    Text(plain)
-                        .font(.mixBody)
-                        .foregroundStyle(Color.mixTextPrimary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 12)
-                }
-            } else {
-                Spacer()
-                VStack(spacing: 12) {
-                    Image(systemName: "text.quote")
-                        .font(.system(size: 40))
-                        .foregroundStyle(Color.mixTextTertiary)
-                    Text("No lyrics found")
-                        .font(.mixBody)
-                        .foregroundStyle(Color.mixTextSecondary)
-                }
-                Spacer()
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .frame(height: 320)
     }
 
     // MARK: - Track Info
@@ -245,92 +193,18 @@ public struct NowPlayingView: View {
         }
     }
 
-    // MARK: - Utility Row (lyrics toggle, speed, sleep timer, up next)
+    // MARK: - Utility Row (up next)
 
     private var utilityRow: some View {
         HStack(spacing: 0) {
-            // Lyrics toggle
-            NPButton(
-                icon: "quote.bubble",
-                isActive: showLyrics,
-                size: 18
-            ) {
-                withAnimation(.easeInOut(duration: 0.25)) { showLyrics.toggle() }
-            }
-
-            Spacer()
-
-            // Playback speed menu
-            speedMenu
-
-            Spacer()
-
-            // Sleep timer menu
-            sleepTimerMenu
-
             Spacer()
 
             // Up Next
             NPButton(icon: MixtapeIcons.queue, size: 18) {
                 showUpNext = true
             }
-        }
-    }
 
-    private var speedMenu: some View {
-        Menu {
-            ForEach([0.5, 0.75, 1.0, 1.25, 1.5, 2.0], id: \.self) { rate in
-                Button {
-                    engine.setRate(Float(rate))
-                } label: {
-                    Label(
-                        speedLabel(rate),
-                        systemImage: abs(Double(engine.playbackRate) - rate) < 0.01 ? "checkmark" : ""
-                    )
-                }
-            }
-        } label: {
-            VStack(spacing: 2) {
-                Image(systemName: "speedometer")
-                    .font(.system(size: 18))
-                Text(speedLabel(Double(engine.playbackRate)))
-                    .font(.system(size: 10, weight: .semibold))
-            }
-            .foregroundStyle(engine.playbackRate != 1.0 ? Color.mixPrimary : Color.mixTextSecondary)
-            .frame(width: 48, height: 44)
-            .contentShape(Rectangle())
-        }
-    }
-
-    private var sleepTimerMenu: some View {
-        Menu {
-            if engine.sleepTimerRemaining != nil {
-                Button(role: .destructive) {
-                    engine.cancelSleepTimer()
-                } label: {
-                    Label("Cancel Timer", systemImage: "xmark")
-                }
-                Divider()
-            }
-            ForEach([15, 30, 45, 60], id: \.self) { minutes in
-                Button {
-                    engine.setSleepTimer(TimeInterval(minutes * 60))
-                } label: {
-                    Text("\(minutes) min")
-                }
-            }
-        } label: {
-            VStack(spacing: 2) {
-                Image(systemName: engine.sleepTimerRemaining != nil ? "moon.zzz.fill" : "moon.zzz")
-                    .font(.system(size: 18))
-                if let remaining = engine.sleepTimerRemaining {
-                    Text(formatTime(remaining))
-                        .font(.system(size: 10, weight: .semibold))
-                }
-            }
-            .foregroundStyle(engine.sleepTimerRemaining != nil ? Color.mixPrimary : Color.mixTextSecondary)
-            .frame(width: 48, height: 44)
-            .contentShape(Rectangle())
+            Spacer()
         }
     }
 
@@ -418,26 +292,6 @@ public struct NowPlayingView: View {
     private func refreshForCurrentTrack() {
         // Ambient colours from artwork (cheap, synchronous).
         ambientColors = ArtworkColors.dominantColors(from: engine.queue.currentTrack?.artworkData)
-
-        // Lyrics (cached or async fetch).
-        guard let track = engine.queue.currentTrack else {
-            lyrics = nil
-            return
-        }
-        if let cached = lyricsService.cached(for: track) {
-            lyrics = cached
-            return
-        }
-        lyrics = nil
-        isLoadingLyrics = true
-        Task {
-            let resolved = await lyricsService.resolve(for: track)
-            // Only apply if still the same track.
-            if engine.queue.currentTrack?.id == track.id {
-                lyrics = resolved
-            }
-            isLoadingLyrics = false
-        }
     }
 
     // MARK: - Helpers
@@ -461,55 +315,6 @@ public struct NowPlayingView: View {
         if let ns = NSImage(data: data) { return Image(nsImage: ns) }
         #endif
         return nil
-    }
-}
-
-// MARK: - Synced Lyrics View
-
-/// Auto-scrolling synced lyrics with the active line highlighted.
-private struct SyncedLyricsView: View {
-    let lines: [LyricLine]
-    let currentTime: TimeInterval
-    let onTapLine: (TimeInterval) -> Void
-
-    /// Index of the line whose timestamp is the latest <= currentTime.
-    /// A small lead offset advances highlighting slightly so lines light up as
-    /// they're sung rather than 1–2s late (LRC timestamps mark a line's start and
-    /// the 0.5s progress tick adds latency on top).
-    private var activeIndex: Int? {
-        let lead = LyricSync.leadOffset
-        var idx: Int?
-        for (i, line) in lines.enumerated() {
-            if line.time <= currentTime + lead { idx = i } else { break }
-        }
-        return idx
-    }
-
-    var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
-                    ForEach(Array(lines.enumerated()), id: \.element.id) { i, line in
-                        let isActive = (i == activeIndex)
-                        Text(line.text.isEmpty ? " " : line.text)
-                            .font(.mixBody)
-                            .fontWeight(isActive ? .bold : .regular)
-                            .foregroundStyle(isActive ? Color.mixTextPrimary : Color.mixTextSecondary.opacity(0.6))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .id(i)
-                            .contentShape(Rectangle())
-                            .onTapGesture { onTapLine(line.time) }
-                    }
-                }
-                .padding(.vertical, 24)
-            }
-            .onChange(of: activeIndex) { _, newValue in
-                guard let newValue else { return }
-                withAnimation(.easeInOut(duration: 0.35)) {
-                    proxy.scrollTo(newValue, anchor: .center)
-                }
-            }
-        }
     }
 }
 

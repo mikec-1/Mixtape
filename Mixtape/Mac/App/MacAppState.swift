@@ -17,7 +17,6 @@ import Combine
 // MARK: - Sidebar Item
 
 enum MacSidebarItem: String, Hashable, CaseIterable, Identifiable {
-    case home      = "Home"
     case songs     = "Songs"
     case albums    = "Albums"
     case artists   = "Artists"
@@ -29,7 +28,6 @@ enum MacSidebarItem: String, Hashable, CaseIterable, Identifiable {
 
     var systemImage: String {
         switch self {
-        case .home:      return "house"
         case .songs:     return "music.note"
         case .albums:    return "square.stack"
         case .artists:   return "music.mic"
@@ -120,7 +118,7 @@ final class MacAppState: ObservableObject {
     func resetZoom() { uiScale = 1.0 }
 
     // MARK: Navigation
-    @Published var selection:        MacSidebarItem?               = .home
+    @Published var selection:        MacSidebarItem?               = .songs
     @Published var searchText:       String                        = ""
     @Published var columnVisibility: NavigationSplitViewVisibility = .all
 
