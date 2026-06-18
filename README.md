@@ -27,6 +27,6 @@ On the first launch, right-click the app and choose Open. After that it opens no
 
 Open `Mixtape.xcodeproj` in Xcode and build the Mixtape scheme. Dependencies are handled through Swift Package Manager.
 
-## Status
+## Version
 
 Version 1.0. This is the public build, kept intentionally simple.
