@@ -5,8 +5,8 @@
 //
 // Distribution is un-notarized, so update integrity is guaranteed by Sparkle's
 // EdDSA signatures (SUPublicEDKey in Info.plist) rather than Apple notarization.
-// The first manual install requires a one-time right-click → Open; every Sparkle
-// update afterwards is seamless.
+// The first manual install requires a one-time "Open Anyway" via System Settings
+// → Privacy & Security (macOS 15+); every Sparkle update afterwards is seamless.
 
 #if os(macOS)
 import SwiftUI

@@ -24,7 +24,13 @@ public enum SupabaseConfig {
         supabaseURL: projectURL,
         supabaseKey: anonKey,
         options: .init(
-            auth: .init(emitLocalSessionAsInitialSession: true)
+            auth: .init(
+                // File-backed session storage instead of the Keychain — avoids
+                // the recurring keychain-password prompt caused by ad-hoc
+                // signing. See FileAuthLocalStorage for the full rationale.
+                storage: FileAuthLocalStorage(),
+                emitLocalSessionAsInitialSession: true
+            )
         )
     )
 }
