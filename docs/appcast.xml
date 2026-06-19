@@ -6,29 +6,27 @@
     <description>Mixtape updates</description>
     <language>en</language>
     <item>
-      <title>Version 1.1.0</title>
+      <title>Version 1.1.1</title>
       <description><![CDATA[
         <html><head><meta charset="utf-8"><style>
-          body { margin: 0; color: #1d1d1f; line-height: 1.5;
-                 font-family: -apple-system, system-ui, sans-serif; }
+          body { font: -apple-system-body, -apple-system; margin: 0; color: #1d1d1f;
+                 font-family: -apple-system, system-ui, sans-serif; line-height: 1.5; }
           h1 { font-size: 17px; margin: 0 0 10px; }
           ul { margin: 0; padding-left: 20px; } li { margin: 4px 0; }
           p { margin: 0 0 8px; }
           @media (prefers-color-scheme: dark) { body { color: #f5f5f7; } }
         </style></head><body>
-          <h1>Mixtape 1.1.0</h1>
-          <ul>
-            <li>Added the <strong>Account Management</strong> window — change your username, email, and password from inside the app.</li>
-          </ul>
+          <h1>Mixtape 1.1.1</h1>
+          <ul><li>Added a <strong>Check for Updates</strong> button in Settings.</li><li>Added a <strong>View on GitHub</strong> link for feedback and pull requests.</li></ul>
         </body></html>
       ]]></description>
-      <pubDate>Fri, 19 Jun 2026 01:18:40 +0000</pubDate>
-      <sparkle:version>2</sparkle:version>
-      <sparkle:shortVersionString>1.1.0</sparkle:shortVersionString>
+      <pubDate>Fri, 19 Jun 2026 10:19:02 +0000</pubDate>
+      <sparkle:version>3</sparkle:version>
+      <sparkle:shortVersionString>1.1.1</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <enclosure url="https://github.com/mikec-1/Mixtape/releases/download/v1.1.0/Mixtape-1.1.0.dmg"
+      <enclosure url="https://github.com/mikec-1/Mixtape/releases/download/v1.1.1/Mixtape-1.1.1.dmg"
                  type="application/octet-stream"
-                 sparkle:edSignature="ILGuoSxgSzeA2GT9gejbumvizzWdwDsERicHhlQ6Dt1U3H3N6t7FyGVe1eytIqOT8dwxDQDQFAK2xbhg6TE0Bg==" length="7716907" />
+                 sparkle:edSignature="yWTq668vuWUBFfiS/bdYFoi+Z3s5OUaa9krNflcrhhHhSaeNFJhdJJYGXtWgZXjpMbaLKIr/7VssWSATrltdAA==" length="7724698" />
     </item>
   </channel>
 </rss>
