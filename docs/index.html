@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mixtape: your music, your files</title>
+  <meta name="description" content="A music player for your own files. Import your tracks, organise them into a library, and play them on your Mac.">
+  <style>
+    :root {
+      --bg: #121212;
+      --surface: #181818;
+      --surface2: #282828;
+      --separator: #2a2a2a;
+      --text: #ffffff;
+      --text2: #b3b3b3;
+      --text3: #6b6b6b;
+      --accent: #ff6b00;
+      --accent-dark: #e05c00;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, system-ui, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: inherit; text-decoration: none; }
+    .wrap { max-width: 1040px; margin: 0 auto; padding: 0 24px; }
+
+    /* Nav */
+    nav {
+      position: sticky; top: 0; z-index: 10;
+      backdrop-filter: saturate(180%) blur(16px);
+      background: rgba(18,18,18,0.72);
+      border-bottom: 1px solid var(--separator);
+    }
+    nav .wrap { display: flex; align-items: center; justify-content: space-between; height: 60px; }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; }
+    .brand .logo { width: 28px; height: 28px; display: block; }
+    .nav-cta {
+      background: var(--accent); color: #fff; font-weight: 600; font-size: 14px;
+      padding: 8px 16px; border-radius: 999px; transition: background .15s;
+    }
+    .nav-cta:hover { background: var(--accent-dark); }
+
+    /* Hero */
+    header { text-align: center; padding: 110px 0 90px; position: relative; overflow: hidden; }
+    header::before {
+      content: ""; position: absolute; inset: 0;
+      background: radial-gradient(60% 50% at 50% 0%, rgba(255,107,0,0.18), transparent 70%);
+      pointer-events: none;
+    }
+    .badge {
+      display: inline-block; font-size: 13px; font-weight: 600; color: var(--accent);
+      background: rgba(255,107,0,0.12); border: 1px solid rgba(255,107,0,0.25);
+      padding: 5px 14px; border-radius: 999px; margin-bottom: 26px;
+    }
+    h1 { font-size: clamp(40px, 7vw, 68px); line-height: 1.05; letter-spacing: -0.02em; font-weight: 800; }
+    h1 .accent { background: linear-gradient(120deg, var(--accent), #ff9a4d); -webkit-background-clip: text; background-clip: text; color: transparent; }
+    .lede { font-size: clamp(17px, 2.4vw, 21px); color: var(--text2); max-width: 620px; margin: 22px auto 36px; }
+    .cta-row { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      font-weight: 600; font-size: 16px; padding: 14px 26px; border-radius: 999px;
+      transition: transform .12s, background .15s; border: 1px solid transparent;
+    }
+    .btn:active { transform: translateY(1px); }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover { background: var(--accent-dark); }
+    .btn-ghost { border-color: var(--separator); color: var(--text); background: var(--surface); }
+    .btn-ghost:hover { border-color: var(--text3); }
+    .req { margin-top: 18px; font-size: 13px; color: var(--text3); }
+
+    /* Sections */
+    section { padding: 70px 0; }
+    .section-title { font-size: clamp(26px, 4vw, 34px); font-weight: 800; letter-spacing: -0.01em; margin-bottom: 8px; }
+    .section-sub { color: var(--text2); margin-bottom: 40px; max-width: 560px; }
+
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 18px; }
+    .card {
+      background: var(--surface); border: 1px solid var(--separator);
+      border-radius: 16px; padding: 24px; transition: border-color .15s, transform .15s;
+    }
+    .card:hover { border-color: var(--accent); transform: translateY(-2px); }
+    .card .ico {
+      width: 42px; height: 42px; border-radius: 11px; display: grid; place-items: center;
+      font-size: 20px; margin-bottom: 14px;
+      background: rgba(255,107,0,0.13); color: var(--accent);
+    }
+    .card h3 { font-size: 17px; margin-bottom: 6px; }
+    .card p { color: var(--text2); font-size: 14.5px; }
+
+    /* Install steps */
+    .steps { counter-reset: step; display: grid; gap: 14px; max-width: 640px; }
+    .step { display: flex; gap: 16px; background: var(--surface); border: 1px solid var(--separator); border-radius: 14px; padding: 18px 20px; }
+    .step::before {
+      counter-increment: step; content: counter(step);
+      flex: 0 0 30px; height: 30px; border-radius: 8px; background: var(--accent);
+      color: #fff; font-weight: 700; display: grid; place-items: center;
+    }
+    .step p { color: var(--text2); font-size: 14.5px; }
+    .step strong { color: var(--text); }
+
+    footer { border-top: 1px solid var(--separator); padding: 40px 0; color: var(--text3); font-size: 14px; }
+    footer .wrap { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+    footer a:hover { color: var(--text); }
+  </style>
+</head>
+<body>
+  <nav>
+    <div class="wrap">
+      <div class="brand">
+        <svg class="logo" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <circle cx="50" cy="50" r="50" fill="var(--accent)"/>
+          <g fill="var(--bg)">
+            <rect x="27" y="40" width="6" height="20" rx="3"/>
+            <rect x="38" y="33" width="6" height="34" rx="3"/>
+            <rect x="49" y="27" width="6" height="46" rx="3"/>
+            <rect x="60" y="33" width="6" height="34" rx="3"/>
+            <rect x="71" y="40" width="6" height="20" rx="3"/>
+          </g>
+        </svg>
+        Mixtape
+      </div>
+      <a class="nav-cta" href="https://github.com/mikec-1/Mixtape/releases/latest">Download</a>
+    </div>
+  </nav>
+
+  <header>
+    <div class="wrap">
+      <span class="badge">macOS · version 1.1</span>
+      <h1>Your music.<br><span class="accent">Your files.</span></h1>
+      <p class="lede">Import your own tracks, organise them into a real library, and play them, all on your Mac. No subscriptions, no streaming, just your collection.</p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="https://github.com/mikec-1/Mixtape/releases/download/v1.1.0/Mixtape-1.1.0.dmg">Download for Mac</a>
+        <a class="btn btn-ghost" href="https://github.com/mikec-1/Mixtape">View on GitHub</a>
+      </div>
+      <p class="req">Requires macOS 14 or later · Free</p>
+    </div>
+  </header>
+
+  <section>
+    <div class="wrap">
+      <h2 class="section-title">Everything your library needs</h2>
+      <p class="section-sub">A full-featured player built around the music you actually own.</p>
+      <div class="grid">
+        <div class="card"><div class="ico">＋</div><h3>Import your tracks</h3><p>Bring in audio straight from your computer, with automatic metadata and artwork lookup you can review before it's applied.</p></div>
+        <div class="card"><div class="ico">♫</div><h3>Browse your way</h3><p>Songs, albums, artists, and playlists, with a sortable track list and rich detail views.</p></div>
+        <div class="card"><div class="ico">≡</div><h3>Playlists &amp; favourites</h3><p>Build and edit playlists, pin them to the sidebar, drag to reorder, and favourite the tracks you love.</p></div>
+        <div class="card"><div class="ico">▶</div><h3>Proper playback</h3><p>Play, queue, play next, and shuffle, with a Now Playing panel and your last session restored on launch.</p></div>
+        <div class="card"><div class="ico">⤓</div><h3>Offline &amp; export</h3><p>Download tracks for offline listening and export them back out to your own folders whenever you want.</p></div>
+        <div class="card"><div class="ico">↻</div><h3>Synced across devices</h3><p>Sign in and your library, playlists, and files stay in sync. Manage your account right inside the app.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <h2 class="section-title">Get started in a minute</h2>
+      <p class="section-sub">Mixtape is distributed directly, so the first launch takes one extra click.</p>
+      <div class="steps">
+        <div class="step"><p><strong>Download</strong> the latest <code>.dmg</code> from the releases page and drag Mixtape to your Applications folder.</p></div>
+        <div class="step"><p><strong>Right-click the app → Open</strong> the first time (a one-time step for this un-notarised build), then click Open again to confirm.</p></div>
+        <div class="step"><p><strong>Updates are automatic.</strong> Mixtape checks for new versions and updates itself from then on, with no re-downloading.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="wrap">
+      <span>© 2026 Mixtape</span>
+      <span><a href="https://github.com/mikec-1/Mixtape">GitHub</a> · <a href="https://github.com/mikec-1/Mixtape/releases/latest">Releases</a></span>
+    </div>
+  </footer>
+</body>
+</html>
+</content>
