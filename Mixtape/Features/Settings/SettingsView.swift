@@ -12,6 +12,9 @@ public struct SettingsView: View {
     @EnvironmentObject private var exportManager: ExportManager
     @EnvironmentObject private var deps: AppDependencies
     @EnvironmentObject private var theme: ThemeManager
+    #if os(macOS)
+    @EnvironmentObject private var appState: MacAppState
+    #endif
     @AppStorage("haptics.enabled") private var hapticsEnabled = true
     @State private var showFolderPicker = false
 
@@ -180,6 +183,23 @@ public struct SettingsView: View {
 
     private var accountSection: some View {
         Section {
+            #if os(macOS)
+            if vm.currentUser != nil {
+                Button {
+                    appState.showingAccount = true
+                } label: {
+                    settingsRow(
+                        title: "Manage Account",
+                        systemImage: "person.crop.circle",
+                        tint: Color.mixPrimary,
+                        titleColor: Color.mixTextPrimary,
+                        showsChevron: true
+                    )
+                }
+                .buttonStyle(.plain)
+                .listRowBackground(Color.mixSurface)
+            }
+            #endif
             if vm.currentUser != nil {
                 Button(role: .destructive) {
                     vm.showSignOutConfirm = true
@@ -246,7 +266,7 @@ public struct SettingsView: View {
         } header: {
             SectionHeader("Sync")
         } footer: {
-            Text("Metadata and audio files sync automatically when online. Supabase backend — M5.")
+            Text("Metadata and audio files sync automatically when online.")
                 .font(.mixCaption)
                 .foregroundStyle(Color.mixTextTertiary)
         }
@@ -587,3 +607,305 @@ private struct SectionHeader: View {
     return SettingsView(authService: deps.authService, syncService: deps.syncService, libraryService: deps.libraryService, importService: deps.importService)
         .environmentObject(deps)
 }
+
+#if os(macOS)
+
+// MARK: - Account View (inline, full content area — Mixtape 1.1)
+//
+// Reached from Settings → "Manage Account". Rendered flat by MacContentRouter
+// (like the album/playlist drill-downs) rather than as a sheet or new window.
+// The Back button sets appState.showingAccount = false to return to Settings.
+
+struct AccountView: View {
+
+    @EnvironmentObject private var appState: MacAppState
+    @ObservedObject var authService: SupabaseAuthService
+
+    // Username
+    @State private var username: String = ""
+    @State private var usernameBusy = false
+    @State private var usernameMessage: StatusMessage?
+
+    // Email
+    @State private var email: String = ""
+    @State private var emailBusy = false
+    @State private var emailMessage: StatusMessage?
+
+    // Password
+    @State private var currentPassword: String = ""
+    @State private var newPassword: String = ""
+    @State private var confirmPassword: String = ""
+    @State private var passwordBusy = false
+    @State private var passwordMessage: StatusMessage?
+
+    private struct StatusMessage: Equatable {
+        let text: String
+        let isError: Bool
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Back bar — matches the album/playlist drill-down header.
+            HStack {
+                Button {
+                    appState.showingAccount = false
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 12, weight: .semibold))
+                        Text("Settings")
+                            .font(.system(size: 13))
+                    }
+                    .foregroundStyle(Color.mixPrimary)
+                }
+                .buttonStyle(.plain)
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(Color.mixBackground)
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    Text("Account")
+                        .font(.system(size: 22, weight: .bold))
+                        .foregroundStyle(Color.mixTextPrimary)
+                        .padding(.bottom, 2)
+
+                    usernameCard
+                    emailCard
+                    passwordCard
+                }
+                .frame(maxWidth: 580, alignment: .leading)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 24)
+                .frame(maxWidth: .infinity, alignment: .center)
+            }
+        }
+        .background(Color.mixBackground)
+        .onAppear { syncFieldsFromUser() }
+    }
+
+    // MARK: Username
+
+    private var usernameCard: some View {
+        card(title: "Username", footer: "Your username is visible to you and used to sign in.") {
+            field("Username") {
+                TextField("Username", text: $username)
+                    .disableAutocorrection(true)
+            }
+
+            actionRow(
+                title: "Save Username",
+                busy: usernameBusy,
+                disabled: trimmed(username).isEmpty
+                    || trimmed(username).lowercased() == (authService.currentUser?.displayName.lowercased() ?? ""),
+                message: usernameMessage
+            ) {
+                await saveUsername()
+            }
+        }
+    }
+
+    private func saveUsername() async {
+        usernameBusy = true; usernameMessage = nil
+        defer { usernameBusy = false }
+        do {
+            try await authService.updateUsername(trimmed(username))
+            usernameMessage = StatusMessage(text: "Username updated.", isError: false)
+        } catch {
+            usernameMessage = StatusMessage(text: errorText(error), isError: true)
+        }
+    }
+
+    // MARK: Email
+
+    private var emailCard: some View {
+        card(title: "Email", footer: "Changing your email sends a confirmation link to the new address. The change takes effect once you confirm.") {
+            field("Email") {
+                TextField("Email", text: $email)
+                    .disableAutocorrection(true)
+            }
+
+            actionRow(
+                title: "Update Email",
+                busy: emailBusy,
+                disabled: trimmed(email).isEmpty
+                    || !trimmed(email).contains("@")
+                    || trimmed(email).lowercased() == (authService.currentUser?.email.lowercased() ?? ""),
+                message: emailMessage
+            ) {
+                await saveEmail()
+            }
+        }
+    }
+
+    private func saveEmail() async {
+        emailBusy = true; emailMessage = nil
+        defer { emailBusy = false }
+        do {
+            try await authService.updateEmail(trimmed(email))
+            emailMessage = StatusMessage(text: "Confirmation link sent to \(trimmed(email)).", isError: false)
+        } catch {
+            emailMessage = StatusMessage(text: errorText(error), isError: true)
+        }
+    }
+
+    // MARK: Password
+
+    private var passwordCard: some View {
+        card(title: "Password", footer: "Enter your current password, then choose a new one (at least 8 characters).") {
+            field("Current password") {
+                SecureField("Current password", text: $currentPassword)
+            }
+            field("New password") {
+                SecureField("New password", text: $newPassword)
+            }
+            field("Confirm new password") {
+                SecureField("Confirm new password", text: $confirmPassword)
+            }
+
+            actionRow(
+                title: "Change Password",
+                busy: passwordBusy,
+                disabled: currentPassword.isEmpty
+                    || newPassword.count < 8
+                    || newPassword != confirmPassword,
+                message: passwordMessage
+            ) {
+                await savePassword()
+            }
+        }
+    }
+
+    private func savePassword() async {
+        passwordBusy = true; passwordMessage = nil
+        defer { passwordBusy = false }
+        do {
+            try await authService.changePassword(currentPassword: currentPassword, newPassword: newPassword)
+            passwordMessage = StatusMessage(text: "Password changed.", isError: false)
+            currentPassword = ""; newPassword = ""; confirmPassword = ""
+        } catch {
+            passwordMessage = StatusMessage(text: errorText(error), isError: true)
+        }
+    }
+
+    // MARK: Card / row builders
+
+    private func card<Content: View>(
+        title: String,
+        footer: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(title)
+                .font(.mixTitle2)
+                .foregroundStyle(Color.mixTextPrimary)
+
+            content()
+
+            Text(footer)
+                .font(.mixCaption)
+                .foregroundStyle(Color.mixTextTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(22)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.mixSurface)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(Color.mixSeparator, lineWidth: 0.5)
+                )
+        )
+    }
+
+    /// A labelled, full-width input row. The field itself is large (44 pt tall,
+    /// body-sized text) and styled to read like the rest of the app rather than
+    /// a stock rounded-border control.
+    private func field<F: View>(
+        _ label: String,
+        @ViewBuilder _ content: () -> F
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label.uppercased())
+                .font(.mixCaptionBold)
+                .tracking(0.5)
+                .foregroundStyle(Color.mixTextSecondary)
+
+            content()
+                .textFieldStyle(.plain)
+                .font(.mixBody)
+                .foregroundStyle(Color.mixTextPrimary)
+                .padding(.horizontal, 14)
+                .frame(height: 44)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.mixBackground)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .stroke(Color.mixSeparator, lineWidth: 1)
+                        )
+                )
+        }
+    }
+
+    private func actionRow(
+        title: String,
+        busy: Bool,
+        disabled: Bool,
+        message: StatusMessage?,
+        action: @escaping () async -> Void
+    ) -> some View {
+        HStack(spacing: 12) {
+            Button {
+                Task { await action() }
+            } label: {
+                HStack(spacing: 6) {
+                    if busy { ProgressView().controlSize(.small) }
+                    Text(title).font(.mixButton)
+                }
+                .frame(minWidth: 130)
+                .frame(height: 32)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .tint(Color.mixPrimary)
+            .disabled(disabled || busy)
+
+            if let message {
+                Text(message.text)
+                    .font(.mixCaption)
+                    .foregroundStyle(message.isError ? Color.mixDestructive : Color.mixSyncSynced)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    // MARK: Helpers
+
+    private func syncFieldsFromUser() {
+        if let user = authService.currentUser {
+            if username.isEmpty { username = user.displayName }
+            if email.isEmpty    { email = user.email }
+        }
+    }
+
+    private func trimmed(_ s: String) -> String {
+        s.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func errorText(_ error: Error) -> String {
+        if let authError = error as? AuthError {
+            return authError.localizedDescription
+        }
+        return error.localizedDescription
+    }
+}
+
+#endif

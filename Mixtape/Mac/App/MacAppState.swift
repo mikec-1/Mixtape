@@ -119,6 +119,10 @@ final class MacAppState: ObservableObject {
 
     // MARK: Navigation
     @Published var selection:        MacSidebarItem?               = .songs
+
+    /// True → MacContentRouter shows the inline AccountView (full content area).
+    /// Navigated to from Settings → Manage Account; the Back button sets it false.
+    @Published var showingAccount:   Bool                          = false
     @Published var searchText:       String                        = ""
     @Published var columnVisibility: NavigationSplitViewVisibility = .all
 

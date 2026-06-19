@@ -27,13 +27,16 @@ struct MacContentRouter: View {
             if newValue != nil {
                 appState.selectedAlbum = nil
                 appState.selectedPlaylist = nil
+                appState.showingAccount = false
             }
         }
     }
 
     @ViewBuilder
     private var contentBody: some View {
-        if appState.isSearching {
+        if appState.showingAccount {
+            AccountView(authService: deps.authService)
+        } else if appState.isSearching {
             MacSearchResultsView(query: appState.searchText)
         } else if let album = appState.selectedAlbum {
             // Album drill-down: rendered flat here so sidebar clicks always work.
