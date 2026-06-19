@@ -33,6 +33,9 @@ struct MixtapeApp: App {
                 .environmentObject(dependencies.syncService)
                 .environmentObject(ExportManager.shared)
                 .environmentObject(theme)
+                #if os(macOS)
+                .environmentObject(updater)
+                #endif
                 .modelContainer(dependencies.modelContainer)
                 .tint(theme.accentColor)
                 .preferredColorScheme(theme.preferredColorScheme)

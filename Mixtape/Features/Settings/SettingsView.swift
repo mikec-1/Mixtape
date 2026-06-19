@@ -14,6 +14,7 @@ public struct SettingsView: View {
     @EnvironmentObject private var theme: ThemeManager
     #if os(macOS)
     @EnvironmentObject private var appState: MacAppState
+    @EnvironmentObject private var updater: UpdaterController
     #endif
     @AppStorage("haptics.enabled") private var hapticsEnabled = true
     @State private var showFolderPicker = false
@@ -503,8 +504,40 @@ public struct SettingsView: View {
                     .foregroundStyle(Color.mixTextTertiary)
             }
             .listRowBackground(Color.mixSurface)
+
+            #if os(macOS)
+            Button {
+                updater.checkForUpdates()
+            } label: {
+                settingsRow(
+                    title: "Check for Updates",
+                    systemImage: "arrow.down.circle",
+                    tint: Color.mixPrimary,
+                    titleColor: Color.mixPrimary
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(!updater.canCheckForUpdates)
+            .listRowBackground(Color.mixSurface)
+            #endif
+
+            Link(destination: URL(string: "https://github.com/mikec-1/Mixtape")!) {
+                settingsRow(
+                    title: "View on GitHub",
+                    systemImage: "chevron.left.forwardslash.chevron.right",
+                    tint: Color.mixPrimary,
+                    titleColor: Color.mixPrimary,
+                    showsChevron: true
+                )
+            }
+            .buttonStyle(.plain)
+            .listRowBackground(Color.mixSurface)
         } header: {
             SectionHeader("About")
+        } footer: {
+            Text("Found a bug or have an idea? Open an issue or pull request on GitHub.")
+                .font(.mixCaption)
+                .foregroundStyle(Color.mixTextTertiary)
         }
     }
 

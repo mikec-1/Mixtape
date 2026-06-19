@@ -17,8 +17,8 @@ struct WelcomeDownloadPrompt: View {
     #endif
     @State private var errorMessage: String? = nil
 
-    // Derive a human-readable default path to display (~/Documents/Mixtape on macOS)
-    // Derive a human-readable suggested path to display
+    // Get a default path to display (~/Documents/Mixtape on macOS)
+
     private var suggestedDisplayPath: String {
         #if os(macOS)
         let url = exportManager.suggestedURL
