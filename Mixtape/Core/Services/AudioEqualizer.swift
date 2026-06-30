@@ -23,6 +23,7 @@ public enum EqualizerPreset: String, CaseIterable, Identifiable {
     case vocal       = "Vocal"
     case rock        = "Rock"
     case electronic  = "Electronic"
+    case rap         = "Rap"
     case custom      = "Custom"
 
     public var id: String { rawValue }
@@ -38,6 +39,7 @@ public enum EqualizerPreset: String, CaseIterable, Identifiable {
         case .vocal:       return [ -2,   -1,    0,    2,    4,    4,    3,    1,    0,   -1 ]
         case .rock:        return [  4,    3,    1,   -1,   -1,    0,    1,    2,    3,    4 ]
         case .electronic:  return [  5,    4,    1,    0,   -2,    1,    0,    1,    3,    5 ]
+        case .rap:         return [  6,    5,    2,    0,   -1,    1,    3,    3,    2,    1 ]
         case .custom:      return nil
         }
     }

@@ -4,6 +4,7 @@
 import Foundation
 import SwiftUI
 import Combine
+import AuthenticationServices
 
 @MainActor
 public final class AuthViewModel: ObservableObject {
@@ -20,6 +21,9 @@ public final class AuthViewModel: ObservableObject {
     @Published public private(set) var isLoading: Bool = false
     @Published public var errorMessage: String?
     @Published public var showError: Bool = false
+
+    /// True while an Apple / Google sign-in is in flight (separate spinner from `isLoading`).
+    @Published public private(set) var isSocialLoading: Bool = false
 
     // MARK: - Forgot Password State
 
@@ -194,6 +198,25 @@ public final class AuthViewModel: ObservableObject {
     /// to destroy the recovery session when the user changes their mind.
     public func signOut() async {
         do { try await authService.signOut() } catch {}
+    }
+
+    // MARK: - Social Sign-In
+
+    /// Starts the Google OAuth flow (system browser sheet).
+    public func signInWithGoogle() async {
+        isSocialLoading = true
+        defer { isSocialLoading = false }
+        do {
+            try await authService.signInWithGoogle()
+        } catch let error as AuthError {
+            errorMessage = error.errorDescription
+            showError    = true
+        } catch {
+            // ASWebAuthenticationSession cancellation surfaces as a CANCELED error — ignore it.
+            if (error as? ASWebAuthenticationSessionError)?.code == .canceledLogin { return }
+            errorMessage = error.localizedDescription
+            showError    = true
+        }
     }
 
     public func toggleMode() {

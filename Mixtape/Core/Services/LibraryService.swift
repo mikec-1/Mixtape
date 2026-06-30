@@ -245,9 +245,29 @@ public final class LibraryService: ObservableObject {
         } else {
             try? favoriteRepo.add(trackID: trackID, deviceID: deviceID)
             mutatePlaylist(id: Playlist.favouritesID) { $0.addTrack(trackID) }
+            // A favourited song should also live in the general library (All Songs);
+            // addTrack de-dups so this is a no-op for songs already there.
+            mutatePlaylist(id: Playlist.allSongsID)   { $0.addTrack(trackID) }
             refreshPlaylists()   // publish change so heart icon & Favourites list update immediately
             return true
         }
+    }
+
+    // MARK: - Lookups (used by clickable now-playing / inspector navigation)
+
+    /// The library album matching `title`, preferring an exact artist match to
+    /// disambiguate compilations that reuse an album title.
+    public func album(title: String, artistName: String) -> Album? {
+        guard !title.isEmpty else { return nil }
+        let matches = albums.filter { $0.title.localizedCaseInsensitiveCompare(title) == .orderedSame }
+        return matches.first { $0.artistName.localizedCaseInsensitiveCompare(artistName) == .orderedSame }
+            ?? matches.first
+    }
+
+    /// The library artist whose name matches `name`.
+    public func artist(named name: String) -> Artist? {
+        guard !name.isEmpty else { return nil }
+        return artists.first { $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame }
     }
 
     /// Called by ImportService after every successful import to add the track to All Songs.
@@ -464,16 +484,16 @@ public final class LibraryService: ObservableObject {
         return tracks.filter { ids.contains($0.id) }
     }
 
-    /// Re-fetches the artist's profile picture from Deezer and updates the database.
+    /// Re-fetches the artist's profile picture from Spotify and updates the database.
     public func refreshArtistImage(artistID: UUID) async throws {
         guard let artist = artist(id: artistID) else { return }
-        let client = ITunesSearchClient()
+        let client = ITunesSearchClient(spotifyClient: SpotifyClient())
         let primary = ImportService.primaryArtistName(from: artist.name)
         guard let url = await client.artistImageURL(for: primary) else {
             throw NSError(
                 domain: "LibraryService",
                 code: 404,
-                userInfo: [NSLocalizedDescriptionKey: "No image found for '\(primary)' on Deezer."]
+                userInfo: [NSLocalizedDescriptionKey: "No image found for '\(primary)' on Spotify."]
             )
         }
         

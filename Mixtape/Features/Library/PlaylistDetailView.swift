@@ -372,8 +372,11 @@ public struct PlaylistDetailView: View {
     private func playAndMark(_ track: Track) {
         PlaylistMetadataService.shared.markPlayed(playlistID: playlist.id)
         deps.libraryService.refreshPlaylists()
-        engine.queue.setSourcePlaylist(playlist.id)
-        Task { await engine.play(track: track, in: tracks) }
+        // play() resets the source playlist, so mark it after playback starts.
+        Task {
+            await engine.play(track: track, in: tracks)
+            engine.queue.setSourcePlaylist(playlist.id)
+        }
     }
 
     /// Downloads `track` from Supabase (or uses the playback cache) and exports it

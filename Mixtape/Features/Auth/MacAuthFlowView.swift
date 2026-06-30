@@ -153,7 +153,6 @@ private struct MacSignInView: View {
     @ObservedObject var vm: AuthViewModel
     let onBack: () -> Void
 
-    @State private var showPasskeyAlert   = false
     @State private var showForgotPassword = false
 
     var body: some View {
@@ -168,31 +167,7 @@ private struct MacSignInView: View {
                     subtitle: "Sign in to your Mixtape account"
                 )
 
-                Button {
-                    showPasskeyAlert = true
-                } label: {
-                    HStack(spacing: 9) {
-                        Image(systemName: "person.badge.key.fill")
-                            .font(.system(size: 13))
-                        Text("Sign in with Passkey")
-                            .font(.system(size: 13, weight: .medium))
-                    }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 40)
-                    .foregroundStyle(Color.mixTextPrimary)
-                    .background(Color.mixSurface)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .strokeBorder(Color.mixSeparator, lineWidth: 1)
-                    )
-                }
-                .buttonStyle(.plain)
-                .alert("Passkeys Coming Soon", isPresented: $showPasskeyAlert) {
-                    Button("OK", role: .cancel) {}
-                } message: {
-                    Text("Passkey sign-in will be available in a future update. Please use email and password for now.")
-                }
+                MacSocialButtons(vm: vm)
 
                 MixAuthDivider(label: "or continue with email")
 
@@ -243,6 +218,40 @@ private struct MacSignInView: View {
     }
 }
 
+// MARK: - Social Sign-In Buttons (shared by Sign In + Create Account)
+
+private struct MacSocialButtons: View {
+
+    @ObservedObject var vm: AuthViewModel
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Button {
+                Task { await vm.signInWithGoogle() }
+            } label: {
+                HStack(spacing: 9) {
+                    Image(systemName: "g.circle.fill")
+                        .font(.system(size: 15))
+                    Text("Continue with Google")
+                        .font(.system(size: 13, weight: .medium))
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 40)
+                .foregroundStyle(Color.mixTextPrimary)
+                .background(Color.mixSurface)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(Color.mixSeparator, lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(vm.isSocialLoading)
+            .opacity(vm.isSocialLoading ? 0.6 : 1)
+        }
+    }
+}
+
 // MARK: - Create Account
 
 private struct MacCreateAccountView: View {
@@ -261,6 +270,10 @@ private struct MacCreateAccountView: View {
                     title:    "Create account",
                     subtitle: "Your library lives in the cloud."
                 )
+
+                MacSocialButtons(vm: vm)
+
+                MixAuthDivider(label: "or sign up with email")
 
                 VStack(spacing: 12) {
                     MixAuthField(

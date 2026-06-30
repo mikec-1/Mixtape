@@ -59,14 +59,24 @@ struct MacArtistsView: View {
         .navigationTitle(selectedArtist?.name ?? "Artists")
         .navigationSubtitle(navSubtitle)
         .onAppear {
-            // Pre-select the first artist so the right panel isn't blank on launch.
-            if selectedArtistID == nil {
+            // Honour a pending drill-in request (e.g. from the inspector).
+            if let pending = appState.pendingArtistID {
+                selectedArtistID = pending
+                appState.pendingArtistID = nil
+            } else if selectedArtistID == nil {
+                // Pre-select the first artist so the right panel isn't blank on launch.
                 selectedArtistID = filteredArtists.first?.id
             }
         }
         .onChange(of: library.artists) { _, artists in
             if selectedArtistID == nil {
                 selectedArtistID = artists.first?.id
+            }
+        }
+        .onChange(of: appState.pendingArtistID) { _, pending in
+            if let pending {
+                selectedArtistID = pending
+                appState.pendingArtistID = nil
             }
         }
     }

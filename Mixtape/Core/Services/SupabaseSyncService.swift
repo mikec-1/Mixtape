@@ -17,6 +17,9 @@ import Supabase
 import Combine
 import ImageIO
 import CoreGraphics
+#if canImport(UIKit)
+import UIKit
+#endif
 
 @MainActor
 public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
@@ -42,6 +45,15 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
     private var backgroundTask: Task<Void, Never>?
     private var isSyncing = false
 
+    /// Realtime listener that signs the user out the instant this device's row
+    /// is deleted from the `devices` table (a "force logout" from the web).
+    private var revocationChannel: RealtimeChannelV2?
+    private var revocationTask:    Task<Void, Never>?
+
+    /// Invoked when this device is revoked remotely. Wired by AppDependencies to
+    /// the auth service's sign-out. Runs on the main actor.
+    public var onDeviceRevoked: (() async -> Void)?
+
     // MARK: - Init
 
     public init(
@@ -61,12 +73,17 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
     public func onSignIn(user: AppUser, accessToken: String) async {
         currentUser = user
         syncState   = .pendingChanges(count: pendingCount())
-        // Kick off an immediate first sync.
-        Task { try? await sync() }
+        // Register this device, then kick off an immediate first sync.
+        Task {
+            await registerDevice(userID: user.id)
+            try? await sync()
+        }
+        startRevocationListener(userID: user.id)
     }
 
     public func onSignOut() async {
         stopBackgroundSync()
+        await stopRevocationListener()
         currentUser = nil
         syncState   = .idle
     }
@@ -101,6 +118,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
             try await uploadPendingFiles(userID: user.id)
             try await uploadPendingArtworks(userID: user.id)
             try await downloadPendingArtworks(userID: user.id)
+            await registerDevice(userID: user.id)
             libraryService.refresh()
             syncState = .upToDate(lastSynced: Date())
             print("[Sync] ✅ Sync complete")
@@ -115,6 +133,162 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
     public func push<T: Codable>(_ entity: T, table: String) async throws {
         guard currentUser != nil else { return }
         try await client.from(table).upsert(entity).execute()
+    }
+
+    // MARK: - Device Registration
+
+    /// Upserts this install into the `devices` table so it appears on the web
+    /// /devices page. Reuses the stable `deviceID` (same one used for sync
+    /// attribution). Best-effort: a failure never blocks sync.
+    private func registerDevice(userID: UUID) async {
+        let row = DeviceRow(
+            userID:     userID,
+            deviceID:   deviceID,
+            platform:   Self.platformName,
+            name:       Self.deviceName,
+            appVersion: Self.appVersion,
+            lastSeenAt: Date()
+        )
+        do {
+            try await client.from("devices")
+                .upsert(row, onConflict: "user_id,device_id")
+                .execute()
+        } catch {
+            print("[Sync] device register failed: \(error)")
+        }
+    }
+
+    // MARK: - Remote Revocation (force logout)
+
+    /// Subscribes to realtime DELETE events on this device's `devices` row.
+    /// When the row is removed (e.g. revoked from the web /devices page), the
+    /// app signs out immediately. Best-effort: if Realtime is unavailable, the
+    /// next background sync still won't recreate access — this just makes it
+    /// instant rather than waiting on token expiry.
+    private func startRevocationListener(userID: UUID) {
+        stopRevocationListenerSync()
+
+        let channel = client.channel("device-revocation-\(deviceID)")
+        revocationChannel = channel
+
+        revocationTask = Task { [weak self] in
+            guard let self else { return }
+
+            // NOTE: we deliberately do NOT use a server-side `filter:` here.
+            // Realtime's postgres_changes filtering on DELETE is unreliable (the
+            // filter is evaluated against replica-identity columns and often
+            // drops events), so we subscribe to all DELETEs on `devices` — RLS
+            // already scopes these to the signed-in user — and match our own
+            // row client-side.
+            let deletions = channel.postgresChange(
+                DeleteAction.self,
+                schema: "public",
+                table:  "devices"
+            )
+
+            await channel.subscribe()
+            print("[Sync] 👂 Revocation listener subscribed (device \(deviceID))")
+
+            for await deletion in deletions {
+                guard !Task.isCancelled else { break }
+
+                // The DELETE payload only reliably carries the primary key (the
+                // `devices` table's replica identity is the default PK), so we
+                // can't read device_id off `oldRecord`. Instead: any DELETE on
+                // `devices` is — thanks to RLS — one of *this user's* devices.
+                // Re-check whether our own row still exists; if it's gone, this
+                // device was the one revoked.
+                let oldDeviceID = deletion.oldRecord["device_id"]?.stringValue
+                print("[Sync] 👂 devices DELETE received (device_id=\(oldDeviceID ?? "nil")) — verifying our row")
+                if oldDeviceID != nil && oldDeviceID != deviceID { continue }
+
+                if await deviceRowStillExists(userID: userID) {
+                    print("[Sync] 👂 our device row still present — not us, ignoring")
+                    continue
+                }
+
+                print("[Sync] 🔒 This device revoked remotely — signing out.")
+                await onDeviceRevoked?()
+                break
+            }
+        }
+    }
+
+    /// Returns true if this install's `devices` row is still present. Used to
+    /// confirm a remote revocation actually removed *us*.
+    private func deviceRowStillExists(userID: UUID) async -> Bool {
+        struct Row: Decodable { let device_id: String }
+        do {
+            let rows: [Row] = try await client.from("devices")
+                .select("device_id")
+                .eq("user_id", value: userID)
+                .eq("device_id", value: deviceID)
+                .limit(1)
+                .execute()
+                .value
+            return !rows.isEmpty
+        } catch {
+            // On a query error, don't force a logout — fail safe (stay signed in).
+            print("[Sync] device existence check failed: \(error)")
+            return true
+        }
+    }
+
+    private func stopRevocationListener() async {
+        revocationTask?.cancel()
+        revocationTask = nil
+        if let channel = revocationChannel {
+            await channel.unsubscribe()
+            revocationChannel = nil
+        }
+    }
+
+    /// Synchronous teardown for use before starting a fresh listener.
+    private func stopRevocationListenerSync() {
+        revocationTask?.cancel()
+        revocationTask = nil
+        if let channel = revocationChannel {
+            Task { await channel.unsubscribe() }
+            revocationChannel = nil
+        }
+    }
+
+    private struct DeviceRow: Encodable {
+        let userID:     UUID
+        let deviceID:   String
+        let platform:   String
+        let name:       String
+        let appVersion: String
+        let lastSeenAt: Date
+
+        enum CodingKeys: String, CodingKey {
+            case userID     = "user_id"
+            case deviceID   = "device_id"
+            case platform
+            case name
+            case appVersion = "app_version"
+            case lastSeenAt = "last_seen_at"
+        }
+    }
+
+    private static var platformName: String {
+        #if os(iOS)
+        return "iOS"
+        #else
+        return "macOS"
+        #endif
+    }
+
+    private static var deviceName: String {
+        #if canImport(UIKit)
+        return UIDevice.current.name
+        #else
+        return Host.current().localizedName ?? "Mac"
+        #endif
+    }
+
+    private static var appVersion: String {
+        (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "—"
     }
 
     // MARK: - Background Sync
@@ -431,8 +605,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
         try context.save()
         setLastPullDate(table: "tracks", userID: userID)
 
-        let names = rows.map(\.title).joined(separator: ", ")
-        print("[Sync] ↓ Tracks: \(inserted) new, \(updated) updated, \(skipped) skipped — \(names)")
+        print("[Sync] ↓ Tracks: \(inserted) new, \(updated) updated, \(skipped) skipped")
     }
 
     private func pullAlbums(userID: UUID) async throws {

@@ -27,6 +27,10 @@ struct MixtapeApp: App {
                 .environmentObject(dependencies.queueService)
                 .environmentObject(dependencies.libraryService)
                 .environmentObject(dependencies.syncService)
+                .environmentObject(dependencies.onlineCoordinator)
+                #if os(iOS)
+                .environmentObject(dependencies.resolverStatus)
+                #endif
                 .environmentObject(ExportManager.shared)
                 .environmentObject(theme)
                 .modelContainer(dependencies.modelContainer)

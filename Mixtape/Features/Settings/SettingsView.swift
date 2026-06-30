@@ -9,15 +9,29 @@ import AppKit
 public struct SettingsView: View {
 
     @StateObject private var vm: SettingsViewModel
+    @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var exportManager: ExportManager
     @EnvironmentObject private var deps: AppDependencies
     @EnvironmentObject private var theme: ThemeManager
     @AppStorage("haptics.enabled") private var hapticsEnabled = true
+    @AppStorage(ProfileStatsService.sharingDefaultsKey) private var shareListeningActivity = true
     @State private var showFolderPicker = false
     @State private var showEqualizer = false
     @State private var showAccount = false
+    @State private var showFindPeople = false
     @State private var showLastFm = false
+    @State private var discoverCacheCleared = false
+    @State private var playedTracksReset = false
     @ObservedObject private var scrobbler = LastFmScrobbler.shared
+    #if os(iOS)
+    // Resolver server (Mac-as-server / hosted) that turns Discover tracks into
+    // playable audio for iOS. Stored under the same key RemoteResolverService reads.
+    @AppStorage(RemoteResolverService.baseURLDefaultsKey) private var resolverURLString = ""
+    @State private var resolverTesting = false
+    @State private var resolverTestResult: ResolverTestResult? = nil
+    @State private var showResolverAdvanced = false
+    @EnvironmentObject private var resolverStatus: ResolverStatusService
+    #endif
 
     public init(
         authService:    SupabaseAuthService,
@@ -57,6 +71,9 @@ public struct SettingsView: View {
             // Manage Account — presented from the account section on both platforms.
             .sheet(isPresented: $showAccount) {
                 accountSheet
+            }
+            .sheet(isPresented: $showFindPeople) {
+                FindPeopleView(authService: deps.authService)
             }
             .sheet(isPresented: $showLastFm) {
                 LastFmConnectView()
@@ -168,6 +185,10 @@ public struct SettingsView: View {
                 syncSection
                 lastFmSection
                 exportSection
+                #if os(iOS)
+                resolverSection
+                #endif
+                discoverCacheSection
                 if vm.isDeveloper {
                     librarySection
                 }
@@ -187,6 +208,12 @@ public struct SettingsView: View {
         NavigationStack { listView
                 .navigationBarTitleDisplayMode(.large)
                 .toolbarColorScheme(.dark, for: .navigationBar)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Done") { dismiss() }
+                            .tint(Color.mixPrimary)
+                    }
+                }
         }
         #else
         listView
@@ -223,21 +250,7 @@ public struct SettingsView: View {
     }
 
     private func avatar(for user: AppUser) -> some View {
-        Circle()
-            .fill(
-                LinearGradient(
-                    colors: [Color.mixPrimary, Color.mixPrimaryDark],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            )
-            .frame(width: 64, height: 64)
-            .overlay(
-                Text(String(user.displayName.prefix(1)).uppercased())
-                    .font(.mixTitle)
-                    .foregroundStyle(.white)
-            )
-            .shadow(color: Color.mixPrimary.opacity(0.35), radius: 10, y: 4)
+        AvatarView(url: user.avatarURL, fallbackText: user.displayName, size: 64)
     }
 
     private var profileCardBackground: some View {
@@ -254,6 +267,20 @@ public struct SettingsView: View {
             if vm.currentUser != nil {
                 // Manage Account — presents the auth team's AccountSettingsView.
                 Button {
+                    showFindPeople = true
+                } label: {
+                    settingsRow(
+                        title: "Find People",
+                        systemImage: "person.2.fill",
+                        showsChevron: true
+                    )
+                }
+                #if os(macOS)
+                .buttonStyle(.plain)
+                #endif
+                .listRowBackground(Color.mixSurface)
+
+                Button {
                     showAccount = true
                 } label: {
                     settingsRow(
@@ -266,6 +293,17 @@ public struct SettingsView: View {
                 .buttonStyle(.plain)
                 #endif
                 .listRowBackground(Color.mixSurface)
+
+                Toggle(isOn: $shareListeningActivity) {
+                    rowLabel(title: "Show my listening activity", systemImage: "waveform", tint: .mixPrimary, titleColor: .mixTextPrimary)
+                }
+                .tint(Color.mixPrimary)
+                .listRowBackground(Color.mixSurface)
+                .onChange(of: shareListeningActivity) { _, newValue in
+                    if let id = deps.authService.currentUser?.id {
+                        Task { await deps.profileStatsService.setSharing(newValue, userID: id) }
+                    }
+                }
 
                 Button(role: .destructive) {
                     vm.showSignOutConfirm = true
@@ -295,13 +333,6 @@ public struct SettingsView: View {
             }
             .listRowBackground(Color.mixSurface)
 
-            VStack(alignment: .leading, spacing: 12) {
-                rowLabel(title: "Accent colour", systemImage: "paintpalette.fill", tint: .mixPrimary, titleColor: .mixTextPrimary)
-                accentSwatches
-            }
-            .padding(.vertical, 4)
-            .listRowBackground(Color.mixSurface)
-
             #if os(iOS)
             Toggle(isOn: $hapticsEnabled) {
                 rowLabel(title: "Haptic feedback", systemImage: "hand.tap.fill", tint: .mixPrimary, titleColor: .mixTextPrimary)
@@ -311,35 +342,6 @@ public struct SettingsView: View {
             #endif
         } header: {
             SectionHeader("Appearance")
-        }
-    }
-
-    private var accentSwatches: some View {
-        let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 8)
-        return LazyVGrid(columns: columns, spacing: 12) {
-            ForEach(AppAccent.allCases) { accent in
-                Button {
-                    theme.accent = accent
-                    Haptics.play(.selection)
-                } label: {
-                    Circle()
-                        .fill(accent.color)
-                        .frame(width: 30, height: 30)
-                        .overlay {
-                            Circle()
-                                .strokeBorder(Color.mixTextPrimary, lineWidth: theme.accent == accent ? 2.5 : 0)
-                                .padding(-3)
-                        }
-                        .overlay {
-                            if theme.accent == accent {
-                                Image(systemName: "checkmark")
-                                    .font(.system(size: 12, weight: .bold))
-                                    .foregroundStyle(.white)
-                            }
-                        }
-                }
-                .buttonStyle(.plain)
-            }
         }
     }
 
@@ -551,6 +553,191 @@ public struct SettingsView: View {
                 }
             }
             #endif
+        }
+    }
+
+    #if os(iOS)
+    /// iOS-only: configure the resolver server address used to stream Discover
+    /// tracks (iOS can't run yt-dlp, so it asks a Mac/hosted server for the audio).
+    private var resolverSection: some View {
+        Section {
+            // Live status: is streaming reachable?
+            HStack(spacing: 12) {
+                rowLabel(title: resolverStatusTitle,
+                         systemImage: "antenna.radiowaves.left.and.right",
+                         tint: resolverStatusColor)
+                Spacer(minLength: 8)
+                if resolverStatus.status == .checking {
+                    ProgressView().scaleEffect(0.8)
+                } else {
+                    Circle()
+                        .fill(resolverStatusColor)
+                        .frame(width: 10, height: 10)
+                }
+            }
+            .padding(.vertical, 4)
+            .listRowBackground(Color.mixSurface)
+
+            // Test button with explicit, lingering pass/fail feedback.
+            Button {
+                runResolverTest()
+            } label: {
+                HStack(spacing: 12) {
+                    rowLabel(title: resolverTesting ? "Testing…" : "Test Connection",
+                             systemImage: "bolt.horizontal.circle")
+                    Spacer(minLength: 8)
+                    if resolverTesting {
+                        ProgressView().scaleEffect(0.8)
+                    } else if let result = resolverTestResult {
+                        Image(systemName: result.systemImage)
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(result.tint)
+                            .transition(.scale.combined(with: .opacity))
+                    }
+                }
+                .padding(.vertical, 4)
+                .contentShape(Rectangle())
+            }
+            .disabled(resolverTesting)
+            .listRowBackground(Color.mixSurface)
+
+            if !resolverTesting, let result = resolverTestResult {
+                Text(result.message)
+                    .font(.mixCaption)
+                    .foregroundStyle(result.tint)
+                    .listRowBackground(Color.mixSurface)
+            }
+
+            // Developer-only manual override, gated by Supabase role (same gate
+            // as Developer Tools). Hidden from everyone else, and the bearer
+            // token is never sent to a typed address (see RemoteResolverService).
+            if vm.isDeveloper {
+                DisclosureGroup(isExpanded: $showResolverAdvanced) {
+                    HStack(spacing: 12) {
+                        Text("Resolver")
+                            .font(.mixBody)
+                            .foregroundStyle(Color.mixTextSecondary)
+                        Spacer(minLength: 8)
+                        TextField("Default (hosted)", text: $resolverURLString)
+                            .multilineTextAlignment(.trailing)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled(true)
+                            .keyboardType(.URL)
+                            .font(.mixCaption)
+                            .foregroundStyle(Color.mixTextSecondary)
+                            .onChange(of: resolverURLString) { _, _ in
+                                Task { await resolverStatus.refresh() }
+                            }
+                    }
+                    .padding(.vertical, 4)
+                } label: {
+                    rowLabel(title: "Advanced", systemImage: "slider.horizontal.3")
+                }
+                .tint(Color.mixTextSecondary)
+                .listRowBackground(Color.mixSurface)
+            }
+        } header: {
+            SectionHeader("Streaming")
+        } footer: {
+            Text("Discover streams automatically — no setup needed.")
+                .font(.mixCaption)
+                .foregroundStyle(Color.mixTextTertiary)
+        }
+        .task { await resolverStatus.refresh() }
+    }
+
+    private func runResolverTest() {
+        resolverTesting = true
+        resolverTestResult = nil
+        Task {
+            // Ensure the spinner is visible long enough to read even when the
+            // health check returns near-instantly.
+            async let probe = resolverStatus.refresh()
+            try? await Task.sleep(for: .milliseconds(450))
+            let source = await probe
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                resolverTesting = false
+                resolverTestResult = source != nil
+                    ? .success("Connected — streaming is working.")
+                    : .failure("Couldn’t connect. Check your internet and try again.")
+            }
+            // Auto-clear so the row returns to its resting state.
+            try? await Task.sleep(for: .seconds(5))
+            if !resolverTesting {
+                withAnimation { resolverTestResult = nil }
+            }
+        }
+    }
+
+    private var resolverStatusTitle: String {
+        switch resolverStatus.status {
+        case .checking: return "Checking…"
+        case .online:
+            // End users just see "Connected"; developers see which source.
+            if vm.isDeveloper, let name = resolverStatus.activeSource?.displayName {
+                return "Connected via \(name)"
+            }
+            return "Connected"
+        case .offline:  return "Not connected"
+        }
+    }
+
+    private var resolverStatusColor: Color {
+        switch resolverStatus.status {
+        case .checking: return .mixTextSecondary
+        case .online:   return .mixPrimary
+        case .offline:  return .mixDestructive
+        }
+    }
+    #endif
+
+    private var discoverCacheSection: some View {
+        Section {
+            Button {
+                let spotify = deps.spotifyClient
+                Task {
+                    await spotify.clearImageCache()
+                    await MainActor.run { LyricsService.shared.clearCache() }
+                    URLCache.shared.removeAllCachedResponses()
+                    await MainActor.run { discoverCacheCleared = true }
+                }
+            } label: {
+                settingsRow(
+                    title: discoverCacheCleared ? "Discover Cache Cleared" : "Clear Discover Cache",
+                    systemImage: discoverCacheCleared ? "checkmark.circle" : "trash",
+                    tint: Color.mixPrimary,
+                    titleColor: Color.mixPrimary
+                )
+            }
+            #if os(macOS)
+            .buttonStyle(.plain)
+            #endif
+            .listRowBackground(Color.mixSurface)
+
+            Button(role: .destructive) {
+                let coordinator = deps.onlineCoordinator
+                Task {
+                    coordinator.clearCache()
+                    await MainActor.run { playedTracksReset = true }
+                }
+            } label: {
+                settingsRow(
+                    title: playedTracksReset ? "Played Tracks Reset" : "Reset Played Tracks",
+                    systemImage: playedTracksReset ? "checkmark.circle" : "arrow.counterclockwise",
+                    tint: playedTracksReset ? Color.mixPrimary : Color.mixDestructive,
+                    titleColor: playedTracksReset ? Color.mixPrimary : Color.mixDestructive
+                )
+            }
+            #if os(macOS)
+            .buttonStyle(.plain)
+            #endif
+            .listRowBackground(Color.mixSurface)
+        } header: {
+            SectionHeader("Discover")
+        } footer: {
+            Text("Clear Discover Cache clears cached artist photos and lyrics so they refetch fresh. Reset Played Tracks deletes every downloaded song so they re-download next time you play them — use this to pick up the new explicit (uncensored) versions.")
+                .font(.mixCaption)
+                .foregroundStyle(Color.mixTextTertiary)
         }
     }
 
@@ -781,6 +968,32 @@ public struct SettingsView: View {
         }
     }
 }
+
+#if os(iOS)
+/// Result of a manual "Test Connection" tap in the Streaming section.
+private enum ResolverTestResult {
+    case success(String)
+    case failure(String)
+
+    var message: String {
+        switch self {
+        case .success(let m), .failure(let m): return m
+        }
+    }
+    var systemImage: String {
+        switch self {
+        case .success: return "checkmark.circle.fill"
+        case .failure: return "xmark.circle.fill"
+        }
+    }
+    var tint: Color {
+        switch self {
+        case .success: return .mixPrimary
+        case .failure: return .mixDestructive
+        }
+    }
+}
+#endif
 
 private struct SectionHeader: View {
     let title: String

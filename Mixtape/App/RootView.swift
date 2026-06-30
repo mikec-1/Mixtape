@@ -62,6 +62,14 @@ public struct RootView: View {
             WelcomeDownloadPrompt()
                 .environmentObject(exportManager)
         }
+        // First social sign-in: invite the user (once) to pick a real username
+        // instead of the auto-generated user_xxxx. Non-blocking — they can skip.
+        .sheet(isPresented: Binding(
+            get: { deps.authService.pendingUsernameSelection },
+            set: { if !$0 { deps.authService.dismissUsernamePrompt() } }
+        )) {
+            UsernamePromptView(authService: deps.authService)
+        }
     }
 
     private func checkPrompt(isAuth: Bool) {

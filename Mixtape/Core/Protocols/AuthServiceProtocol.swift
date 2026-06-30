@@ -89,4 +89,25 @@ public protocol AuthServiceProtocol: AnyObject {
     func changePassword(currentPassword: String, newPassword: String) async throws
     /// Attempt to restore a persisted session on app launch.
     func restoreSession() async
+
+    // MARK: Profile Picture
+
+    /// Uploads raw image data as the current user's avatar and returns the public
+    /// URL. The image should already be downscaled/compressed by the caller.
+    /// `fileExtension` is the lowercased extension without a dot (e.g. "jpg").
+    /// Does NOT persist the URL onto the profile — call `updateAvatarURL(_:)` after.
+    func uploadAvatar(_ data: Data, fileExtension: String) async throws -> URL
+
+    /// Persists the avatar URL onto the user's `profiles` row and auth metadata.
+    /// Pass `nil` to clear the avatar. The refreshed `AppUser` carries the change.
+    func updateAvatarURL(_ url: URL?) async throws
+
+    // MARK: Discovery
+
+    /// Searches public profiles whose username matches `query` (prefix, case-
+    /// insensitive). Returns up to `limit` results, excluding the current user.
+    func searchUsers(matching query: String, limit: Int) async throws -> [UserProfile]
+
+    /// Fetches a single public profile by its id, or nil if it doesn't exist.
+    func fetchProfile(id: UUID) async throws -> UserProfile?
 }

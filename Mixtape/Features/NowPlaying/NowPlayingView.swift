@@ -32,6 +32,10 @@ public struct NowPlayingView: View {
     /// Sheets / panels.
     @State private var showLyrics  = false
     @State private var showUpNext  = false
+    @State private var showGetInfo = false
+
+    /// Drives the swipe-to-skip slide transition on the artwork.
+    @State private var artworkSlide: CGFloat = 0
 
     public var body: some View {
         ZStack {
@@ -53,6 +57,14 @@ public struct NowPlayingView: View {
         .sheet(isPresented: $showUpNext) {
             UpNextSheet()
                 .environmentObject(engine)
+        }
+        .sheet(isPresented: $showGetInfo) {
+            if let track = engine.queue.currentTrack {
+                GetInfoSheet(
+                    track: track,
+                    isOnline: deps.onlineCoordinator.hasActiveOnlineSession
+                )
+            }
         }
     }
 
@@ -95,7 +107,7 @@ public struct NowPlayingView: View {
 
     private var content: some View {
         VStack(spacing: 0) {
-            dragHandle
+            topBar
             Spacer(minLength: 12)
             if showLyrics {
                 lyricsPanel
@@ -110,20 +122,136 @@ public struct NowPlayingView: View {
             Spacer(minLength: 24)
             controls
             Spacer(minLength: 28)
-            utilityRow
+            bottomRow
             Spacer(minLength: 24)
         }
         .padding(.horizontal, 32)
     }
 
-    // MARK: - Drag Handle
+    // MARK: - Top Bar
 
-    private var dragHandle: some View {
-        Capsule()
-            .fill(Color.mixTextTertiary.opacity(0.5))
-            .frame(width: 36, height: 4)
-            .padding(.top, 12)
-            .padding(.bottom, 8)
+    /// chevron.down (dismiss) · context label · ellipsis (••• menu).
+    private var topBar: some View {
+        HStack(alignment: .center) {
+            Button { dismiss() } label: {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Color.mixTextPrimary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Spacer()
+
+            VStack(spacing: 2) {
+                Text("PLAYING FROM")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Color.mixTextTertiary)
+                    .tracking(0.8)
+                Text(deps.onlineCoordinator.hasActiveOnlineSession ? "Discover" : "Library")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(Color.mixTextPrimary)
+            }
+            .lineLimit(1)
+
+            Spacer()
+
+            optionsMenu
+        }
+        .padding(.top, 8)
+    }
+
+    // MARK: - Options (•••) Menu
+
+    private var optionsMenu: some View {
+        Menu {
+            if let track = engine.queue.currentTrack {
+                let targetPlaylists = deps.libraryService.playlists.filter {
+                    !$0.isAllSongs && !$0.isDeleted && !$0.trackIDs.contains(track.id)
+                }
+                if !targetPlaylists.isEmpty {
+                    Menu("Add to Playlist") {
+                        ForEach(targetPlaylists) { pl in
+                            Button(pl.name) {
+                                deps.libraryService.addTrack(id: track.id, toPlaylist: pl.id)
+                                deps.showToast("Added to \(pl.name)")
+                            }
+                        }
+                    }
+                }
+            }
+
+            if deps.onlineCoordinator.hasActiveOnlineSession,
+               let onlineTrack = deps.onlineCoordinator.currentOnlineTrack {
+                Button {
+                    Task {
+                        await deps.onlineCoordinator.addToLibrary(onlineTrack)
+                        deps.showToast("Added to Library")
+                    }
+                } label: {
+                    Label("Add to Library", systemImage: "plus.circle")
+                }
+            }
+
+            Divider()
+
+            Menu("Playback Speed") {
+                ForEach([0.5, 0.75, 1.0, 1.25, 1.5, 2.0], id: \.self) { rate in
+                    Button {
+                        engine.setRate(Float(rate))
+                    } label: {
+                        Label(
+                            speedLabel(rate),
+                            systemImage: abs(Double(engine.playbackRate) - rate) < 0.01 ? "checkmark" : ""
+                        )
+                    }
+                }
+            }
+
+            Menu("Sleep Timer") {
+                if engine.sleepTimerRemaining != nil {
+                    Button(role: .destructive) {
+                        engine.cancelSleepTimer()
+                    } label: {
+                        Label("Cancel Timer", systemImage: "xmark")
+                    }
+                    Divider()
+                }
+                ForEach([15, 30, 45, 60], id: \.self) { minutes in
+                    Button("\(minutes) min") {
+                        engine.setSleepTimer(TimeInterval(minutes * 60))
+                    }
+                }
+            }
+
+            Menu("Crossfade") {
+                ForEach(CrossfadeMode.allCases) { mode in
+                    Button {
+                        engine.setCrossfadeMode(mode)
+                    } label: {
+                        Label(
+                            mode.title,
+                            systemImage: engine.crossfadeMode == mode ? "checkmark" : ""
+                        )
+                    }
+                }
+            }
+
+            Divider()
+
+            Button {
+                showGetInfo = true
+            } label: {
+                Label("Get Info", systemImage: "info.circle")
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(Color.mixTextPrimary)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
     }
 
     // MARK: - Artwork
@@ -148,7 +276,31 @@ public struct NowPlayingView: View {
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .shadow(color: .black.opacity(0.45), radius: 28, y: 14)
         .scaleEffect(engine.state.isPlaying ? 1.0 : 0.92)
+        .offset(x: artworkSlide)
         .animation(.spring(response: 0.45, dampingFraction: 0.7), value: engine.state.isPlaying)
+        .gesture(
+            DragGesture(minimumDistance: 30)
+                .onEnded { value in
+                    guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                    if value.translation.width < -50 {
+                        // Swipe left → next.
+                        withAnimation(.easeInOut(duration: 0.18)) { artworkSlide = -320 }
+                        Task {
+                            await engine.playNext()
+                            artworkSlide = 320
+                            withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) { artworkSlide = 0 }
+                        }
+                    } else if value.translation.width > 50 {
+                        // Swipe right → previous.
+                        withAnimation(.easeInOut(duration: 0.18)) { artworkSlide = 320 }
+                        Task {
+                            await engine.playPrevious()
+                            artworkSlide = -320
+                            withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) { artworkSlide = 0 }
+                        }
+                    }
+                }
+        )
     }
 
     // MARK: - Lyrics Panel
@@ -194,16 +346,23 @@ public struct NowPlayingView: View {
 
     private var trackInfo: some View {
         HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(engine.queue.currentTrack?.title ?? "—")
-                    .font(.mixTitle)
-                    .foregroundStyle(Color.mixTextPrimary)
-                    .lineLimit(1)
-                Text(engine.queue.currentTrack?.artistName ?? "")
-                    .font(.mixBody)
-                    .foregroundStyle(Color.mixTextSecondary)
-                    .lineLimit(1)
+            Button {
+                showGetInfo = true
+            } label: {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(engine.queue.currentTrack?.title ?? "—")
+                        .font(.mixTitle)
+                        .foregroundStyle(Color.mixTextPrimary)
+                        .lineLimit(1)
+                    Text(engine.queue.currentTrack?.artistName ?? "")
+                        .font(.mixBody)
+                        .foregroundStyle(Color.mixTextSecondary)
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
             Spacer()
             // Heart / favourite
             if let track = engine.queue.currentTrack {
@@ -245,98 +404,45 @@ public struct NowPlayingView: View {
         }
     }
 
-    // MARK: - Utility Row (lyrics toggle, speed, sleep timer, up next)
+    // MARK: - Bottom Row (Lyrics · Share · AirPlay · Up Next)
 
-    private var utilityRow: some View {
+    private var bottomRow: some View {
         HStack(spacing: 0) {
-            // Lyrics toggle
-            NPButton(
-                icon: "quote.bubble",
-                isActive: showLyrics,
-                size: 18
-            ) {
+            // Lyrics toggle (left) — primary, on-screen access (not buried in •••).
+            NPButton(icon: "quote.bubble", isActive: showLyrics, size: 18) {
                 withAnimation(.easeInOut(duration: 0.25)) { showLyrics.toggle() }
             }
 
             Spacer()
 
-            // Playback speed menu
-            speedMenu
-
-            Spacer()
-
-            // Sleep timer menu
-            sleepTimerMenu
-
-            Spacer()
-
-            // Up Next
-            NPButton(icon: MixtapeIcons.queue, size: 18) {
-                showUpNext = true
-            }
-        }
-    }
-
-    private var speedMenu: some View {
-        Menu {
-            ForEach([0.5, 0.75, 1.0, 1.25, 1.5, 2.0], id: \.self) { rate in
-                Button {
-                    engine.setRate(Float(rate))
-                } label: {
-                    Label(
-                        speedLabel(rate),
-                        systemImage: abs(Double(engine.playbackRate) - rate) < 0.01 ? "checkmark" : ""
-                    )
+            // Share · AirPlay · Up Next (right).
+            HStack(spacing: 16) {
+                if let track = engine.queue.currentTrack {
+                    ShareLink(item: "\(track.title) — \(track.artistName)") {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.system(size: 18))
+                            .foregroundStyle(Color.mixTextSecondary)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                }
+                #if os(iOS)
+                AirPlayButton()
+                    .frame(width: 44, height: 44)
+                #endif
+                NPButton(icon: MixtapeIcons.queue, size: 18) {
+                    showUpNext = true
                 }
             }
-        } label: {
-            VStack(spacing: 2) {
-                Image(systemName: "speedometer")
-                    .font(.system(size: 18))
-                Text(speedLabel(Double(engine.playbackRate)))
-                    .font(.system(size: 10, weight: .semibold))
-            }
-            .foregroundStyle(engine.playbackRate != 1.0 ? Color.mixPrimary : Color.mixTextSecondary)
-            .frame(width: 48, height: 44)
-            .contentShape(Rectangle())
-        }
-    }
-
-    private var sleepTimerMenu: some View {
-        Menu {
-            if engine.sleepTimerRemaining != nil {
-                Button(role: .destructive) {
-                    engine.cancelSleepTimer()
-                } label: {
-                    Label("Cancel Timer", systemImage: "xmark")
-                }
-                Divider()
-            }
-            ForEach([15, 30, 45, 60], id: \.self) { minutes in
-                Button {
-                    engine.setSleepTimer(TimeInterval(minutes * 60))
-                } label: {
-                    Text("\(minutes) min")
-                }
-            }
-        } label: {
-            VStack(spacing: 2) {
-                Image(systemName: engine.sleepTimerRemaining != nil ? "moon.zzz.fill" : "moon.zzz")
-                    .font(.system(size: 18))
-                if let remaining = engine.sleepTimerRemaining {
-                    Text(formatTime(remaining))
-                        .font(.system(size: 10, weight: .semibold))
-                }
-            }
-            .foregroundStyle(engine.sleepTimerRemaining != nil ? Color.mixPrimary : Color.mixTextSecondary)
-            .frame(width: 48, height: 44)
-            .contentShape(Rectangle())
         }
     }
 
     // MARK: - Playback Controls
 
     private var controls: some View {
+        // spacing: 0 + flexible Spacers — the spacing must NOT be added on top of
+        // the Spacers or the row's minimum width exceeds the screen and shoves the
+        // whole layout off-edge. The Spacers spread the cluster evenly to fill.
         HStack(spacing: 0) {
             // Shuffle
             NPButton(
@@ -345,14 +451,14 @@ public struct NowPlayingView: View {
                 size:     20
             ) { engine.queue.toggleShuffle() }
 
-            Spacer()
+            Spacer(minLength: 8)
 
             // Skip back
             NPButton(icon: MixtapeIcons.skipBack, size: 28) {
                 Task { await engine.playPrevious() }
             }
 
-            Spacer()
+            Spacer(minLength: 8)
 
             // Play / Pause (primary)
             Button {
@@ -375,14 +481,14 @@ public struct NowPlayingView: View {
             }
             .disabled(engine.state == .loading)
 
-            Spacer()
+            Spacer(minLength: 8)
 
             // Skip forward
             NPButton(icon: MixtapeIcons.skipForward, size: 28) {
                 Task { await engine.playNext() }
             }
 
-            Spacer()
+            Spacer(minLength: 8)
 
             // Repeat
             NPButton(
@@ -424,16 +530,18 @@ public struct NowPlayingView: View {
             lyrics = nil
             return
         }
-        if let cached = lyricsService.cached(for: track) {
-            lyrics = cached
-            return
-        }
-        lyrics = nil
-        isLoadingLyrics = true
+        // Show whatever we have instantly. A plain-only (or missing) result still
+        // falls through to resolve() so we keep trying to upgrade to interactive
+        // synced lyrics rather than getting stuck on a plain block.
+        let cached = lyricsService.cached(for: track)
+        lyrics = cached
+        if let cached, cached.hasSynced { return }
+
+        isLoadingLyrics = (cached == nil)
         Task {
             let resolved = await lyricsService.resolve(for: track)
             // Only apply if still the same track.
-            if engine.queue.currentTrack?.id == track.id {
+            if engine.queue.currentTrack?.id == track.id, resolved.hasAny {
                 lyrics = resolved
             }
             isLoadingLyrics = false
@@ -622,7 +730,73 @@ private struct SystemVolumeSlider: UIViewRepresentable {
     }
     func updateUIView(_ uiView: MPVolumeView, context: Context) {}
 }
+
+/// Native AirPlay / route picker (AirPlay, Bluetooth, speaker).
+import AVKit
+private struct AirPlayButton: UIViewRepresentable {
+    func makeUIView(context: Context) -> AVRoutePickerView {
+        let v = AVRoutePickerView()
+        v.tintColor = UIColor(Color.mixTextSecondary)
+        v.activeTintColor = UIColor(Color.mixPrimary)
+        v.prioritizesVideoDevices = false
+        return v
+    }
+    func updateUIView(_ uiView: AVRoutePickerView, context: Context) {}
+}
 #endif
+
+// MARK: - Get Info Sheet
+
+/// Read-only metadata for the current track.
+private struct GetInfoSheet: View {
+    let track: Track
+    let isOnline: Bool
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                row("Title", track.title)
+                row("Artist", track.artistName)
+                if !track.albumTitle.isEmpty { row("Album", track.albumTitle) }
+                row("Duration", formatTime(track.duration))
+                if let year = track.year { row("Year", String(year)) }
+                if let genre = track.genre, !genre.isEmpty { row("Genre", genre) }
+                row("Source", isOnline ? "Streaming (Discover)" : "Library")
+            }
+            #if os(iOS)
+            .listStyle(.insetGrouped)
+            #endif
+            .navigationTitle("Song Info")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func row(_ label: String, _ value: String) -> some View {
+        HStack {
+            Text(label)
+                .font(.mixCaption)
+                .foregroundStyle(Color.mixTextSecondary)
+            Spacer()
+            Text(value)
+                .font(.mixBody)
+                .foregroundStyle(Color.mixTextPrimary)
+                .multilineTextAlignment(.trailing)
+        }
+    }
+
+    private func formatTime(_ t: TimeInterval) -> String {
+        let s = max(0, Int(t))
+        return String(format: "%d:%02d", s / 60, s % 60)
+    }
+}
 
 // MARK: - Preview
 

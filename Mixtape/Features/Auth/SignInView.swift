@@ -61,6 +61,10 @@ public struct SignInView: View {
                 formCard
                     .padding(.horizontal, 24)
 
+                socialSection
+                    .padding(.horizontal, 24)
+                    .padding(.top, 20)
+
                 modeToggle
                     .padding(.top, 24)
 
@@ -167,6 +171,45 @@ public struct SignInView: View {
         .padding(24)
         .background(Color.mixSurface)
         .clipShape(RoundedRectangle(cornerRadius: 20))
+    }
+
+    // MARK: - Social Sign-In
+
+    @ViewBuilder
+    private var socialSection: some View {
+        VStack(spacing: 14) {
+            HStack(spacing: 10) {
+                Rectangle().fill(Color.mixSeparator).frame(height: 1)
+                Text("or continue with")
+                    .font(.mixCaption)
+                    .foregroundStyle(Color.mixTextTertiary)
+                    .fixedSize()
+                Rectangle().fill(Color.mixSeparator).frame(height: 1)
+            }
+
+            Button {
+                Task { await vm.signInWithGoogle() }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "g.circle.fill")
+                        .font(.system(size: 18))
+                    Text("Continue with Google")
+                        .font(.mixButton)
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 50)
+                .foregroundStyle(Color.mixTextPrimary)
+                .background(Color.mixSurface)
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14)
+                        .strokeBorder(Color.mixSeparator, lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(vm.isSocialLoading)
+            .opacity(vm.isSocialLoading ? 0.6 : 1)
+        }
     }
 
     private var modeToggle: some View {

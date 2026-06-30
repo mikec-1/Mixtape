@@ -392,3 +392,46 @@ public final class FavoriteEntity {
         self.syncLastSyncedAt     = syncLastSyncedAt
     }
 }
+
+// MARK: - PlayedTrackSnapshot
+
+/// A lightweight, persisted snapshot of a played track that is NOT in the
+/// library — i.e. an online (Discover) song. The play-history table only stores
+/// a bare `trackID`; for library songs that's enough (they resolve through the
+/// TrackRepository), but online songs have no library row, so without this they
+/// vanish from "Recently played" after a relaunch and never appear in listening
+/// stats. We upsert one snapshot per unique online track (keyed by its stable
+/// id) and resolve recently-played / stats lookups against it as a fallback.
+@Model
+public final class PlayedTrackSnapshotEntity {
+
+    @Attribute(.unique) public var id: UUID
+    public var title: String
+    public var artistName: String
+    public var albumTitle: String
+    public var duration: TimeInterval
+    @Attribute(.externalStorage) public var artworkData: Data?
+    /// The OnlineTrack key ("title|artist") so a replay can reconstruct it.
+    public var sourceKey: String
+    public var updatedAt: Date
+
+    public init(
+        id: UUID,
+        title: String,
+        artistName: String,
+        albumTitle: String,
+        duration: TimeInterval,
+        artworkData: Data? = nil,
+        sourceKey: String,
+        updatedAt: Date = Date()
+    ) {
+        self.id          = id
+        self.title       = title
+        self.artistName  = artistName
+        self.albumTitle  = albumTitle
+        self.duration    = duration
+        self.artworkData = artworkData
+        self.sourceKey   = sourceKey
+        self.updatedAt   = updatedAt
+    }
+}

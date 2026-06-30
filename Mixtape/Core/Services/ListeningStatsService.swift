@@ -81,17 +81,25 @@ public final class ListeningStatsService {
 
     private let history: PlayHistoryRepository
     private let library: LibraryService
+    private let snapshots: PlayedTrackSnapshotRepository?
     private let calendar: Calendar
 
-    public init(history: PlayHistoryRepository, library: LibraryService, calendar: Calendar = .current) {
+    public init(history: PlayHistoryRepository, library: LibraryService,
+                snapshots: PlayedTrackSnapshotRepository? = nil, calendar: Calendar = .current) {
         self.history = history
         self.library = library
+        self.snapshots = snapshots
         self.calendar = calendar
     }
 
     public func compute(period: StatsPeriod, now: Date = Date()) -> ListeningStats {
         let plays = (try? history.fetchAllPlays(since: period.startDate(now: now, calendar: calendar))) ?? []
         guard !plays.isEmpty else { return ListeningStats.empty }
+
+        // Resolve a play's track against the library first, then the online-track
+        // snapshot store — so Discover plays count toward stats too.
+        let snapshotMap = (try? snapshots?.fetchAll()) ?? [:]
+        func resolve(_ id: UUID) -> Track? { library.track(id: id) ?? snapshotMap[id] }
 
         // Per-track play counts
         var countByTrack: [UUID: Int] = [:]
@@ -104,7 +112,7 @@ public final class ListeningStatsService {
             let hour = calendar.component(.hour, from: play.playedAt)
             if hour >= 0 && hour < 24 { playsByHour[hour] += 1 }
             dayKeys.insert(calendar.startOfDay(for: play.playedAt))
-            if let track = library.track(id: play.trackID) {
+            if let track = resolve(play.trackID) {
                 estimatedSeconds += track.duration
             }
         }
@@ -112,7 +120,7 @@ public final class ListeningStatsService {
         // Top tracks (resolve against library; drop tracks no longer present)
         let topTracks: [TrackStat] = countByTrack
             .compactMap { id, count -> TrackStat? in
-                guard let track = library.track(id: id) else { return nil }
+                guard let track = resolve(id) else { return nil }
                 return TrackStat(track: track, playCount: count)
             }
             .sorted { $0.playCount > $1.playCount }
@@ -122,7 +130,7 @@ public final class ListeningStatsService {
         // Top artists (group resolved tracks by artist name)
         var artistCount: [String: (name: String, count: Int, art: Data?)] = [:]
         for (id, count) in countByTrack {
-            guard let track = library.track(id: id) else { continue }
+            guard let track = resolve(id) else { continue }
             let key = track.artistName.lowercased()
             var entry = artistCount[key] ?? (track.artistName, 0, track.artworkData)
             entry.count += count

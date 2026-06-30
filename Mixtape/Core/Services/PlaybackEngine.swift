@@ -85,6 +85,41 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     /// AppDependencies uses this to persist the entry via PlayHistoryRepository.
     public var onTrackAddedToHistory: ((Track) -> Void)?
 
+    // MARK: - Online context routing (Discover)
+    //
+    // When the currently playing track is an online (Discover) stream, skip /
+    // auto-advance can't use the local queue — each online track is downloaded
+    // one at a time and only the playing one has a file on disk. The
+    // OnlinePlaybackCoordinator installs these handlers so next / previous /
+    // end-of-track route back to it, which downloads the neighbour in its
+    // stored context and plays it. When a normal library track plays, the
+    // engine clears these (see `play(track:in:)`) so the queue handles skips.
+
+    /// Set by OnlinePlaybackCoordinator while an online context is active.
+    /// Non-nil here means "the current track is an online stream".
+    public var onlineNextHandler: (() async -> Void)?
+    /// Companion to `onlineNextHandler` for backward skips.
+    public var onlinePreviousHandler: (() async -> Void)?
+
+    /// Routes an online track that has no playable local file (e.g. a song
+    /// imported from a Spotify playlist, or replayed from history) through the
+    /// OnlinePlaybackCoordinator, which resolves & streams it. Set by
+    /// AppDependencies. Returns once routing has taken over. When nil, such a
+    /// track falls through to the normal local-file path (and surfaces the
+    /// "hasn't been uploaded yet" error).
+    public var onlineRouter: ((Track, [Track]) async -> Void)?
+
+    /// True when an online (Discover) context is driving playback, so skips
+    /// must route to the coordinator instead of the local queue.
+    public var hasOnlineContext: Bool { onlineNextHandler != nil }
+
+    /// Clear the online routing handlers. Called when a library track takes
+    /// over so the engine's normal queue handles next / previous again.
+    public func clearOnlineContext() {
+        onlineNextHandler = nil
+        onlinePreviousHandler = nil
+    }
+
     /// Current playback speed multiplier (0.5–2.0). 1.0 = normal. Persisted.
     @Published public private(set) var playbackRate: Float = 1.0
     /// Track-transition style. Persisted. `.off` keeps the original single-player
@@ -148,6 +183,13 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     // already crossed the scrobble threshold this play-through.
     private var scrobbleStartedAt: Date?
     private var didScrobbleCurrent = false
+    /// True once the current track has crossed the minimum-listen threshold and
+    /// been recorded to history. Reset whenever a new track starts.
+    private var didRecordHistoryCurrent = false
+
+    // Lyrics prefetch: id of the track we last kicked off a background lyrics
+    // resolve for, so the same track isn't prefetched twice in a row.
+    private var lastLyricsPrefetchID: Track.ID?
 
     // UserDefaults keys for persisted playback state.
     private enum DefaultsKey {
@@ -173,6 +215,18 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     /// Incremented each time a new load is requested. A stale `loadAndPlay` call
     /// checks this before doing anything irreversible and aborts if superseded.
     private var loadGeneration = 0
+
+    // MARK: - Remote streaming (Discover / online playback)
+
+    /// Which backend is currently driving playback. `.engine` is the AVAudioEngine
+    /// graph (local files); `.remote` is an AVPlayer streaming a yt-dlp URL. The
+    /// public controls (toggle/pause/resume/seek/volume) branch on this so the
+    /// existing player bar works unchanged for online tracks.
+    private enum PlaybackSource { case engine, remote }
+    private var playbackSource: PlaybackSource = .engine
+    private var remotePlayer: AVPlayer?
+    private var remoteTimeObserver: Any?
+    private var remoteEndObserver: NSObjectProtocol?
 
     // MARK: - Init
 
@@ -260,12 +314,30 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     private func applyVolume() {
         // Apply to the main mixer so it affects the full graph output.
         audioEngine.mainMixerNode.outputVolume = volume
+        // Mirror to the remote player so the volume slider also works while streaming.
+        remotePlayer?.volume = volume
     }
 
     // MARK: - Public Controls
 
     /// Load a new queue starting at `track` and begin playback.
     public func play(track: Track, in tracks: [Track]) async {
+        // An online track with no playable local file yet (imported from Spotify,
+        // replayed from history) must resolve & stream through the coordinator
+        // rather than the local-file path. The coordinator plays the *resolved*
+        // file back through this method with its cache `localPath` populated, so
+        // `localURL(for:)` is non-nil by then — no recursion.
+        if track.isOnline, fileStorage.localURL(for: track) == nil, let route = onlineRouter {
+            await route(track, tracks)
+            return
+        }
+        // A direct play() takes over the local queue. Drop any online routing so
+        // skips use the queue again. OnlinePlaybackCoordinator re-installs its
+        // handlers immediately after this call when it's driving an online track.
+        clearOnlineContext()
+        // Start resolving lyrics the moment a song is chosen so they're cached by
+        // the time Now Playing opens. Best-effort — never blocks playback.
+        LyricsService.shared.prefetch(for: track)
         // Capture the previous track BEFORE queue.play() overwrites currentTrack.
         addToHistory(queue.currentTrack, skippingIfSameAs: track)
         queue.play(track: track, in: tracks)
@@ -273,6 +345,14 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     }
 
     public func togglePlayPause() {
+        if playbackSource == .remote {
+            switch state {
+            case .playing: remotePlayer?.pause(); state = .paused; updateNowPlayingRate(0)
+            case .paused:  resumeRemoteAtRate(); state = .playing; updateNowPlayingRate(playbackRate)
+            default: break
+            }
+            return
+        }
         switch state {
         case .playing:
             pausePlayback()
@@ -300,6 +380,11 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     }
 
     public func pause() {
+        if playbackSource == .remote {
+            guard state == .playing else { return }
+            remotePlayer?.pause(); state = .paused; updateNowPlayingRate(0)
+            return
+        }
         guard state == .playing else { return }
         pausePlayback()
         state = .paused
@@ -309,6 +394,11 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     }
 
     public func resume() {
+        if playbackSource == .remote {
+            guard state == .paused else { return }
+            resumeRemoteAtRate(); state = .playing; updateNowPlayingRate(playbackRate)
+            return
+        }
         guard state == .paused else { return }
         resumePlayback()
         state = .playing
@@ -320,6 +410,14 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     /// Implemented by stopping the player node and re-scheduling the file from
     /// the target sample offset.
     public func seek(to time: TimeInterval) {
+        if playbackSource == .remote {
+            guard let player = remotePlayer, duration > 0 else { return }
+            let clamped = max(0, min(time, duration))
+            player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600))
+            currentTime = clamped
+            updateNowPlayingTime()
+            return
+        }
         guard let file = audioFile, fileLengthFrames > 0 else { return }
         cancelCrossfade()
         let clamped = max(0, min(time, duration))
@@ -349,6 +447,12 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     }
 
     public func playNext() async {
+        // Online context active → advance through the Discover context (downloads
+        // the neighbour on demand) instead of the single-track local queue.
+        if let handler = onlineNextHandler {
+            await handler()
+            return
+        }
         let current = queue.currentTrack
         if let next = queue.advance() {
             addToHistory(current, skippingIfSameAs: next)
@@ -367,6 +471,11 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             if state == .paused { resume() }
             return
         }
+        // Online context active → step back through the Discover context.
+        if let handler = onlinePreviousHandler {
+            await handler()
+            return
+        }
         let current = queue.currentTrack
         if let prev = queue.previous() {
             addToHistory(current, skippingIfSameAs: prev)
@@ -382,9 +491,18 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         let clamped = max(0.5, min(rate, 2.0))
         playbackRate = clamped
         timePitchNode.rate = clamped
+        // Remote (AVPlayer) streams apply speed via the player's rate; pitch is
+        // preserved by the item's audioTimePitchAlgorithm set at load time.
+        if playbackSource == .remote, state == .playing { remotePlayer?.rate = clamped }
         UserDefaults.standard.set(clamped, forKey: DefaultsKey.playbackRate)
         // Lock-screen rate reflects whether we're actively playing, scaled by speed.
         updateNowPlayingRate(state == .playing ? clamped : 0)
+    }
+
+    /// Resume the remote AVPlayer at the user's chosen speed. Setting `rate`
+    /// directly both starts playback and applies the multiplier in one step.
+    private func resumeRemoteAtRate() {
+        remotePlayer?.rate = playbackRate
     }
 
     // MARK: - Sleep Timer
@@ -450,6 +568,13 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     /// Load `track` and leave it paused at `position` seconds (resume-on-launch path).
     private func loadButPause(track: Track, at position: TimeInterval) async {
         queue.restoreSession(track: track)
+        // Online tracks with no cached file would need resolving/streaming, which
+        // we don't do automatically on launch. Restore the session for the UI and
+        // stay stopped — play() routes it through the coordinator when tapped.
+        if track.isOnline, fileStorage.localURL(for: track) == nil {
+            state = .stopped
+            return
+        }
         await loadAndPlay(track: track)
         // loadAndPlay starts playback; immediately pause and seek to saved position.
         if duration > 0 {
@@ -464,6 +589,12 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     // MARK: - Private: Load & Play
 
     private func loadAndPlay(track: Track) async {
+        // A local load supersedes any active remote stream — tear it down and
+        // hand control back to the AVAudioEngine graph.
+        if playbackSource == .remote {
+            teardownRemotePlayer()
+            playbackSource = .engine
+        }
         // Manual load supersedes any in-flight crossfade: stop the outgoing
         // player and reset volumes before taking over.
         cancelCrossfade()
@@ -483,7 +614,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         state = .loading
 
         // 1. Resolve a local URL — use cached file, or download on demand.
-        let fileURL: URL
+        var fileURL: URL
 
         if let local = fileStorage.localURL(for: track) {
             fileURL = local
@@ -493,7 +624,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             } catch {
                 // Only surface the error if we're still the active load request.
                 guard loadGeneration == generation else { return }
-                setError("Couldn't download \"\(track.title)\" — \(error.localizedDescription)")
+                setError("Couldn't download \"\(track.title)\". Check your connection and try again.")
                 print("[PlaybackEngine] ❌ Download failed for \"\(track.title)\": \(error)")
                 return
             }
@@ -518,8 +649,10 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         #endif
 
         // 3. Open the file, reconnect the graph for its format, schedule & play.
-        do {
-            let file = try AVAudioFile(forReading: fileURL)
+        //    Opens AVAudioFile, configures the graph and begins playback; throws on
+        //    any failure so the caller can attempt a one-time self-heal.
+        func openAndPlay(_ url: URL) throws {
+            let file = try AVAudioFile(forReading: url)
             let processingFormat = file.processingFormat
 
             audioFile        = file
@@ -539,8 +672,8 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             scheduleSegment(of: file, startingAtFrame: 0, generation: generation)
 
             guard startEngineIfNeeded() else {
-                setError("Couldn't start the audio engine for \"\(track.title)\".")
-                return
+                throw NSError(domain: "PlaybackEngine", code: -1,
+                              userInfo: [NSLocalizedDescriptionKey: "audio engine wouldn't start"])
             }
             playerNode.play()
             isNodePlaying = true
@@ -549,14 +682,50 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             // Reset scrobble tracking for the new track and announce "now playing".
             scrobbleStartedAt = Date()
             didScrobbleCurrent = false
+        didRecordHistoryCurrent = false
             let nowPlayingTrack = track
             Task { await LastFmScrobbler.shared.updateNowPlaying(track: nowPlayingTrack) }
 
             startProgressTimer()
             updateNowPlayingInfo(track: track)
+
+            // Warm the lyrics cache in the background for the new current track.
+            prefetchLyrics(for: track)
+        }
+
+        do {
+            try openAndPlay(fileURL)
         } catch {
             guard loadGeneration == generation else { return }
-            setError("Playback failed for \"\(track.title)\" — \(error.localizedDescription)")
+            print("[PlaybackEngine] ⚠️ First open failed for \"\(track.title)\": \(error) — attempting self-heal")
+
+            // Self-heal: a corrupt exported/cached copy (e.g. a legacy bad ID3-on-m4a
+            // download) makes AVAudioFile throw kAudioFileInvalidFileError. Drop the
+            // bad exported copy and re-resolve from cache/remote, then retry once.
+            ExportManager.shared.deleteExportedFile(for: track)
+
+            var healedURL: URL? = fileStorage.localURL(for: track)
+            // If the only copy left was the one we just deleted (or it's the same
+            // corrupt cache file), re-download a fresh copy from the remote.
+            if (healedURL == nil || healedURL == fileURL), track.file.remoteKey != nil {
+                healedURL = try? await fileStorage.download(track: track, accessToken: "")
+            }
+
+            guard loadGeneration == generation else { return }
+
+            if let healedURL, healedURL != fileURL {
+                do {
+                    fileURL = healedURL
+                    try openAndPlay(healedURL)
+                    print("[PlaybackEngine] ✅ Self-heal succeeded for \"\(track.title)\"")
+                    return
+                } catch {
+                    guard loadGeneration == generation else { return }
+                    print("[PlaybackEngine] ❌ Self-heal retry failed for \"\(track.title)\": \(error)")
+                }
+            }
+
+            setError("Couldn't play \"\(track.title)\" right now. Please try again.")
             print("[PlaybackEngine] ❌ Playback failed for \"\(track.title)\": \(error)")
         }
     }
@@ -590,6 +759,122 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         }
     }
 
+    // MARK: - Remote Streaming (progressive online playback)
+
+    /// Play an online track by **streaming** `url` via AVPlayer (progressive —
+    /// audio starts as soon as enough has buffered) instead of waiting for the
+    /// whole file to download. `headers` carries the bearer auth for the hosted
+    /// resolver (only set for the trusted host — see RemoteResolverService).
+    ///
+    /// The caller (OnlinePlaybackCoordinator) installs the online next/previous
+    /// handlers AFTER this returns; end-of-stream reads `onlineNextHandler` live,
+    /// so auto-advance flows through the Discover context just like the local
+    /// path. Speed control, scrubbing and lyrics all run off the AVPlayer clock.
+    public func playOnlineStream(url: URL, headers: [String: String], track: Track) async {
+        // A streaming load takes over the queue and supersedes any engine playback.
+        clearOnlineContext()
+        // Warm lyrics in parallel with buffering (coalesces with the tap-time prefetch).
+        prefetchLyrics(for: track)
+        // Log the outgoing track and surface the new one in the queue/player bar.
+        addToHistory(queue.currentTrack, skippingIfSameAs: track)
+        queue.play(track: track, in: [track])
+        await startRemoteStream(url: url, headers: headers, track: track)
+    }
+
+    /// Configures and starts the AVPlayer for a remote stream. Assumes the queue /
+    /// history have already been updated by the caller.
+    private func startRemoteStream(url: URL, headers: [String: String], track: Track) async {
+        // Supersede any engine playback.
+        cancelCrossfade()
+        loadGeneration &+= 1
+        playerNode.stop()
+        isNodePlaying = false
+        audioFile = nil
+        stopProgressTimer()
+        if audioEngine.isRunning { audioEngine.pause() }
+
+        // Reset and switch to the remote backend.
+        teardownRemotePlayer()
+        playbackSource = .remote
+        currentTime = 0
+        duration    = track.duration       // provisional; refined once the item loads
+        state       = .loading
+
+        #if os(iOS)
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+        try? AVAudioSession.sharedInstance().setActive(true)
+        #endif
+
+        // Inject auth headers (bearer) so the hosted resolver authorises the stream.
+        let options = headers.isEmpty ? nil : ["AVURLAssetHTTPHeaderFieldsKey": headers]
+        let asset  = AVURLAsset(url: url, options: options)
+        let item   = AVPlayerItem(asset: asset)
+        // Preserve pitch when the user changes playback speed.
+        item.audioTimePitchAlgorithm = .timeDomain
+        let player = AVPlayer(playerItem: item)
+        player.volume = volume
+        remotePlayer = player
+
+        // Drive currentTime/duration/state from the player's clock.
+        let interval = CMTime(seconds: 0.2, preferredTimescale: 600)
+        remoteTimeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
+            Task { @MainActor [weak self] in
+                guard let self, self.playbackSource == .remote else { return }
+                self.currentTime = time.seconds.isFinite ? time.seconds : self.currentTime
+                if let d = self.remotePlayer?.currentItem?.duration, d.isNumeric, d.seconds > 0 {
+                    self.duration = d.seconds
+                }
+                if self.state == .loading, self.remotePlayer?.timeControlStatus == .playing {
+                    self.state = .playing
+                }
+                self.checkHistoryThreshold()
+                self.updateNowPlayingTime()
+            }
+        }
+
+        // At end of stream, auto-advance through the online context if one is
+        // active (handler installed by the coordinator after this returns),
+        // otherwise stop.
+        remoteEndObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if let handler = self.onlineNextHandler {
+                    await handler()
+                } else {
+                    self.stopPlayback()
+                }
+            }
+        }
+
+        // Start at the user's chosen speed (rate > 0 begins playback).
+        player.rate = playbackRate
+        // Stay in .loading until the time observer confirms audio is actually
+        // advancing (timeControlStatus == .playing). This lets the coordinator's
+        // watchdog detect a stalled/failed stream and fall back to a download.
+        scrobbleStartedAt  = Date()
+        didScrobbleCurrent = false
+        didRecordHistoryCurrent = false
+        updateNowPlayingInfo(track: track)
+        let nowPlayingTrack = track
+        Task { await LastFmScrobbler.shared.updateNowPlaying(track: nowPlayingTrack) }
+    }
+
+    /// Tear down the AVPlayer and its observers. Safe to call when none exists.
+    private func teardownRemotePlayer() {
+        if let obs = remoteTimeObserver {
+            remotePlayer?.removeTimeObserver(obs)
+            remoteTimeObserver = nil
+        }
+        if let end = remoteEndObserver {
+            NotificationCenter.default.removeObserver(end)
+            remoteEndObserver = nil
+        }
+        remotePlayer?.pause()
+        remotePlayer = nil
+    }
+
     // MARK: - Pause / Resume primitives
 
     private func pausePlayback() {
@@ -610,15 +895,41 @@ public final class PlaybackEngine: NSObject, ObservableObject {
 
     /// Prepend `track` to recentlyPlayed unless it's nil or identical to `arriving`.
     /// Pass `nil` for `arriving` when stopping playback (no incoming track).
-    private func addToHistory(_ track: Track?, skippingIfSameAs arriving: Track?) {
-        guard let track else { return }
-        if let arriving, arriving.id == track.id { return }
-        // Don't duplicate the top of the list.
-        if recentlyPlayed.first?.id == track.id { return }
+    /// Start-time history logging is intentionally a no-op: a play is only
+    /// recorded once it crosses the minimum-listen threshold (see
+    /// `checkHistoryThreshold`), so skips and brief samples don't pollute
+    /// "Recently played" or listening stats. Kept so existing call sites compile.
+    private func addToHistory(_ track: Track?, skippingIfSameAs arriving: Track?) {}
+
+    /// Record the *current* track as a play: prepend to `recentlyPlayed` (Home
+    /// screen) and persist via the callback (history table → stats). Skips a
+    /// duplicate already at the top of the list. Online tracks have a stable id,
+    /// so repeated plays aggregate rather than pile up as unique entries.
+    private func recordCurrentPlay() {
+        guard let track = queue.currentTrack else {
+            print("[history] recordCurrentPlay: no currentTrack — skipped")
+            return
+        }
+        if recentlyPlayed.first?.id == track.id {
+            print("[history] recordCurrentPlay: '\(track.title)' already at top — skipped")
+            return
+        }
         recentlyPlayed.insert(track, at: 0)
         if recentlyPlayed.count > 50 { recentlyPlayed.removeLast() }
-        // Notify AppDependencies to persist this entry
+        print("[history] RECORDED '\(track.title)' id=\(track.id) online=\(track.isOnline) recentlyPlayed.count=\(recentlyPlayed.count)")
         onTrackAddedToHistory?(track)
+    }
+
+    /// Records the current track once it's been listened to for at least 30s (or
+    /// ~90% of a sub-30s song), so only meaningful listens count toward Home and
+    /// stats. Fires once per track; the flag resets when a new track loads.
+    private func checkHistoryThreshold() {
+        guard !didRecordHistoryCurrent, queue.currentTrack != nil else { return }
+        let target = duration > 0 ? min(30, duration * 0.9) : 30
+        guard currentTime >= target else { return }
+        print("[history] threshold reached: currentTime=\(currentTime) target=\(target) duration=\(duration)")
+        didRecordHistoryCurrent = true
+        recordCurrentPlay()
     }
 
     /// Seeds `recentlyPlayed` from persistent storage on app launch.
@@ -632,7 +943,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         state        = .error(message)
         errorMessage = message
         Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(4))
+            try? await Task.sleep(for: .seconds(5))
             guard let self else { return }
             if case .error = self.state { self.state = .stopped }
             self.errorMessage = nil
@@ -641,6 +952,8 @@ public final class PlaybackEngine: NSObject, ObservableObject {
 
     public func stopPlayback() {
         cancelCrossfade()
+        teardownRemotePlayer()
+        playbackSource = .engine
         // Bump generation so the segment completion handler won't auto-advance.
         loadGeneration &+= 1
         playerNode.stop()
@@ -668,6 +981,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
                 guard let self else { return }
                 self.currentTime = self.currentPlaybackTime()
                 self.checkScrobbleThreshold()
+                self.checkHistoryThreshold()
                 self.maybeStartCrossfade()
             }
     }
@@ -681,6 +995,16 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         guard currentTime >= threshold, let track = queue.currentTrack else { return }
         didScrobbleCurrent = true
         Task { await LastFmScrobbler.shared.scrobble(track: track, startedAt: startedAt) }
+    }
+
+    /// Fire-and-forget: warm the lyrics cache for `track` in the background so
+    /// they're already resolved when the user opens the lyrics view. No-ops if we
+    /// already kicked off a prefetch for this same track. Silent on failure and
+    /// never blocks playback.
+    private func prefetchLyrics(for track: Track) {
+        guard lastLyricsPrefetchID != track.id else { return }
+        lastLyricsPrefetchID = track.id
+        Task { await LyricsService.shared.resolve(for: track) }
     }
 
     private func stopProgressTimer() {
@@ -833,9 +1157,13 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         isNodePlaying    = true
         scrobbleStartedAt  = Date()
         didScrobbleCurrent = false
+        didRecordHistoryCurrent = false
         updateNowPlayingInfo(track: next)
         let nowPlayingTrack = next
         Task { await LastFmScrobbler.shared.updateNowPlaying(track: nowPlayingTrack) }
+
+        // Warm the lyrics cache in the background for the incoming track.
+        prefetchLyrics(for: next)
 
         // Equal-power volume ramp.
         crossfadeTask?.cancel()

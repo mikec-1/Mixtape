@@ -32,6 +32,10 @@ struct MacRootView: View {
 
     @State private var isDropTargeted   = false
     @State private var showZoomHUD      = false
+    // Solid colour applied to the window titlebar/toolbar so the header matches
+    // the fullscreen-lyrics background. nil restores the default window chrome.
+    // Cached (not recomputed per playback tick) — refreshed on track/mode change.
+    @State private var lyricsHeaderColor: NSColor? = nil
     // Custom right-panel state — replaces SwiftUI .inspector which can't be
     // prevented from drag-dismissing.
     @State      private var rightPanelWidth: CGFloat  = 300
@@ -77,15 +81,25 @@ struct MacRootView: View {
         // ── Window constraints ────────────────────────────────────────────
         .frame(minWidth: 960, minHeight: 560)
         .background(Color.mixBackground)
+        // ── Tint the window titlebar/toolbar to match fullscreen lyrics ─────
+        .background(WindowChromeTint(color: lyricsHeaderColor))
+        .onAppear { refreshLyricsHeaderColor() }
+        .onChange(of: appState.lyricsPresented)   { _, _ in refreshLyricsHeaderColor() }
+        .onChange(of: appState.lyricsFullscreen)  { _, _ in refreshLyricsHeaderColor() }
+        .onChange(of: engine.queue.currentTrack?.id) { _, _ in refreshLyricsHeaderColor() }
         // ── Escape closes the right panel (Queue or Get-Info / Now Playing) ──
         // .onExitCommand is the macOS-native Esc hook; it routes to the first
         // responder's cancel/exit command without disturbing the NSEvent monitor
         // used for Space / Cmd+Left / Cmd+Right.
         .onExitCommand {
-            if appState.isRightPanelOpen {
+            if appState.lyricsPresented && appState.lyricsFullscreen {
+                appState.lyricsPresented = false
+            } else if appState.isRightPanelOpen {
                 appState.closePanel()
             }
         }
+        .animation(.easeInOut(duration: 0.25), value: appState.lyricsPresented)
+        .animation(.easeInOut(duration: 0.25), value: appState.lyricsFullscreen)
         // ── Error toast ───────────────────────────────────────────────────
         .overlay(alignment: .top) {
             if let msg = engine.errorMessage {
@@ -136,6 +150,28 @@ struct MacRootView: View {
         .environmentObject(appState)
     }
 
+    // MARK: - Lyrics header tint
+
+    /// Recompute the window chrome colour to match the fullscreen-lyrics
+    /// background: the dominant album colour darkened by the same 0.45 black
+    /// overlay the lyrics view paints (so RGB × 0.55). nil when not fullscreen.
+    private func refreshLyricsHeaderColor() {
+        guard appState.lyricsPresented && appState.lyricsFullscreen else {
+            lyricsHeaderColor = nil
+            return
+        }
+        let colors = ArtworkColors.dominantColors(from: engine.queue.currentTrack?.artworkData)
+        let base = colors.first.map { NSColor($0) } ?? NSColor(white: 0.16, alpha: 1)
+        guard let rgb = base.usingColorSpace(.deviceRGB) else {
+            lyricsHeaderColor = base
+            return
+        }
+        lyricsHeaderColor = NSColor(red:   rgb.redComponent   * 0.55,
+                                    green: rgb.greenComponent * 0.55,
+                                    blue:  rgb.blueComponent  * 0.55,
+                                    alpha: 1)
+    }
+
     // MARK: - Zoom HUD
 
     private var zoomHUD: some View {
@@ -166,9 +202,19 @@ struct MacRootView: View {
                     .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 280)
                     .environmentObject(appState)
             } detail: {
-                MacContentRouter()
-                    .environmentObject(appState)
-                    .environmentObject(deps)
+                // Fullscreen lyrics take over the main content column — staying
+                // inside the chrome (sidebar, toolbar, player bar, right panel)
+                // rather than floating as a window overlay.
+                if appState.lyricsPresented && appState.lyricsFullscreen {
+                    MacLyricsView()
+                        .environmentObject(engine)
+                        .environmentObject(appState)
+                        .transition(.opacity)
+                } else {
+                    MacContentRouter()
+                        .environmentObject(appState)
+                        .environmentObject(deps)
+                }
             }
             // ── Toolbar ───────────────────────────────────────────────────
             .toolbar {
@@ -178,8 +224,10 @@ struct MacRootView: View {
                 }
                 ToolbarItem(placement: .automatic) {
                     MacImportButton()
+                }
+                ToolbarItem(placement: .automatic) {
+                    MacSpotifyImportButton()
                         .environmentObject(deps)
-                        .environmentObject(appState)
                 }
                 ToolbarItem(placement: .automatic) {
                     MacAddToPlaylistButton()
@@ -282,7 +330,7 @@ struct MacRootView: View {
         switch appState.rightPanel {
         case .nowPlaying:
             if let track = appState.inspectorTrack {
-                MacTrackInspector(track: track)
+                MacTrackInspector(fallbackTrack: track)
                     .environmentObject(engine)
                     .environmentObject(library)
                     .environmentObject(appState)
@@ -462,6 +510,7 @@ private final class KeyboardShortcutHandler: ObservableObject {
 // MARK: - Sync Button
 
 private struct MacSyncButton: View {
+    @EnvironmentObject private var deps: AppDependencies
     @EnvironmentObject private var sync: SupabaseSyncService
     @State private var isSpinning = false
 
@@ -469,6 +518,8 @@ private struct MacSyncButton: View {
         Button {
             isSpinning = true
             Task {
+                deps.downloadManager.reEvaluateDownloads()
+                await deps.importService.scanExportDirectoryForNewFiles()
                 try? await sync.sync()
                 isSpinning = false
             }
@@ -508,6 +559,29 @@ private struct MacImportButton: View {
                     }
                 }
             }
+        }
+    }
+}
+
+// MARK: - Spotify Import Button
+
+private struct MacSpotifyImportButton: View {
+    @EnvironmentObject private var deps: AppDependencies
+    @State private var showSheet = false
+
+    var body: some View {
+        Button {
+            showSheet = true
+        } label: {
+            Image(systemName: "music.note.list")
+        }
+        .help("Import from Spotify")
+        .sheet(isPresented: $showSheet) {
+            SpotifyImportView(spotifyClient: deps.spotifyClient,
+                              importService: deps.spotifyImportService,
+                              auth: deps.spotifyAuth)
+                .environmentObject(deps)
+                .frame(minWidth: 460, minHeight: 420)
         }
     }
 }
@@ -673,6 +747,36 @@ private struct MacErrorToast: View {
                 .strokeBorder(Color.mixDestructive.opacity(0.4), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.4), radius: 12, y: 4)
+    }
+}
+
+// MARK: - Window chrome tint
+
+/// Tints the host NSWindow's titlebar/toolbar a solid colour (with a transparent
+/// titlebar so the window background shows through the toolbar). A nil colour
+/// restores the standard system chrome.
+private struct WindowChromeTint: NSViewRepresentable {
+    let color: NSColor?
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async { apply(to: view.window) }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async { apply(to: nsView.window) }
+    }
+
+    private func apply(to window: NSWindow?) {
+        guard let window else { return }
+        if let color {
+            window.titlebarAppearsTransparent = true
+            window.backgroundColor = color
+        } else {
+            window.titlebarAppearsTransparent = false
+            window.backgroundColor = .windowBackgroundColor
+        }
     }
 }
 

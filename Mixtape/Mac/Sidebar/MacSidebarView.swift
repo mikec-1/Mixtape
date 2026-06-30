@@ -59,6 +59,16 @@ struct MacSidebarView: View {
                     }
                     .padding(.top, 12)
 
+                    // Discover — online search, sits directly under Home.
+                    MacSidebarRow(
+                        item:       .discover,
+                        isSelected: appState.selection == .discover
+                    ) {
+                        appState.selection = .discover
+                        appState.selectedAlbum = nil
+                        appState.selectedPlaylist = nil
+                    }
+
                     // Section header
                     Text("Library")
                         .font(.system(size: 11, weight: .semibold))

@@ -83,13 +83,13 @@ extension Color {
     /// Separator / divider
     static let mixSeparator    = mixDynamic(light: "#D9D9DE", dark: "#2A2A2A")
 
-    // MARK: Brand — user-selectable accent (default vibrant orange)
+    // MARK: Brand — fixed vibrant orange accent
     /// Primary interactive colour
-    static var mixPrimary:     Color { ThemeManager.shared.accent.color }
+    static var mixPrimary:     Color { BrandAccent.color }
     /// Primary pressed / darker state
-    static var mixPrimaryDark: Color { ThemeManager.shared.accent.darkColor }
+    static var mixPrimaryDark: Color { BrandAccent.darkColor }
     /// Accent — same family as primary
-    static var mixAccent:      Color { ThemeManager.shared.accent.color }
+    static var mixAccent:      Color { BrandAccent.color }
 
     // MARK: Text — trait-aware hierarchy
     static let mixTextPrimary   = mixDynamic(light: "#000000", dark: "#FFFFFF")

@@ -41,13 +41,6 @@ public final class DownloadManager: ObservableObject {
         return "mix.downloadOnWifiOnly"
     }
 
-    private var offlinePlaylistIDsKey: String {
-        if let id = currentUserID {
-            return "mix.offlinePlaylistIDs_\(id)"
-        }
-        return "mix.offlinePlaylistIDs"
-    }
-
     private var syncMetadataToDiskKey: String {
         if let id = currentUserID {
             return "mix.syncMetadataToDisk_\(id)"
@@ -73,6 +66,7 @@ public final class DownloadManager: ObservableObject {
     private let fileStorage:    SupabaseFileStorageService
     private let libraryService: LibraryService
     private let queueService:   QueueService
+    private let trackResolver:  any TrackResolver
 
     // MARK: - Private State
 
@@ -87,11 +81,13 @@ public final class DownloadManager: ObservableObject {
     public init(
         fileStorage:    SupabaseFileStorageService,
         libraryService: LibraryService,
-        queueService:   QueueService
+        queueService:   QueueService,
+        trackResolver:  any TrackResolver
     ) {
         self.fileStorage    = fileStorage
         self.libraryService = libraryService
         self.queueService   = queueService
+        self.trackResolver  = trackResolver
 
         self.downloadOnWifiOnly = UserDefaults.standard.object(forKey: "mix.downloadOnWifiOnly") as? Bool ?? true
         self.syncMetadataToDisk = UserDefaults.standard.object(forKey: "mix.syncMetadataToDisk") as? Bool ?? true
@@ -139,7 +135,6 @@ public final class DownloadManager: ObservableObject {
             .sink { [weak self] tracks in
                 guard let self else { return }
                 self.scanDownloadedTracks(tracks: tracks)
-                self.checkOfflinePlaylists()
             }
             .store(in: &cancellables)
     }
@@ -175,8 +170,7 @@ public final class DownloadManager: ObservableObject {
     // MARK: - Public API
 
     public func status(for trackID: UUID) -> DownloadStatus {
-        if let track = libraryService.track(id: trackID),
-           ExportManager.shared.exportedURL(for: track) != nil {
+        if downloadedTrackIDs.contains(trackID) {
             return .downloaded
         } else if downloadingTrackIDs.contains(trackID) {
             return .downloading(progress: downloadProgress[trackID] ?? 0.0)
@@ -185,51 +179,29 @@ public final class DownloadManager: ObservableObject {
         }
     }
 
+    public func reEvaluateDownloads() {
+        scanDownloadedTracks(tracks: libraryService.tracks)
+    }
+
     // MARK: - Playlist Offline State Management
 
     public func isPlaylistOffline(_ playlistID: UUID) -> Bool {
-        let list = getOfflinePlaylistIDs()
-        return list.contains(playlistID)
+        guard let playlist = libraryService.playlists.first(where: { $0.id == playlistID }) else { return false }
+        guard !playlist.trackIDs.isEmpty else { return false }
+        return playlist.trackIDs.allSatisfy { status(for: $0) == .downloaded }
     }
 
     public func togglePlaylistOffline(_ playlistID: UUID) {
-        var list = getOfflinePlaylistIDs()
-        if list.contains(playlistID) {
-            list.remove(playlistID)
-            saveOfflinePlaylistIDs(list)
-
-            // Remove downloads for all tracks in this playlist if they are not in any other offline playlist
-            if let playlist = libraryService.playlists.first(where: { $0.id == playlistID }) {
-                for trackID in playlist.trackIDs {
-                    let inOtherOfflinePlaylist = libraryService.playlists.contains { otherPlaylist in
-                        otherPlaylist.id != playlistID &&
-                        list.contains(otherPlaylist.id) &&
-                        otherPlaylist.trackIDs.contains(trackID)
-                    }
-                    if !inOtherOfflinePlaylist {
-                        removeDownload(for: trackID)
-                    }
-                }
+        guard let playlist = libraryService.playlists.first(where: { $0.id == playlistID }) else { return }
+        
+        if isPlaylistOffline(playlistID) {
+            // Remove downloads for all tracks in this playlist
+            for trackID in playlist.trackIDs {
+                removeDownload(for: trackID)
             }
         } else {
-            list.insert(playlistID)
-            saveOfflinePlaylistIDs(list)
-
-            if let playlist = libraryService.playlists.first(where: { $0.id == playlistID }) {
-                enqueuePlaylistTracks(playlist)
-            }
+            enqueuePlaylistTracks(playlist)
         }
-    }
-
-    public func getOfflinePlaylistIDs() -> Set<UUID> {
-        let arr = UserDefaults.standard.stringArray(forKey: offlinePlaylistIDsKey) ?? []
-        return Set(arr.compactMap { UUID(uuidString: $0) })
-    }
-
-    private func saveOfflinePlaylistIDs(_ ids: Set<UUID>) {
-        let arr = ids.map { $0.uuidString }
-        UserDefaults.standard.set(arr, forKey: offlinePlaylistIDsKey)
-        objectWillChange.send()
     }
 
     private func loadSettings() {
@@ -248,7 +220,6 @@ public final class DownloadManager: ObservableObject {
             
             // Re-evaluate what tracks are downloaded for this user
             scanDownloadedTracks(tracks: libraryService.tracks)
-            checkOfflinePlaylists()
         } else {
             // Logged out: reset to defaults and wipe all memory lists immediately
             self.downloadOnWifiOnly = true
@@ -281,21 +252,20 @@ public final class DownloadManager: ObservableObject {
     // MARK: - Download Worker
 
     private func scanDownloadedTracks(tracks: [Track]) {
-        var downloaded = Set<UUID>()
-        for track in tracks {
-            if ExportManager.shared.exportedURL(for: track) != nil {
-                downloaded.insert(track.id)
+        Task {
+            let downloaded = await Task.detached(priority: .background) {
+                var result = Set<UUID>()
+                for track in tracks {
+                    if ExportManager.shared.exportedURL(for: track) != nil {
+                        result.insert(track.id)
+                    }
+                }
+                return result
+            }.value
+            
+            if !Task.isCancelled {
+                self.downloadedTrackIDs = downloaded
             }
-        }
-        self.downloadedTrackIDs = downloaded
-    }
-
-    private func checkOfflinePlaylists() {
-        let offlineIDs = getOfflinePlaylistIDs()
-        guard !offlineIDs.isEmpty else { return }
-
-        for playlist in libraryService.playlists where offlineIDs.contains(playlist.id) {
-            enqueuePlaylistTracks(playlist)
         }
     }
 
@@ -311,7 +281,9 @@ public final class DownloadManager: ObservableObject {
         guard !downloadedTrackIDs.contains(track.id) else { return }
         guard !downloadingTrackIDs.contains(track.id) else { return }
         guard !downloadQueue.contains(track.id) else { return }
-        guard let remoteKey = track.file.remoteKey, !remoteKey.isEmpty else { return }
+        
+        let hasRemoteKey = track.file.remoteKey?.isEmpty == false
+        guard hasRemoteKey || track.isOnline else { return }
 
         downloadQueue.append(track.id)
         processDownloadQueue()
@@ -342,11 +314,37 @@ public final class DownloadManager: ObservableObject {
                         processDownloadQueue()
                         objectWillChange.send()
                     } else {
-                        // Triggers the progress publisher.
-                        let tempURL = try await fileStorage.download(track: track, accessToken: "")
+                        let tempURL: URL
+                        if track.isOnline {
+                            let query = "\(track.artistName) \(track.title)".trimmingCharacters(in: .whitespaces)
+                            let allowed = CharacterSet.alphanumerics
+                            let scrubbed = track.file.fileHash.unicodeScalars.map { allowed.contains($0) ? Character($0) : "_" }
+                            let stem = String(scrubbed).prefix(80).description
+                            
+                            let cacheDir = FileManager.default.temporaryDirectory
+                            let res = try await trackResolver.download(
+                                query: query,
+                                name: stem,
+                                to: cacheDir,
+                                expectedDuration: track.duration,
+                                preferExplicit: false
+                            )
+                            tempURL = cacheDir.appendingPathComponent("\(res.videoID).m4a")
+                        } else {
+                            // Triggers the progress publisher.
+                            tempURL = try await fileStorage.download(track: track, accessToken: "")
+                        }
+                        
                         // Export the downloaded file
                         try ExportManager.shared.export(track: track, from: tempURL)
                         print("[DownloadManager] ✅ Downloaded and exported track: \(track.title)")
+                        
+                        activeDownloads.remove(trackID)
+                        downloadingTrackIDs.remove(trackID)
+                        downloadProgress.removeValue(forKey: trackID)
+                        downloadedTrackIDs.insert(trackID)
+                        processDownloadQueue()
+                        objectWillChange.send()
                     }
                 } else {
                     activeDownloads.remove(trackID)

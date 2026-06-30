@@ -20,11 +20,11 @@ import SwiftUI
 
 struct MacPlayerBar: View {
 
-    @EnvironmentObject private var engine:   PlaybackEngine
-    @EnvironmentObject private var appState: MacAppState
-    @EnvironmentObject private var deps:     AppDependencies
+    @EnvironmentObject private var engine:      PlaybackEngine
+    @EnvironmentObject private var appState:    MacAppState
+    @EnvironmentObject private var deps:        AppDependencies
+    @EnvironmentObject private var coordinator: OnlinePlaybackCoordinator
 
-    @State private var showLyrics = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -62,14 +62,18 @@ struct MacPlayerBar: View {
                         .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
 
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(track.title)
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Color.mixTextPrimary)
-                            .lineLimit(1)
-                        Text(track.artistName)
-                            .font(.system(size: 11))
-                            .foregroundStyle(Color.mixTextSecondary)
-                            .lineLimit(1)
+                        BarLinkText(
+                            text: track.title,
+                            font: .system(size: 13, weight: .semibold),
+                            color: Color.mixTextPrimary,
+                            target: albumTarget(for: track)
+                        )
+                        BarLinkText(
+                            text: track.artistName,
+                            font: .system(size: 11),
+                            color: Color.mixTextSecondary,
+                            target: artistTarget(for: track)
+                        )
                     }
 
                     Spacer(minLength: 4)
@@ -88,6 +92,7 @@ struct MacPlayerBar: View {
                 }
                 .id(track.id)           // forces SwiftUI to re-create on track change → transition fires
                 .transition(.opacity)
+                .contextMenu { nowPlayingMenu(track: track, favoured: favoured) }
             } else {
                 HStack(spacing: 10) {
                     MacArtworkView(data: nil, size: 44, cornerRadius: 6)
@@ -106,6 +111,68 @@ struct MacPlayerBar: View {
             }
         }
         .animation(.easeInOut(duration: 0.25), value: engine.queue.currentTrack?.id)
+    }
+
+    /// Navigation target for the artist line — opens the Discover artist page for
+    /// online (unsaved) tracks, otherwise the local artist page.
+    private func artistTarget(for track: Track) -> (() -> Void)? {
+        if deps.libraryService.track(id: track.id) == nil {
+            guard !track.artistName.isEmpty else { return nil }
+            return { appState.showOnlineArtist(name: track.artistName, trackID: nil) }
+        }
+        return deps.libraryService.artist(named: track.artistName).map { artist in
+            { appState.showArtist(artist) }
+        }
+    }
+
+    /// Navigation target for the title/album line — Discover album for online
+    /// (unsaved) tracks, otherwise the local album.
+    private func albumTarget(for track: Track) -> (() -> Void)? {
+        if deps.libraryService.track(id: track.id) == nil {
+            guard !track.albumTitle.isEmpty else { return nil }
+            return { appState.showOnlineAlbum(title: track.albumTitle, artistName: track.artistName, trackID: nil) }
+        }
+        return deps.libraryService.album(title: track.albumTitle, artistName: track.artistName).map { album in
+            { appState.showAlbum(album) }
+        }
+    }
+
+    /// Right-click menu for the now-playing track in the player bar. Mirrors the
+    /// Discover row menu, plus favourite + navigation. Library/queue actions for
+    /// an unsaved (online) track route through the coordinator.
+    @ViewBuilder
+    private func nowPlayingMenu(track: Track, favoured: Bool) -> some View {
+        Button(engine.state.isPlaying ? "Pause" : "Play",
+               systemImage: engine.state.isPlaying ? "pause.fill" : "play.fill") {
+            engine.togglePlayPause()
+        }
+
+        // Online (unsaved) track: offer queue + save-to-library via the coordinator.
+        if let online = coordinator.currentOnlineTrack,
+           deps.libraryService.track(id: track.id) == nil {
+            Button("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") {
+                Task { await coordinator.playNext(online) }
+            }
+            Button("Add to Queue", systemImage: "text.append") {
+                Task { await coordinator.addToQueue(online) }
+            }
+            Divider()
+            Button("Add to Library", systemImage: "plus") {
+                Task { await coordinator.addToLibrary(online) }
+            }
+        }
+
+        Divider()
+        Button(favoured ? "Remove from Favourites" : "Add to Favourites",
+               systemImage: favoured ? "heart.slash" : "heart") {
+            deps.libraryService.toggleFavourite(trackID: track.id)
+        }
+        if let go = albumTarget(for: track) {
+            Button("Go to Album", systemImage: "square.stack", action: go)
+        }
+        if let go = artistTarget(for: track) {
+            Button("Go to Artist", systemImage: "music.mic", action: go)
+        }
     }
 
     // MARK: - Center  (Transport + Progress)
@@ -232,15 +299,24 @@ struct MacPlayerBar: View {
             // ── Lyrics button ─────────────────────────────────────────────
             BarIconButton(
                 icon: "quote.bubble",
-                isActive: showLyrics,
+                isActive: appState.lyricsPresented,
                 help: "Lyrics"
             ) {
-                showLyrics.toggle()
+                appState.toggleLyrics()
             }
             .disabled(engine.queue.currentTrack == nil)
-            .popover(isPresented: $showLyrics, arrowEdge: .top) {
-                MacLyricsPopover()
+            // Popover only in windowed mode; fullscreen is hosted by MacRootView.
+            .popover(isPresented: Binding(
+                get: { appState.lyricsPresented && !appState.lyricsFullscreen },
+                // Only treat a dismiss as "close lyrics" when we're still in
+                // windowed mode. If lyricsFullscreen just flipped to true, the
+                // popover is dismissing to hand off to the fullscreen overlay —
+                // keep lyricsPresented so the overlay stays up.
+                set: { if !$0 && !appState.lyricsFullscreen { appState.lyricsPresented = false } }
+            ), arrowEdge: .top) {
+                MacLyricsView()
                     .environmentObject(engine)
+                    .environmentObject(appState)
             }
 
             // ── Queue button ──────────────────────────────────────────────
@@ -402,6 +478,43 @@ private struct BarIconButton: View {
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
         .help(help)
+    }
+}
+
+// MARK: - BarLinkText
+//
+// Now-playing title / artist line. When `target` is non-nil the text becomes a
+// borderless button with a pointing-hand cursor and a hover underline
+// (Spotify-style click-through to the album / artist); otherwise it's plain text.
+
+private struct BarLinkText: View {
+    let text:   String
+    let font:   Font
+    let color:  Color
+    let target: (() -> Void)?
+
+    @State private var isHovered = false
+
+    var body: some View {
+        if let target {
+            Button(action: target) {
+                Text(text)
+                    .font(font)
+                    .foregroundStyle(color)
+                    .lineLimit(1)
+                    .underline(isHovered)
+            }
+            .buttonStyle(.plain)
+            .onHover { inside in
+                isHovered = inside
+                if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+            }
+        } else {
+            Text(text)
+                .font(font)
+                .foregroundStyle(color)
+                .lineLimit(1)
+        }
     }
 }
 

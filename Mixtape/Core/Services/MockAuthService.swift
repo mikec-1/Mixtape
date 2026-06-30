@@ -136,6 +136,50 @@ public final class MockAuthService: ObservableObject, AuthServiceProtocol {
         storedPassword = newPassword
     }
 
+    // MARK: - Profile Picture
+
+    /// Mock: writes the image to a temp file and returns a `file://` URL so the
+    /// avatar actually renders in previews without a network round-trip.
+    public func uploadAvatar(_ data: Data, fileExtension: String) async throws -> URL {
+        try await Task.sleep(for: .milliseconds(300))
+        let ext = fileExtension.isEmpty ? "jpg" : fileExtension
+        let url = URL.temporaryDirectory.appending(path: "mock-avatar-\(UUID().uuidString).\(ext)")
+        try data.write(to: url)
+        return url
+    }
+
+    public func updateAvatarURL(_ url: URL?) async throws {
+        guard var user = currentUser else { throw AuthError.sessionExpired }
+        try await Task.sleep(for: .milliseconds(200))
+        user.avatarURL = url
+        persist(user)
+        authState = .authenticated(user)
+    }
+
+    // MARK: - Discovery
+
+    public func searchUsers(matching query: String, limit: Int) async throws -> [UserProfile] {
+        try await Task.sleep(for: .milliseconds(300))
+        let cleaned = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !cleaned.isEmpty else { return [] }
+        #if DEBUG
+        return UserProfile.previews
+            .filter { $0.username.lowercased().hasPrefix(cleaned) }
+            .prefix(limit)
+            .map { $0 }
+        #else
+        return []
+        #endif
+    }
+
+    public func fetchProfile(id: UUID) async throws -> UserProfile? {
+        #if DEBUG
+        return UserProfile.previews.first { $0.id == id }
+        #else
+        return nil
+        #endif
+    }
+
     // MARK: - Persistence
 
     private func persist(_ user: AppUser) {

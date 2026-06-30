@@ -12,6 +12,21 @@ public struct ImportView: View {
     // MARK: - Dependencies
 
     let importService: ImportService
+    let spotifyClient: SpotifyClient
+    let spotifyImportService: SpotifyImportService
+    let spotifyAuth: SpotifyAuth
+
+    public init(
+        importService: ImportService,
+        spotifyClient: SpotifyClient,
+        spotifyImportService: SpotifyImportService,
+        spotifyAuth: SpotifyAuth
+    ) {
+        self.importService = importService
+        self.spotifyClient = spotifyClient
+        self.spotifyImportService = spotifyImportService
+        self.spotifyAuth = spotifyAuth
+    }
 
     #if os(iOS)
     // Receives the IOSAppState injected by MainTabView; used to enqueue
@@ -28,6 +43,7 @@ public struct ImportView: View {
     @State private var failedCount       = 0
     @State private var showResultBanner  = false
     @State private var resultMessage     = ""
+    @State private var showSpotifyImport = false
 
     @Environment(\.dismiss) private var dismiss
 
@@ -81,6 +97,19 @@ public struct ImportView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 14))
                         }
                         .buttonStyle(.plain)
+
+                        Button {
+                            showSpotifyImport = true
+                        } label: {
+                            Label("Import from Spotify", systemImage: "music.note.list")
+                                .font(.mixButton)
+                                .frame(maxWidth: 240)
+                                .padding(.vertical, 14)
+                                .background(Color.mixSurface)
+                                .foregroundStyle(Color.mixTextPrimary)
+                                .clipShape(RoundedRectangle(cornerRadius: 14))
+                        }
+                        .buttonStyle(.plain)
                     }
 
                     if showResultBanner {
@@ -108,6 +137,11 @@ public struct ImportView: View {
                 allowsMultipleSelection: true
             ) { result in
                 handlePickerResult(result)
+            }
+            .sheet(isPresented: $showSpotifyImport) {
+                SpotifyImportView(spotifyClient: spotifyClient,
+                                  importService: spotifyImportService,
+                                  auth: spotifyAuth)
             }
         }
     }

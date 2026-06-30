@@ -67,7 +67,10 @@ public final class QueueService: ObservableObject {
     // MARK: - Queue Loading
 
     /// Replace the queue with `tracks` and start at `track`.
+    /// Resets the source playlist — callers playing from a user playlist set it
+    /// again afterwards via `setSourcePlaylist(_:)`.
     public func play(track: Track, in tracks: [Track]) {
+        sourcePlaylistID = nil
         originalQueue = tracks
         if shuffleEnabled {
             queue        = shuffled(from: tracks, startingWith: track)
@@ -90,6 +93,18 @@ public final class QueueService: ObservableObject {
     /// Record which playlist triggered the current playback session.
     public func setSourcePlaylist(_ id: UUID?) {
         sourcePlaylistID = id
+    }
+
+    /// Mirror an online Discover session into the queue purely for display, so the
+    /// Queue panel can show NOW PLAYING + NEXT UP for online playback. Actual
+    /// playback/navigation is driven by OnlinePlaybackCoordinator (which downloads
+    /// each track on demand), not by this queue — so this does NOT touch shuffle,
+    /// repeat, or trigger any loading. `index` is the currently-playing position.
+    public func setOnlineDisplayQueue(_ tracks: [Track], currentIndex index: Int) {
+        queue         = tracks
+        originalQueue = tracks
+        currentIndex  = tracks.isEmpty ? -1 : max(0, min(index, tracks.count - 1))
+        sourcePlaylistID = nil
     }
 
     /// Restore a minimal single-track queue (used for resume-on-launch).

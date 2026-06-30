@@ -49,11 +49,33 @@ public final class AppDependencies: ObservableObject {
 
     public let libraryService:    LibraryService
     public let importService:     ImportService
+    /// Recreates a Spotify playlist locally (same cover + songs); songs resolve
+    /// their audio lazily on play via the online coordinator.
+    public let spotifyImportService: SpotifyImportService
+    /// Spotify user OAuth (PKCE) — required to read playlist tracks for import.
+    public let spotifyAuth: SpotifyAuth
     public let statsService:      ListeningStatsService
+    public let profileStatsService: ProfileStatsService
 
     // MARK: - Metadata Enrichment
 
     public let enrichmentService: MetadataEnrichmentService
+
+    // MARK: - Online Discover (search & instant stream)
+
+    /// iTunes Search client powering the Discover result cards.
+    public let itunesClient: ITunesSearchClient
+    /// Spotify Web API client — current artist images for Discover.
+    public let spotifyClient: SpotifyClient
+    /// yt-dlp wrapper + orchestration for online streaming/caching.
+    public let onlineCoordinator: OnlinePlaybackCoordinator
+
+    #if os(iOS)
+    /// Tracks which hosted/Mac resolver is reachable (Settings status + failover).
+    public let resolverStatus: ResolverStatusService
+    #endif
+    /// Keeps the play queue topped up with similar songs (local + Deezer radio).
+    public let queueSuggestions: QueueSuggestionService
 
     // MARK: - Supabase Client
 
@@ -94,6 +116,7 @@ public final class AppDependencies: ObservableObject {
         let playlistRepo = PlaylistRepository(context: context)
         let favoriteRepo = FavoriteRepository(context: context)
         let historyRepo  = PlayHistoryRepository(context: context)
+        let snapshotRepo = PlayedTrackSnapshotRepository(context: context)
 
         self.libraryService = LibraryService(
             trackRepo:    trackRepo,
@@ -103,7 +126,9 @@ public final class AppDependencies: ObservableObject {
             favoriteRepo: favoriteRepo,
             deviceID:     Self.deviceID
         )
-        self.statsService = ListeningStatsService(history: historyRepo, library: libraryService)
+        self.statsService = ListeningStatsService(history: historyRepo, library: libraryService,
+                                                  snapshots: snapshotRepo)
+        self.profileStatsService = ProfileStatsService(client: supabase, stats: statsService)
         self.enrichmentService = MetadataEnrichmentService()
 
         // Enrichment enabled on both platforms.
@@ -119,6 +144,14 @@ public final class AppDependencies: ObservableObject {
             libraryService:    libraryService,
             deviceID:          Self.deviceID
         )
+
+        self.spotifyImportService = SpotifyImportService(
+            trackRepo:      trackRepo,
+            libraryService: libraryService,
+            deviceID:       Self.deviceID
+        )
+
+        self.spotifyAuth = SpotifyAuth()
 
         self.syncService = SupabaseSyncService(
             client:         supabase,
@@ -142,23 +175,74 @@ public final class AppDependencies: ObservableObject {
             equalizer:   equalizer
         )
 
+        // Discover audio resolution is platform-specific: macOS shells out to
+        // yt-dlp; iOS asks the Mac/server resolver over HTTP. Both satisfy
+        // TrackResolver, so the coordinator is identical either way.
+        #if os(macOS)
+        let trackResolver: any TrackResolver = YTDLPService()
+        #else
+        // iOS: share one status service between resolution (failover reports the
+        // source that served) and Settings (status dot).
+        let resolverStatus = ResolverStatusService()
+        self.resolverStatus = resolverStatus
+        let trackResolver: any TrackResolver = RemoteResolverService(status: resolverStatus)
+        #endif
+
         self.downloadManager = DownloadManager(
             fileStorage:    fileStorage,
             libraryService: libraryService,
-            queueService:   queueService
+            queueService:   queueService,
+            trackResolver:  trackResolver
+        )
+
+        // Online Discover: iTunes cards + yt-dlp streaming/caching.
+        self.spotifyClient = SpotifyClient()
+        // Inject Spotify so Discover artist images resolve via Spotify (never Deezer).
+        self.itunesClient = ITunesSearchClient(spotifyClient: self.spotifyClient)
+        
+        self.onlineCoordinator = OnlinePlaybackCoordinator(
+            ytdlp:         trackResolver,
+            engine:        playbackEngine,
+            importService: importService,
+            deviceID:      Self.deviceID
+        )
+        // Route online tracks with no local file (Spotify imports, history
+        // replays) through the coordinator so they resolve & stream, instead of
+        // hitting the local-file path. Weak capture breaks the retain cycle.
+        self.playbackEngine.onlineRouter = { [weak coordinator = self.onlineCoordinator] track, tracks in
+            await coordinator?.playStandaloneOnline(track, context: tracks)
+        }
+
+        self.queueSuggestions = QueueSuggestionService(
+            queue:       queueService,
+            engine:      playbackEngine,
+            library:     libraryService,
+            itunes:      itunesClient,
+            coordinator: onlineCoordinator
         )
 
         // Wire history persistence: save every new play to SwiftData.
         let deviceID = Self.deviceID
         self.playbackEngine.onTrackAddedToHistory = { track in
-            try? historyRepo.record(trackID: track.id, deviceID: deviceID)
+            do { try historyRepo.record(trackID: track.id, deviceID: deviceID) }
+            catch { print("[history] persist FAILED: \(error)") }
+            // Online (Discover) tracks have no library row — persist a lightweight
+            // snapshot so they survive relaunch on Home and resolve in stats.
+            if track.isOnline {
+                do { try snapshotRepo.upsert(track); print("[history] snapshot upserted '\(track.title)'") }
+                catch { print("[history] snapshot upsert FAILED: \(error)") }
+            }
         }
 
-        // Restore persisted history so the "Recently Played" list is populated on launch.
+        // Restore persisted history so the "Recently Played" list is populated on
+        // launch. Resolve each id against the library first, then fall back to the
+        // online-track snapshot store.
         if let recentIDs = try? historyRepo.fetchRecentTrackIDs() {
+            let snapshots = (try? snapshotRepo.fetchAll()) ?? [:]
             let tracks = recentIDs.compactMap { id in
-                try? trackRepo.fetch(id: id)
+                (try? trackRepo.fetch(id: id)) ?? snapshots[id]
             }
+            print("[history] restore: \(recentIDs.count) ids, \(snapshots.count) snapshots, resolved \(tracks.count) tracks")
             self.playbackEngine.restoreHistory(tracks)
         }
 
@@ -243,8 +327,15 @@ public final class AppDependencies: ObservableObject {
 
     private func onSignIn(user: AppUser) async {
         let token = authService.accessToken ?? ""
+        // Force-logout hook: when this device is revoked from the web, sign out.
+        syncService.onDeviceRevoked = { [weak self] in
+            try? await self?.authService.signOut()
+        }
         await syncService.onSignIn(user: user, accessToken: token)
         syncService.startBackgroundSync(intervalSeconds: 60)
+
+        // Publish a fresh listening-stats snapshot for the discovery profile.
+        await profileStatsService.publishMyStats(userID: user.id)
     }
 
     private func onSignOutSync() {

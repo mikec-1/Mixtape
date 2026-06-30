@@ -18,6 +18,7 @@ public enum ModelContainerSetup {
         PlayHistoryEntity.self,
         FavoriteEntity.self,
         SmartPlaylistEntity.self,
+        PlayedTrackSnapshotEntity.self,
     ])
 
     /// Versioned schema for future migrations.

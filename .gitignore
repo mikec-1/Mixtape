@@ -32,3 +32,14 @@ DerivedData/
 Secrets.xcconfig
 .env
 .env.*
+
+# Bundled python/yt-dlp/ffmpeg binaries (fetch via scripts/fetch-binaries.sh)
+Mixtape/Resources/bin/ffmpeg
+Mixtape/Resources/bin/yt-dlp.zip
+Mixtape/Resources/bin/python.tar.gz
+
+# Spotify API client — contains embedded client secret, keep out of git
+Mixtape/Core/Services/Online/SpotifyClient.swift
+
+# Remote resolver service — embeds hosted resolver URL + bearer token, keep out of git
+Mixtape/iOS/Online/RemoteResolverService.swift

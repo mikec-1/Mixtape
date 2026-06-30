@@ -22,6 +22,7 @@ enum MacSidebarItem: String, Hashable, CaseIterable, Identifiable {
     case albums    = "Albums"
     case artists   = "Artists"
     case playlists = "Playlists"
+    case discover  = "Discover"
     case settings  = "Settings"
 
     var id: String { rawValue }
@@ -34,6 +35,7 @@ enum MacSidebarItem: String, Hashable, CaseIterable, Identifiable {
         case .albums:    return "square.stack"
         case .artists:   return "music.mic"
         case .playlists: return "music.note.list"
+        case .discover:  return "sparkle.magnifyingglass"
         case .settings:  return "gear"
         }
     }
@@ -120,7 +122,15 @@ final class MacAppState: ObservableObject {
     func resetZoom() { uiScale = 1.0 }
 
     // MARK: Navigation
-    @Published var selection:        MacSidebarItem?               = .home
+    @Published var selection:        MacSidebarItem?               = .home {
+        // Changing sidebar section swaps the main content column; dismiss
+        // fullscreen lyrics so the new section isn't hidden behind them.
+        didSet {
+            if oldValue != selection, lyricsPresented && lyricsFullscreen {
+                lyricsPresented = false
+            }
+        }
+    }
     @Published var searchText:       String                        = ""
     @Published var columnVisibility: NavigationSplitViewVisibility = .all
 
@@ -128,6 +138,11 @@ final class MacAppState: ObservableObject {
     /// Non-nil → MacContentRouter shows MacAlbumDetailView.
     /// Setting this to nil returns to whichever section was active.
     @Published var selectedAlbum: Album? = nil
+
+    /// Artist the user asked to view (e.g. by clicking the artist name in the
+    /// inspector). MacArtistsView consumes this on appear / change, selects the
+    /// matching row, then clears it back to nil.
+    @Published var pendingArtistID: Artist.ID? = nil
 
     /// Playlist the user drilled into from the Playlists view.
     /// Non-nil → MacContentRouter shows PlaylistDetailView.
@@ -158,6 +173,24 @@ final class MacAppState: ObservableObject {
 
     /// Which track is shown when the panel is in .nowPlaying mode.
     @Published private(set) var inspectorTrack: Track? = nil
+
+    // MARK: Lyrics
+    private static let lyricsFullscreenKey = "lyricsFullscreen"
+
+    /// Whether the lyrics UI is currently open (popover or fullscreen overlay).
+    @Published var lyricsPresented = false
+
+    /// Preferred lyrics presentation. Persisted so reopening lyrics restores the
+    /// last-used mode (windowed popover vs. Spotify-style fullscreen).
+    @Published var lyricsFullscreen: Bool = UserDefaults.standard.bool(forKey: MacAppState.lyricsFullscreenKey) {
+        didSet { UserDefaults.standard.set(lyricsFullscreen, forKey: Self.lyricsFullscreenKey) }
+    }
+
+    /// Open/close the lyrics UI (mode is whatever `lyricsFullscreen` remembers).
+    func toggleLyrics() { lyricsPresented.toggle() }
+
+    /// Switch between windowed and fullscreen lyrics while keeping them open.
+    func toggleLyricsFullscreen() { lyricsFullscreen.toggle() }
 
     // MARK: Metadata Review Queue
     /// Enrichment candidates waiting for user review, shown one at a time via sheet.
@@ -215,6 +248,57 @@ final class MacAppState: ObservableObject {
     func closePanel() {
         panelStack.removeAll()
         inspectorTrack = nil
+    }
+
+    // MARK: - Drill-down navigation (from the inspector's clickable title rows)
+
+    /// Fullscreen lyrics take over the main content column, so any navigation
+    /// that swaps that column must first dismiss them — otherwise the destination
+    /// page opens hidden behind the lyrics.
+    private func leaveFullscreenLyricsForNavigation() {
+        if lyricsPresented && lyricsFullscreen { lyricsPresented = false }
+    }
+
+    /// Drill into an album, leaving the current sidebar section intact.
+    func showAlbum(_ album: Album) {
+        leaveFullscreenLyricsForNavigation()
+        searchText     = ""
+        selectedAlbum  = album
+    }
+
+    /// Switch to the Artists section and select the given artist.
+    func showArtist(_ artist: Artist) {
+        leaveFullscreenLyricsForNavigation()
+        searchText      = ""
+        selectedAlbum   = nil
+        pendingArtistID = artist.id
+        selection       = .artists
+    }
+
+    /// A pending deep-link into the Discover section, consumed by
+    /// OnlineDiscoverView. Used when the now-playing track is an online song that
+    /// hasn't been saved locally, so its artist/album live online, not in the
+    /// local library.
+    enum DiscoverDeepLink: Equatable {
+        case artist(name: String, trackID: Int?)
+        case album(title: String, artistName: String, trackID: Int?)
+    }
+    @Published var pendingDiscover: DiscoverDeepLink? = nil
+
+    /// Open the Discover section on the online artist matching `name`.
+    func showOnlineArtist(name: String, trackID: Int?) {
+        leaveFullscreenLyricsForNavigation()
+        searchText      = ""
+        pendingDiscover = .artist(name: name, trackID: trackID)
+        selection       = .discover
+    }
+
+    /// Open the Discover section on the online album matching `title`/`artistName`.
+    func showOnlineAlbum(title: String, artistName: String, trackID: Int?) {
+        leaveFullscreenLyricsForNavigation()
+        searchText      = ""
+        pendingDiscover = .album(title: title, artistName: artistName, trackID: trackID)
+        selection       = .discover
     }
 
     // MARK: - Backward-compat shims (used by "Get Info" context menus)

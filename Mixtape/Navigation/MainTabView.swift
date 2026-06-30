@@ -9,6 +9,7 @@ public struct MainTabView: View {
     @EnvironmentObject private var engine: PlaybackEngine
 
     @State private var selectedTab: AppTab = .home
+    @State private var showSettings = false
 
     #if os(iOS)
     // Review queue for enrichment candidates found during iOS import.
@@ -21,6 +22,14 @@ public struct MainTabView: View {
         tabContent
         #if os(iOS)
         .environmentObject(iosAppState)
+        // Settings opens as a sheet from the Home gear button.
+        .sheet(isPresented: $showSettings) {
+            // SettingsView provides its own NavigationStack on iOS.
+            SettingsView(authService: deps.authService,
+                         syncService: deps.syncService,
+                         libraryService: deps.libraryService,
+                         importService: deps.importService)
+        }
         // Present metadata review sheet whenever the queue is non-empty.
         .sheet(item: Binding(
             get: { iosAppState.pendingReview },
@@ -38,27 +47,38 @@ public struct MainTabView: View {
         ZStack(alignment: .bottom) {
             TabView(selection: $selectedTab) {
                 NavigationStack {
-                    HomeView(onQuickLink: handleQuickLink)
+                    HomeView(onQuickLink: handleQuickLink, onPlay: handlePlay)
+                    #if os(iOS)
+                        // Settings lives behind a gear in the nav bar (Apple
+                        // convention) rather than a tab, keeping the tab bar to
+                        // four top-level destinations.
+                        .toolbar {
+                            ToolbarItem(placement: .topBarTrailing) {
+                                Button { showSettings = true } label: {
+                                    Image(systemName: MixtapeIcons.settings)
+                                }
+                                .tint(Color.mixPrimary)
+                                .accessibilityLabel("Settings")
+                            }
+                        }
+                    #endif
                 }
                 .tag(AppTab.home)
                 .tabItem { Label("Home", systemImage: "house.fill") }
-
-                LibraryView(libraryService: deps.libraryService)
-                    .tag(AppTab.library)
-                    .tabItem { Label("Library", systemImage: MixtapeIcons.library) }
 
                 SearchView()
                     .tag(AppTab.search)
                     .tabItem { Label("Search", systemImage: MixtapeIcons.search) }
 
-                // Queue tab — upcoming tracks + recently played
-                QueueView()
-                    .tag(AppTab.nowPlaying)
-                    .tabItem { Label("Queue", systemImage: "music.note.list") }
+                LibraryView(libraryService: deps.libraryService)
+                    .tag(AppTab.library)
+                    .tabItem { Label("Library", systemImage: MixtapeIcons.library) }
 
-                SettingsView(authService: deps.authService, syncService: deps.syncService, libraryService: deps.libraryService, importService: deps.importService)
-                    .tag(AppTab.settings)
-                    .tabItem { Label("Settings", systemImage: MixtapeIcons.settings) }
+                #if os(iOS)
+                IOSDiscoverView()
+                    .tag(AppTab.discover)
+                    .tabItem { Label("Discover", systemImage: "sparkles") }
+                #endif
             }
             .tint(Color.mixPrimary)
             .onAppear { configureTabBarAppearance() }
@@ -72,7 +92,7 @@ public struct MainTabView: View {
                     .animation(.spring(response: 0.35, dampingFraction: 0.8), value: engine.state.isActive)
             }
         }
-        // Playback error toast — slides down from top, auto-dismisses after 4 s
+        // Playback error toast — slides down from top, auto-dismisses after 5 s
         .overlay(alignment: .top) {
             if let msg = engine.errorMessage {
                 PlaybackErrorToast(message: msg)
@@ -105,6 +125,21 @@ public struct MainTabView: View {
         selectedTab = .library
     }
 
+    // MARK: - Home playback routing
+
+    /// Home cards play through here so online (Discover) tracks are routed to
+    /// the OnlinePlaybackCoordinator rather than the offline engine, which would
+    /// otherwise report the song "hasn't been uploaded yet".
+    private func handlePlay(_ track: Track, context: [Track]) {
+        Task {
+            if deps.onlineCoordinator.isStandaloneOnline(track) {
+                await deps.onlineCoordinator.playStandaloneOnline(track, context: context)
+            } else {
+                await engine.play(track: track, in: context)
+            }
+        }
+    }
+
     // MARK: - Tab Bar Appearance (iOS only)
 
     private var tabBarHeight: CGFloat { 49 }
@@ -135,19 +170,20 @@ private struct PlaybackErrorToast: View {
         HStack(spacing: 10) {
             Image(systemName: "exclamationmark.circle.fill")
                 .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(.red)
+                .foregroundStyle(Color.mixDestructive)
             Text(message)
                 .font(.mixLabel)
                 .foregroundStyle(Color.mixTextPrimary)
                 .lineLimit(3)
                 .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .padding(.vertical, 11)
+        .background(Color.mixSurface2, in: RoundedRectangle(cornerRadius: 12))
         .overlay(
             RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.mixDestructive.opacity(0.25), lineWidth: 0.5)
+                .stroke(Color.mixDestructive.opacity(0.30), lineWidth: 0.5)
         )
         .shadow(color: .black.opacity(0.2), radius: 8, y: 3)
     }
@@ -184,7 +220,7 @@ private struct PlaylistAddedToast: View {
 // MARK: - App Tab
 
 public enum AppTab: Hashable {
-    case home, library, search, nowPlaying, settings
+    case home, library, search, discover, nowPlaying, settings
 }
 
 // MARK: - Preview

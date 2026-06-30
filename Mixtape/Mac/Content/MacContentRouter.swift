@@ -48,14 +48,36 @@ struct MacContentRouter: View {
         } else {
             switch appState.selection ?? .home {
             case .home:
-                HomeView { link in
-                    switch link {
-                    case .songs:     appState.selection = .songs
-                    case .albums:    appState.selection = .albums
-                    case .artists:   appState.selection = .artists
-                    case .playlists: appState.selection = .playlists
+                HomeView(
+                    onQuickLink: { link in
+                        switch link {
+                        case .songs:     appState.selection = .songs
+                        case .albums:    appState.selection = .albums
+                        case .artists:   appState.selection = .artists
+                        case .playlists: appState.selection = .playlists
+                        }
+                    },
+                    onPlay: { track, context in
+                        // Route online (Discover) tracks through the coordinator;
+                        // local tracks play on the offline engine.
+                        Task {
+                            if deps.onlineCoordinator.isStandaloneOnline(track) {
+                                await deps.onlineCoordinator.playStandaloneOnline(track, context: context)
+                            } else {
+                                await engine.play(track: track, in: context)
+                            }
+                        }
+                    },
+                    onArtist: { name in
+                        // Prefer a matching library artist (artwork + albums);
+                        // otherwise open the online artist page by name.
+                        if let artist = library.artist(named: name) {
+                            appState.showArtist(artist)
+                        } else {
+                            appState.showOnlineArtist(name: name, trackID: nil)
+                        }
                     }
-                }
+                )
             case .songs:
                 MacSongsView(searchText: appState.searchText)
             case .albums:
@@ -64,6 +86,9 @@ struct MacContentRouter: View {
                 MacArtistsView(searchText: appState.searchText)
             case .playlists:
                 MacPlaylistsView()
+            case .discover:
+                OnlineDiscoverView()
+                    .environmentObject(deps.onlineCoordinator)
             case .settings:
                 SettingsView(
                     authService:    deps.authService,
@@ -82,14 +107,67 @@ struct MacContentRouter: View {
 
 struct MacTrackInspector: View {
 
-    let track: Track
+    /// The track this panel was opened with — shown only as a fallback when
+    /// nothing is playing. Per the "follow now-playing always" behaviour, the
+    /// panel otherwise tracks the live current track (see `track`).
+    let fallbackTrack: Track
 
     @EnvironmentObject private var engine:   PlaybackEngine
+    @EnvironmentObject private var queue:    QueueService
     @EnvironmentObject private var library:  LibraryService
     @EnvironmentObject private var appState: MacAppState
 
     @State private var fileSize:   String = ""
     @State private var fileFormat: String = ""
+
+    /// Always reflects the currently playing track, falling back to whatever the
+    /// panel was opened with when playback is stopped. Observing `queue` makes
+    /// the whole panel re-render (and reload file metadata) on every song change.
+    private var track: Track { queue.currentTrack ?? fallbackTrack }
+
+    /// The library album matching the current track, if one exists.
+    private var matchingAlbum: Album? {
+        library.album(title: track.albumTitle, artistName: track.artistName)
+    }
+
+    /// The library artist matching the current track's artist, if one exists.
+    private var matchingArtist: Artist? {
+        library.artist(named: track.artistName)
+    }
+
+    /// True when the inspector's track is the one currently loaded in the queue.
+    private var isCurrentTrack: Bool { queue.currentTrack?.id == track.id }
+
+    /// Whether the inspector's track is in the user's Favourites. Reads through
+    /// `library` so it re-evaluates whenever the library publishes a change.
+    private var isFavourited: Bool { library.isFavourited(trackID: track.id) }
+
+    /// True when the track isn't in the local library — i.e. an online Discover
+    /// song that hasn't been saved offline. Its artist/album live online.
+    private var isOnlineTrack: Bool { library.track(id: track.id) == nil }
+
+    private var artistEnabled: Bool {
+        isOnlineTrack ? !track.artistName.isEmpty : matchingArtist != nil
+    }
+    private var albumEnabled: Bool {
+        isOnlineTrack ? !track.albumTitle.isEmpty : matchingAlbum != nil
+    }
+
+    private func openArtist() {
+        if isOnlineTrack {
+            appState.showOnlineArtist(name: track.artistName, trackID: nil)
+        } else if let artist = matchingArtist {
+            appState.showArtist(artist)
+        }
+    }
+    /// Clicking the song title or album opens the album (local or Discover).
+    private func openAlbum() {
+        if isOnlineTrack {
+            appState.showOnlineAlbum(title: track.albumTitle, artistName: track.artistName, trackID: nil)
+        } else if let album = matchingAlbum {
+            appState.showAlbum(album)
+        }
+    }
 
     var body: some View {
         ScrollView {
@@ -98,45 +176,77 @@ struct MacTrackInspector: View {
                 artworkHero
                     .padding(.bottom, 14)
 
-                // Title / artist / album
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(track.title)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(Color.mixTextPrimary)
-                        .lineLimit(3)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text(track.artistName)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Color.mixPrimary)
-                        .lineLimit(1)
-                    Text(track.albumTitle)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Color.mixTextSecondary)
-                        .lineLimit(1)
+                // Title / artist / album — artist & album drill in when present.
+                HStack(alignment: .top, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        InspectorLinkLine(text: track.title,
+                                          color: Color.mixTextPrimary,
+                                          enabled: albumEnabled,
+                                          font: .system(size: 14, weight: .semibold),
+                                          lineLimit: 3) { openAlbum() }
+
+                        InspectorLinkLine(text: track.artistName,
+                                          color: Color.mixPrimary,
+                                          enabled: artistEnabled) { openArtist() }
+
+                        InspectorLinkLine(text: track.albumTitle,
+                                          color: Color.mixTextSecondary,
+                                          enabled: albumEnabled) { openAlbum() }
+                    }
+
+                    Spacer(minLength: 0)
+
+                    // Favourite toggle
+                    Button {
+                        _ = library.toggleFavourite(trackID: track.id)
+                    } label: {
+                        Image(systemName: isFavourited ? "heart.fill" : "heart")
+                            .font(.system(size: 15))
+                            .foregroundStyle(isFavourited ? Color.mixPrimary : Color.mixTextTertiary)
+                            .frame(width: 26, height: 26)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(isFavourited ? "Remove from Favourites" : "Add to Favourites")
                 }
                 .padding(.horizontal, 14)
                 .padding(.bottom, 14)
 
-                // Actions
-                HStack(spacing: 6) {
-                    Button {
-                        Task { await engine.play(track: track, in: library.tracks) }
-                    } label: {
-                        Label("Play Now", systemImage: "play.fill")
-                            .font(.system(size: 11, weight: .medium))
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color.mixPrimary)
+                // Actions — when this track is already playing, the Play button is
+                // pointless, so show a single full-width Queue button instead.
+                Group {
+                    if isCurrentTrack {
+                        Button {
+                            engine.queue.append(track)
+                        } label: {
+                            Label("Add to Queue", systemImage: "text.badge.plus")
+                                .font(.system(size: 11, weight: .medium))
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Color.mixPrimary)
+                    } else {
+                        HStack(spacing: 6) {
+                            Button {
+                                Task { await engine.play(track: track, in: library.tracks) }
+                            } label: {
+                                Label("Play Now", systemImage: "play.fill")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Color.mixPrimary)
 
-                    Button {
-                        engine.queue.append(track)
-                    } label: {
-                        Label("Queue", systemImage: "text.badge.plus")
-                            .font(.system(size: 11, weight: .medium))
-                            .frame(maxWidth: .infinity)
+                            Button {
+                                engine.queue.append(track)
+                            } label: {
+                                Label("Queue", systemImage: "text.badge.plus")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                        }
                     }
-                    .buttonStyle(.bordered)
                 }
                 .controlSize(.small)
                 .padding(.horizontal, 14)
@@ -175,22 +285,25 @@ struct MacTrackInspector: View {
                     }
                 }
 
-                Divider().padding(.horizontal, 14)
-                Button {
-                    engine.queue.insertNext(track)
-                    appState.closePanel()
-                } label: {
-                    HStack {
-                        Image(systemName: "text.insert").frame(width: 16)
-                        Text("Play Next")
+                // "Play Next" queues the track right after the current one. Hidden
+                // for the now-playing track, where it would just duplicate it.
+                if !isCurrentTrack {
+                    Divider().padding(.horizontal, 14)
+                    Button {
+                        engine.queue.insertNext(track)
+                    } label: {
+                        HStack {
+                            Image(systemName: "text.insert").frame(width: 16)
+                            Text("Play Next")
+                        }
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.mixTextPrimary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .font(.system(size: 12))
-                    .foregroundStyle(Color.mixTextPrimary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
                 }
-                .buttonStyle(.plain)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
             }
         }
         .background(Color.mixBackground)
@@ -238,6 +351,47 @@ struct MacTrackInspector: View {
         fileFormat = ext.isEmpty ? "Audio" : ext
         if let bytes = (try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? Int64 {
             fileSize = ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+        }
+    }
+}
+
+// MARK: - Inspector Link Line
+//
+// A single artist/album line under the title. When a navigation target exists
+// it behaves as a borderless button with a pointing-hand cursor and a hover
+// underline (Spotify-style); otherwise it renders as plain text.
+
+private struct InspectorLinkLine: View {
+    let text:    String
+    let color:   Color
+    let enabled: Bool
+    var font:    Font = .system(size: 12)
+    var lineLimit: Int = 1
+    let action:  () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        if enabled {
+            Button(action: action) {
+                Text(text)
+                    .font(font)
+                    .foregroundStyle(color)
+                    .lineLimit(lineLimit)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .underline(isHovered)
+            }
+            .buttonStyle(.plain)
+            .onHover { inside in
+                isHovered = inside
+                if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+            }
+        } else {
+            Text(text)
+                .font(font)
+                .foregroundStyle(color)
+                .lineLimit(lineLimit)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }

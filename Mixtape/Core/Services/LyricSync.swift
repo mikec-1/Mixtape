@@ -9,6 +9,12 @@
 import Foundation
 
 public enum LyricSync {
-    /// Seconds to look ahead when picking the active lyric line.
+    /// Seconds to look ahead when picking the active lyric line. Tuned per
+    /// platform: macOS's published clock lags more, so it needs a larger lead;
+    /// iOS reports playback time tighter, so the same 0.9s ran ~1–2s early.
+    #if os(iOS)
+    public static let leadOffset: TimeInterval = -0.4
+    #else
     public static let leadOffset: TimeInterval = 0.9
+    #endif
 }

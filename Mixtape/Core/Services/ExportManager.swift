@@ -443,33 +443,63 @@ public final class ExportManager: ObservableObject {
             sourceURL = pathURL
         }
 
-        let ext          = sourceURL.pathExtension.isEmpty ? "mp3" : sourceURL.pathExtension
+        let sourceExt    = sourceURL.pathExtension.isEmpty ? "mp3" : sourceURL.pathExtension
+        let isMP3        = sourceExt.lowercased() == "mp3"
         let safeTitle    = sanitizeFileName(track.title)
         let safeArtist   = sanitizeFileName(track.artistName)
         let baseName     = "\(safeArtist) - \(safeTitle)"
 
+        // ID3 tags are an MP3-container construct: writing one onto an .m4a/AAC file
+        // doesn't surface metadata/artwork in Finder and can corrupt the file. So for
+        // non-mp3 sources (e.g. yt-dlp .m4a) we transcode to a real .mp3 when ffmpeg is
+        // available, then embed the ID3 tag. Already-mp3 sources are copied verbatim to
+        // avoid a needless re-encode (and the quality loss it would cause).
+        let ffmpeg       = isMP3 ? nil : Self.locateFFmpeg()
+        let willTranscode = !isMP3 && ffmpeg != nil
+        let outExt       = willTranscode ? "mp3" : sourceExt
+
         // Avoid silently overwriting an existing export; append a counter instead.
-        var destinationURL = finalDestDir.appendingPathComponent("\(baseName).\(ext)")
+        var destinationURL = finalDestDir.appendingPathComponent("\(baseName).\(outExt)")
         var counter = 2
         while FileManager.default.fileExists(atPath: destinationURL.path) {
-            destinationURL = finalDestDir.appendingPathComponent("\(baseName) (\(counter)).\(ext)")
+            destinationURL = finalDestDir.appendingPathComponent("\(baseName) (\(counter)).\(outExt)")
             counter += 1
         }
 
-        try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
+        if let ffmpeg, willTranscode {
+            // Transcode source → real MP3 so Finder shows embedded artwork/metadata.
+            try Self.runProcess(ffmpeg, [
+                "-y",
+                "-i", sourceURL.path,
+                "-vn",
+                "-c:a", "libmp3lame",
+                "-q:a", "2",
+                destinationURL.path,
+            ])
+        } else {
+            // Either already mp3, or ffmpeg is unavailable — copy verbatim so saving
+            // still works. (In the ffmpeg-missing case the file won't be mp3.)
+            try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
+        }
 
-        // Write ID3v2.3 metadata into the exported copy.
-        // Errors here are non-fatal — the file has already been saved correctly.
-        try? ID3TagWriter.write(
-            to:          destinationURL,
-            title:       track.title,
-            artist:      track.artistName,
-            album:       track.albumTitle,
-            trackNumber: track.trackNumber,
-            year:        track.year,
-            genre:       track.genre,
-            artworkData: track.artworkData
-        )
+        // Write ID3v2.3 metadata into the exported copy — but ONLY when the output
+        // is a real MP3. ID3 is an MP3-container construct; prepending a tag onto an
+        // .m4a/AAC file pushes bytes in front of the MP4 `ftyp` atom and corrupts it,
+        // so ExtAudioFile/AVAudioFile then fail to open it (kAudioFileInvalidFileError).
+        // On iOS there's no ffmpeg, so non-mp3 sources are copied verbatim (.m4a) and
+        // must be left untouched. Errors here are non-fatal — the file is already saved.
+        if willTranscode || isMP3 {
+            try? ID3TagWriter.write(
+                to:          destinationURL,
+                title:       track.title,
+                artist:      track.artistName,
+                album:       track.albumTitle,
+                trackNumber: track.trackNumber,
+                year:        track.year,
+                genre:       track.genre,
+                artworkData: track.artworkData
+            )
+        }
     }
 
     public func exportedURL(for track: Track) -> URL? {
@@ -491,20 +521,28 @@ public final class ExportManager: ObservableObject {
             finalDestDir = destDir.appendingPathComponent(sanitizedUsername, isDirectory: true)
         }
 
-        let ext = track.file.remoteKey.flatMap { URL(fileURLWithPath: $0).pathExtension.lowercased() } ?? "mp3"
+        let extensions: [String]
+        if let remoteKey = track.file.remoteKey, !remoteKey.isEmpty {
+            extensions = [URL(fileURLWithPath: remoteKey).pathExtension.lowercased()]
+        } else {
+            extensions = ["m4a", "mp3"]
+        }
+        
         let safeTitle = sanitizeFileName(track.title)
         let safeArtist = sanitizeFileName(track.artistName)
         let baseName = "\(safeArtist) - \(safeTitle)"
 
-        let fileURL = finalDestDir.appendingPathComponent("\(baseName).\(ext)")
-        if FileManager.default.fileExists(atPath: fileURL.path) {
-            return fileURL
-        }
+        for ext in extensions {
+            let fileURL = finalDestDir.appendingPathComponent("\(baseName).\(ext)")
+            if FileManager.default.fileExists(atPath: fileURL.path) {
+                return fileURL
+            }
 
-        for counter in 2...10 {
-            let potentialURL = finalDestDir.appendingPathComponent("\(baseName) (\(counter)).\(ext)")
-            if FileManager.default.fileExists(atPath: potentialURL.path) {
-                return potentialURL
+            for counter in 2...10 {
+                let potentialURL = finalDestDir.appendingPathComponent("\(baseName) (\(counter)).\(ext)")
+                if FileManager.default.fileExists(atPath: potentialURL.path) {
+                    return potentialURL
+                }
             }
         }
 
@@ -592,6 +630,75 @@ public final class ExportManager: ObservableObject {
 
     // MARK: - Private helpers
 
+    /// Locates an `ffmpeg` binary for transcoding non-mp3 exports to real MP3.
+    /// Mirrors YTDLPService's discovery order (which we deliberately don't depend on,
+    /// since its `locate(_:)` is private): bundled binary in the .app first, then
+    /// the usual Homebrew/system install paths. Returns nil if none is found.
+    private static func locateFFmpeg() -> URL? {
+        #if !os(macOS)
+        // ffmpeg transcoding shells out via Process, which exists only on macOS.
+        // The macOS ffmpeg binary is also bundled into the iOS app (shared
+        // Resources/bin folder reference) but is the wrong architecture and can't
+        // run there, so always report "no ffmpeg" on iOS — callers then copy the
+        // source verbatim instead of attempting an impossible transcode.
+        return nil
+        #else
+        if let bundled = Bundle.main.url(forResource: "ffmpeg", withExtension: nil) {
+            ensureExecutable(bundled)
+            return bundled
+        }
+        if let bundledBin = Bundle.main.url(forResource: "ffmpeg", withExtension: nil, subdirectory: "bin") {
+            ensureExecutable(bundledBin)
+            return bundledBin
+        }
+        for path in ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"] {
+            if FileManager.default.isExecutableFile(atPath: path) {
+                return URL(fileURLWithPath: path)
+            }
+        }
+        return nil
+        #endif
+    }
+
+    private static func ensureExecutable(_ url: URL) {
+        if !FileManager.default.isExecutableFile(atPath: url.path) {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+        }
+    }
+
+    /// Runs `executable` with `args` synchronously, capturing stderr. Throws an
+    /// NSError carrying the stderr text on a non-zero exit. Used for the ffmpeg
+    /// transcode in `export(track:from:)`, which is itself a throwing sync call.
+    private static func runProcess(_ executable: URL, _ args: [String]) throws {
+        // ffmpeg transcode shells out via Process, which exists only on macOS. On
+        // iOS locateFFmpeg() returns nil so willTranscode is false and this is
+        // never called — but it must still compile, hence the guard.
+        #if os(macOS)
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = args
+        let errPipe = Pipe()
+        process.standardOutput = Pipe()
+        process.standardError  = errPipe
+        do {
+            try process.run()
+        } catch {
+            throw NSError(domain: "ExportManager", code: 4,
+                userInfo: [NSLocalizedDescriptionKey: "Couldn't start ffmpeg: \(error.localizedDescription)"])
+        }
+        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            let msg = String(decoding: errData, as: UTF8.self)
+            throw NSError(domain: "ExportManager", code: 4,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to convert audio to MP3.\n\(msg)"])
+        }
+        #else
+        throw NSError(domain: "ExportManager", code: 4,
+            userInfo: [NSLocalizedDescriptionKey: "Audio transcoding isn't supported on iOS."])
+        #endif
+    }
+
     /// Returns `true` if `url` lies inside the platform Trash / Recently Deleted folder.
     /// Security-scoped bookmarks silently track moves, so a bookmarked folder that is
     /// trashed resolves to its new Trash path — `fileExists` returns true there, so we
@@ -612,7 +719,7 @@ public final class ExportManager: ObservableObject {
 
     /// Strips characters that are illegal in filenames on HFS+/APFS (iOS & macOS).
     /// Replaces them with hyphens and trims surrounding whitespace/dots.
-    private func sanitizeFileName(_ name: String) -> String {
+    public func sanitizeFileName(_ name: String) -> String {
         // Characters disallowed in HFS+/APFS filenames.
         // '/' is the path separator; ':' is the legacy Mac resource-fork separator
         // and causes "invalid name" errors on iOS even though APFS technically allows it.

@@ -73,6 +73,18 @@ public struct Track: Identifiable, Codable, Hashable, Sendable {
     }
 
     // MARK: Computed helpers
+
+    /// True when this track is a standalone Discover/online track rather than a
+    /// library row. Online tracks are minted by `OnlineTrack.asTrack(...)` with
+    /// `fileSize == 0` and no `remoteKey`; once played they also carry a cache
+    /// path under `OnlineCache`. Library/imported tracks always have a real
+    /// `fileSize` (> 0), so this discriminates reliably even after the online
+    /// track is given its cache `localPath` for playback.
+    public var isOnline: Bool {
+        file.localPath.contains("OnlineCache")
+            || (file.remoteKey == nil && file.fileSize == 0)
+    }
+
     public var formattedDuration: String {
         let mins = Int(duration) / 60
         let secs = Int(duration) % 60

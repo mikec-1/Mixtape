@@ -57,7 +57,10 @@ public struct LibraryView: View {
                 #endif
             }
             .sheet(isPresented: $vm.showImportSheet) {
-                ImportView(importService: deps.importService)
+                ImportView(importService: deps.importService,
+                           spotifyClient: deps.spotifyClient,
+                           spotifyImportService: deps.spotifyImportService,
+                           spotifyAuth: deps.spotifyAuth)
                     .environmentObject(deps)
             }
             .navigationDestination(for: Album.self)    { AlbumDetailView(album: $0) }

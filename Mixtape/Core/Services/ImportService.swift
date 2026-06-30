@@ -45,6 +45,10 @@ public final class ImportService {
     private let libraryService:    LibraryService
     private let deviceID:          String
 
+    /// Resolves artist profile photos via Spotify (never Deezer/album art) for
+    /// online imports. Self-contained client; reuses one token across imports.
+    private let onlineArtistImageClient = ITunesSearchClient(spotifyClient: SpotifyClient())
+
     // MARK: - Post-Import Sync Hook
 
     /// Set by AppDependencies to trigger an upstream sync after any successful import.
@@ -109,7 +113,56 @@ public final class ImportService {
 
     // MARK: - Single File Import
 
-    /// Import one audio file. Handles security-scoped resource access internally.
+    /// Recursively scans the Export directory for any new audio files that are not already
+    /// in the library, and imports them.
+    public func scanExportDirectoryForNewFiles() async {
+        guard let destDir = try? ExportManager.shared.resolveExportURL() else { return }
+
+        let startAccess = destDir.startAccessingSecurityScopedResource()
+        defer { if startAccess { destDir.stopAccessingSecurityScopedResource() } }
+
+        guard let enumerator = FileManager.default.enumerator(at: destDir, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles, .skipsPackageDescendants]) else {
+            return
+        }
+
+        // Build a set of expected filenames to skip hashing for already exported files
+        var expectedFilenames = Set<String>()
+        for track in libraryService.tracks {
+            let safeTitle = ExportManager.shared.sanitizeFileName(track.title)
+            let safeArtist = ExportManager.shared.sanitizeFileName(track.artistName)
+            let baseName = "\(safeArtist) - \(safeTitle)"
+            expectedFilenames.insert("\(baseName).mp3")
+            expectedFilenames.insert("\(baseName).m4a")
+            expectedFilenames.insert("\(baseName).wav")
+            expectedFilenames.insert("\(baseName).flac")
+            for i in 2...10 {
+                expectedFilenames.insert("\(baseName) (\(i)).mp3")
+                expectedFilenames.insert("\(baseName) (\(i)).m4a")
+                expectedFilenames.insert("\(baseName) (\(i)).wav")
+                expectedFilenames.insert("\(baseName) (\(i)).flac")
+            }
+        }
+
+        var urlsToImport: [URL] = []
+        let allObjects = enumerator.allObjects as? [URL] ?? []
+        for fileURL in allObjects {
+            let ext = fileURL.pathExtension.lowercased()
+            guard ["mp3", "m4a", "wav", "flac", "aac", "alac"].contains(ext) else { continue }
+            
+            if expectedFilenames.contains(fileURL.lastPathComponent) {
+                continue
+            }
+            urlsToImport.append(fileURL)
+        }
+
+        if !urlsToImport.isEmpty {
+            print("[ImportService] Found \(urlsToImport.count) new files in export directory. Importing...")
+            _ = await importTracks(from: urlsToImport)
+            libraryService.refresh()
+            await onSyncNeeded?()
+        }
+    }
+
     public func importTrack(from url: URL) async -> ImportResult {
         // 1. Security-scoped access
         let accessed = url.startAccessingSecurityScopedResource()
@@ -184,6 +237,110 @@ public final class ImportService {
 
         } catch {
             return .failed(url, error)
+        }
+    }
+
+    // MARK: - Online Import
+
+    /// Import an already-downloaded audio file using caller-supplied metadata.
+    ///
+    /// This is the online variant of `importTrack(from:)` used by the Discover
+    /// "Add to Library" flow. The file is fetched via yt-dlp and has no (or
+    /// garbage) embedded tags, so instead of parsing the file we trust the
+    /// title/artist/album/artwork already known from the online search result.
+    /// No enrichment review is run — the metadata is treated as authoritative.
+    public func importOnlineTrack(
+        from fileURL: URL,
+        title: String,
+        artistName: String,
+        albumTitle: String,
+        duration: TimeInterval,
+        artworkURL: URL?,
+        artworkData providedArtwork: Data? = nil,
+        isExplicit: Bool
+    ) async -> ImportResult {
+        // 1. Security-scoped access
+        let accessed = fileURL.startAccessingSecurityScopedResource()
+        defer { if accessed { fileURL.stopAccessingSecurityScopedResource() } }
+
+        do {
+            // 2. Copy + hash
+            let provenance = try fileManager.importFile(from: fileURL)
+
+            // 3. Check for duplicate
+            let existingIDs = try trackRepo.existingIDs(forFileHash: provenance.fileHash)
+            if let existingID = existingIDs.first,
+               let existing = try trackRepo.fetch(id: existingID) {
+                return .duplicate(existing)
+            }
+
+            // 4. Download artwork — online search artwork is small, so we fetch
+            //    it eagerly so albums/artists get cover art on first import.
+            // Prefer already-loaded artwork (e.g. a Home/now-playing track whose
+            // rebuilt OnlineTrack carries no artworkURL); fall back to downloading.
+            var artworkData: Data? = providedArtwork
+            if artworkData == nil, let artworkURL {
+                artworkData = try? await URLSession.shared.data(from: artworkURL).0
+            }
+
+            // 5. Build domain track from the known metadata
+            let track = Track(
+                title:       title,
+                artistName:  artistName,
+                albumTitle:  albumTitle,
+                duration:    duration,
+                artworkData: artworkData,
+                sync:        SyncMetadata(deviceID: deviceID),
+                file:        provenance
+            )
+
+            // 6. Persist track
+            try trackRepo.save(track)
+
+            // 7. Update or create album (grouped by primary artist)
+            try updateAlbum(for: track)
+
+            // 8. Resolve the artist's Spotify profile picture (never the album
+            //    cover) so the saved artist gets a real photo, not the song's art.
+            let primaryArtist = ImportService.primaryArtistName(from: artistName)
+            var artistImageData: Data? = nil
+            if let imgURL = await onlineArtistImageClient.artistImageURL(for: primaryArtist) {
+                artistImageData = try? await URLSession.shared.data(from: imgURL).0
+            }
+
+            // 9. Update or create artist (primary artist only). For online imports
+            //    the artwork comes ONLY from the Spotify photo above — fall back to
+            //    the placeholder (nil) rather than the album cover.
+            try updateArtist(for: track, artistImageData: artistImageData, useArtistImageOnly: true)
+
+            // 10. Refresh in-memory library
+            libraryService.refresh()
+
+            // 10. Add to All Songs — every imported track lands there automatically.
+            libraryService.addToAllSongs(trackID: track.id)
+
+            // 11. Schedule a debounced sync so the server sees the new track —
+            //      uploadPendingFiles/uploadPendingArtworks will push the audio
+            //      and artwork to Supabase now that the track has a real local path.
+            scheduleSync()
+
+            // 12. Passthrough candidate from the known metadata. We already have
+            //      correct tags, so no enrichment review is needed.
+            let candidate = EnrichmentCandidate(
+                title:       title,
+                artistName:  artistName != "Unknown Artist" ? artistName : nil,
+                albumTitle:  albumTitle != "Unknown Album"  ? albumTitle : nil,
+                year:        nil,
+                genre:       nil,
+                trackNumber: nil,
+                confidence:  1.0,
+                source:      .existingMetadata
+            )
+
+            return .imported(track, candidate)
+
+        } catch {
+            return .failed(fileURL, error)
         }
     }
 
@@ -357,7 +514,14 @@ public final class ImportService {
     }
 
     /// Creates or updates the artist for `track`, using the primary artist name for grouping.
-    private func updateArtist(for track: Track) throws {
+    /// - Parameters:
+    ///   - artistImageData: Spotify profile photo for the artist, if resolved.
+    ///   - useArtistImageOnly: When true (online imports), the artist artwork is
+    ///     set ONLY from `artistImageData`; it is never seeded from the track's
+    ///     album cover. When false (local imports), album art is the fallback.
+    private func updateArtist(for track: Track,
+                              artistImageData: Data? = nil,
+                              useArtistImageOnly: Bool = false) throws {
         let primary = ImportService.primaryArtistName(from: track.artistName)
         var artist = try artistRepo.findOrCreate(
             name:     primary,
@@ -380,10 +544,16 @@ public final class ImportService {
             modified = true
         }
 
-        // Propagate artwork
-        if artist.artworkData == nil, let art = track.artworkData {
-            artist.artworkData = art
-            modified = true
+        // Propagate artwork. Prefer the Spotify artist photo; only fall back to
+        // the track's album cover for local imports (useArtistImageOnly == false).
+        if artist.artworkData == nil {
+            if let photo = artistImageData {
+                artist.artworkData = photo
+                modified = true
+            } else if !useArtistImageOnly, let art = track.artworkData {
+                artist.artworkData = art
+                modified = true
+            }
         }
 
         if modified {

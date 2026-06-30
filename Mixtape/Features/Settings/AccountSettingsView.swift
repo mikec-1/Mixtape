@@ -6,10 +6,23 @@
 // so this view does NOT create its own NavigationStack.
 
 import SwiftUI
+import UniformTypeIdentifiers
+#if os(iOS)
+import PhotosUI
+#elseif os(macOS)
+import AppKit
+#endif
 
 public struct AccountSettingsView: View {
 
     @EnvironmentObject private var deps: AppDependencies
+
+    // MARK: Profile Picture
+    @State private var avatarBusy: Bool = false
+    @State private var avatarResult: ActionResult?
+    #if os(iOS)
+    @State private var photoItem: PhotosPickerItem?
+    #endif
 
     // MARK: Change Username
     @State private var usernameField: String = ""
@@ -69,6 +82,7 @@ public struct AccountSettingsView: View {
 
     public var body: some View {
         List {
+            avatarSection
             currentInfoSection
             usernameSection
             emailSection
@@ -81,6 +95,64 @@ public struct AccountSettingsView: View {
     }
 
     // MARK: - Sections
+
+    private var avatarSection: some View {
+        Section {
+            HStack(spacing: 16) {
+                AvatarView(
+                    url: deps.authService.currentUser?.avatarURL,
+                    fallbackText: currentUsername,
+                    size: 72
+                )
+
+                VStack(alignment: .leading, spacing: 8) {
+                    #if os(iOS)
+                    PhotosPicker(selection: $photoItem, matching: .images, photoLibrary: .shared()) {
+                        Text(avatarBusy ? "Uploading…" : "Change Photo")
+                            .font(.mixButton)
+                            .foregroundStyle(avatarBusy ? Color.mixTextTertiary : Color.mixPrimary)
+                    }
+                    .disabled(avatarBusy)
+                    #else
+                    Button {
+                        pickAvatarMac()
+                    } label: {
+                        Text(avatarBusy ? "Uploading…" : "Change Photo")
+                            .font(.mixButton)
+                            .foregroundStyle(avatarBusy ? Color.mixTextTertiary : Color.mixPrimary)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(avatarBusy)
+                    #endif
+
+                    if deps.authService.currentUser?.avatarURL != nil {
+                        Button(role: .destructive) {
+                            removeAvatar()
+                        } label: {
+                            Text("Remove")
+                                .font(.mixCaptionBold)
+                                .foregroundStyle(Color.mixDestructive)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(avatarBusy)
+                    }
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 4)
+
+            resultText(avatarResult)
+        } header: {
+            sectionHeader("Profile Picture")
+        }
+        .listRowBackground(Color.mixSurface)
+        #if os(iOS)
+        .onChange(of: photoItem) { _, newItem in
+            handlePickedPhoto(newItem)
+        }
+        #endif
+    }
 
     private var currentInfoSection: some View {
         Section {
@@ -239,6 +311,74 @@ public struct AccountSettingsView: View {
     }
 
     // MARK: - Actions
+
+    // MARK: Avatar Actions
+
+    #if os(iOS)
+    private func handlePickedPhoto(_ item: PhotosPickerItem?) {
+        guard let item else { return }
+        avatarResult = nil
+        avatarBusy = true
+        Task {
+            defer { avatarBusy = false; photoItem = nil }
+            do {
+                guard let data = try await item.loadTransferable(type: Data.self) else {
+                    avatarResult = .failure("Couldn't read that image.")
+                    return
+                }
+                try await uploadAndSetAvatar(data)
+            } catch {
+                avatarResult = .failure(error.localizedDescription)
+            }
+        }
+    }
+    #else
+    private func pickAvatarMac() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        avatarResult = nil
+        avatarBusy = true
+        Task {
+            defer { avatarBusy = false }
+            do {
+                let data = try Data(contentsOf: url)
+                try await uploadAndSetAvatar(data)
+            } catch {
+                avatarResult = .failure(error.localizedDescription)
+            }
+        }
+    }
+    #endif
+
+    /// Downsamples the picked image, uploads it, and persists the URL on the profile.
+    private func uploadAndSetAvatar(_ data: Data) async throws {
+        guard let jpeg = ImageDownsampler.downsampledJPEG(from: data) else {
+            avatarResult = .failure("That image couldn't be processed.")
+            return
+        }
+        let url = try await deps.authService.uploadAvatar(jpeg, fileExtension: "jpg")
+        try await deps.authService.updateAvatarURL(url)
+        avatarResult = .success("Profile picture updated.")
+    }
+
+    private func removeAvatar() {
+        avatarResult = nil
+        avatarBusy = true
+        Task {
+            defer { avatarBusy = false }
+            do {
+                try await deps.authService.updateAvatarURL(nil)
+                avatarResult = .success("Profile picture removed.")
+            } catch {
+                avatarResult = .failure(error.localizedDescription)
+            }
+        }
+    }
 
     private func saveUsername() {
         usernameResult = nil
