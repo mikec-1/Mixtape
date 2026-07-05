@@ -15,6 +15,12 @@ public struct SettingsView: View {
     @EnvironmentObject private var theme: ThemeManager
     @AppStorage("haptics.enabled") private var hapticsEnabled = true
     @AppStorage(ProfileStatsService.sharingDefaultsKey) private var shareListeningActivity = true
+    #if os(macOS)
+    // When ON, the Sparkle updater subscribes to the "beta" channel and receives
+    // opt-in development builds ahead of stable. Read by UpdaterController via the
+    // same key (UpdaterController.receiveDevelopmentBuildsKey).
+    @AppStorage(UpdaterController.receiveDevelopmentBuildsKey) private var receiveDevelopmentBuilds = false
+    #endif
     @State private var showFolderPicker = false
     @State private var showEqualizer = false
     @State private var showAccount = false
@@ -192,6 +198,9 @@ public struct SettingsView: View {
                 if vm.isDeveloper {
                     librarySection
                 }
+                #if os(macOS)
+                updatesSection
+                #endif
                 aboutSection
             }
             #if os(iOS)
@@ -869,10 +878,31 @@ public struct SettingsView: View {
             .listRowBackground(Color.mixSurface)
     }
 
+    #if os(macOS)
+    /// macOS-only: opt into Sparkle's "beta" channel to receive development builds
+    /// ahead of stable. Toggling this changes which channels UpdaterController
+    /// reports from `allowedChannels(for:)` on the next update check.
+    private var updatesSection: some View {
+        Section {
+            Toggle(isOn: $receiveDevelopmentBuilds) {
+                rowLabel(title: "Receive development builds", systemImage: "hammer.circle", tint: .mixPrimary, titleColor: .mixTextPrimary)
+            }
+            .toggleStyle(SwitchToggleStyle(tint: Color.mixPrimary))
+            .listRowBackground(Color.mixSurface)
+        } header: {
+            SectionHeader("Updates")
+        } footer: {
+            Text("Development builds are early, opt-in releases that may be less stable. Turn this off to return to stable updates only.")
+                .font(.mixCaption)
+                .foregroundStyle(Color.mixTextTertiary)
+        }
+    }
+    #endif
+
     private var aboutSection: some View {
         Section {
             settingsRow(title: "Version", systemImage: "info.circle") {
-                Text(appVersion)
+                Text(displayVersion)
                     .font(.mixCaption)
                     .foregroundStyle(Color.mixTextTertiary)
             }
@@ -891,6 +921,16 @@ public struct SettingsView: View {
 
     private var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+    }
+
+    /// Version string shown in the UI. On macOS dev-channel builds (the "Receive
+    /// development builds" toggle is ON) it reads e.g. "2.0.0 (beta)"; otherwise plain.
+    private var displayVersion: String {
+        #if os(macOS)
+        return receiveDevelopmentBuilds ? "\(appVersion) (beta)" : appVersion
+        #else
+        return appVersion
+        #endif
     }
 
     private var buildNumber: String {

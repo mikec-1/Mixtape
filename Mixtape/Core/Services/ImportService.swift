@@ -111,6 +111,40 @@ public final class ImportService {
         return (artistName, nil)
     }
 
+    /// Splits a display artist string into an ORDERED list of individual artist
+    /// names, breaking ONLY on feature markers (" feat. ", " feat ", " ft. ",
+    /// " ft ", " featuring "), case-insensitive. Unlike `splitArtist`, this does
+    /// NOT split on "&", " x ", or commas — doing so would wrongly break group
+    /// names like "Earth, Wind & Fire" or "Tyler, the Creator".
+    ///
+    /// Used for per-artist tappable display so each contributor opens its own
+    /// profile. A featured segment may itself contain multiple artists joined by
+    /// the same markers (rare), so the split is applied recursively.
+    ///
+    /// Examples:
+    ///   "Drake feat. 21 Savage"        → ["Drake", "21 Savage"]
+    ///   "Pitbull ft. Kesha"            → ["Pitbull", "Kesha"]
+    ///   "Earth, Wind & Fire"           → ["Earth, Wind & Fire"]
+    ///   "Adele"                        → ["Adele"]
+    public static func splitArtists(from artistName: String) -> [String] {
+        let separators = [" featuring ", " feat. ", " feat ", " ft. ", " ft "]
+        for sep in separators {
+            if let range = artistName.range(of: sep, options: .caseInsensitive) {
+                let head = String(artistName[..<range.lowerBound])
+                    .trimmingCharacters(in: .whitespaces)
+                let tail = String(artistName[range.upperBound...])
+                    .trimmingCharacters(in: .whitespaces)
+                var result: [String] = []
+                if !head.isEmpty { result.append(head) }
+                // Recurse so "A feat. B ft. C" yields ["A", "B", "C"].
+                result.append(contentsOf: splitArtists(from: tail))
+                if !result.isEmpty { return result }
+            }
+        }
+        let trimmed = artistName.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? [] : [trimmed]
+    }
+
     // MARK: - Single File Import
 
     /// Recursively scans the Export directory for any new audio files that are not already

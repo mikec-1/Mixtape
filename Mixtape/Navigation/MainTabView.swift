@@ -18,6 +18,17 @@ public struct MainTabView: View {
     @StateObject private var iosAppState = IOSAppState()
     #endif
 
+    /// Tab selection binding — on iOS it routes through IOSAppState so navigation
+    /// requests from the mini player / now-playing sheet can switch tabs;
+    /// elsewhere it falls back to local @State.
+    private var tabSelection: Binding<AppTab> {
+        #if os(iOS)
+        return $iosAppState.selectedTab
+        #else
+        return $selectedTab
+        #endif
+    }
+
     public var body: some View {
         tabContent
         #if os(iOS)
@@ -45,9 +56,9 @@ public struct MainTabView: View {
     // Extracted so the #if os(iOS) modifiers above can be applied cleanly.
     private var tabContent: some View {
         ZStack(alignment: .bottom) {
-            TabView(selection: $selectedTab) {
+            TabView(selection: tabSelection) {
                 NavigationStack {
-                    HomeView(onQuickLink: handleQuickLink, onPlay: handlePlay)
+                    HomeView(onQuickLink: handleQuickLink, onPlay: handlePlay, onArtist: handleArtist)
                     #if os(iOS)
                         // Settings lives behind a gear in the nav bar (Apple
                         // convention) rather than a tab, keeping the tab bar to
@@ -122,7 +133,15 @@ public struct MainTabView: View {
     /// Home quick-links jump to the Library tab (which hosts Songs/Albums/
     /// Artists/Playlists on iOS).
     private func handleQuickLink(_ link: HomeQuickLink) {
-        selectedTab = .library
+        tabSelection.wrappedValue = .library
+    }
+
+    /// Home artist taps route to the matching profile (local Library artist or,
+    /// for an unmatched/featured name, the online Discover artist page).
+    private func handleArtist(_ name: String) {
+        #if os(iOS)
+        iosAppState.openArtist(name: name, library: deps.libraryService)
+        #endif
     }
 
     // MARK: - Home playback routing

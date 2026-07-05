@@ -11,6 +11,9 @@ public struct MiniPlayerBar: View {
 
     @EnvironmentObject private var engine: PlaybackEngine
     @EnvironmentObject private var deps:   AppDependencies
+    #if os(iOS)
+    @EnvironmentObject private var iosAppState: IOSAppState
+    #endif
     @State private var showNowPlaying = false
 
     public var body: some View {
@@ -26,10 +29,7 @@ public struct MiniPlayerBar: View {
                         .font(.mixBodyBold)
                         .foregroundStyle(Color.mixTextPrimary)
                         .lineLimit(1)
-                    Text(engine.queue.currentTrack?.artistName ?? "")
-                        .font(.mixLabel)
-                        .foregroundStyle(Color.mixTextSecondary)
-                        .lineLimit(1)
+                    artistLine
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -94,8 +94,42 @@ public struct MiniPlayerBar: View {
             NowPlayingView()
                 .environmentObject(engine)
                 .environmentObject(deps)
+                #if os(iOS)
+                .environmentObject(iosAppState)
+                #endif
         }
     }
+
+    // MARK: - Artist (per-artist tappable)
+
+    /// The artist line. On iOS each parsed artist is an individual tap target
+    /// that routes to the correct profile; elsewhere it's plain text. A single
+    /// artist is visually identical to the previous lone label.
+    @ViewBuilder
+    private var artistLine: some View {
+        #if os(iOS)
+        TappableArtistRow(targets: artistTargets)
+        #else
+        Text(engine.queue.currentTrack?.artistName ?? "")
+            .font(.mixLabel)
+            .foregroundStyle(Color.mixTextSecondary)
+            .lineLimit(1)
+        #endif
+    }
+
+    #if os(iOS)
+    /// One tap target per individual artist on the current track. Tapping routes
+    /// through IOSAppState to the local Library artist or the online Discover
+    /// artist page (mirrors macOS per-name routing).
+    private var artistTargets: [(name: String, action: (() -> Void)?)] {
+        guard let track = engine.queue.currentTrack else {
+            return [("", nil)]
+        }
+        return ImportService.splitArtists(from: track.artistName).map { name in
+            (name, { iosAppState.openArtist(name: name, library: deps.libraryService) })
+        }
+    }
+    #endif
 
     // MARK: - Artwork
 

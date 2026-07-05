@@ -11,12 +11,20 @@ public struct LibraryView: View {
     @State private var showPlaylistEditorSheet = false
     @State private var showJoinShared = false
 
+    /// Programmatic navigation path so cross-tab requests (tapping an artist in
+    /// the mini player / now-playing sheet) can push the artist page here.
+    @State private var navPath = NavigationPath()
+
+    #if os(iOS)
+    @EnvironmentObject private var iosAppState: IOSAppState
+    #endif
+
     public init(libraryService: LibraryService) {
         _vm = StateObject(wrappedValue: LibraryViewModel(libraryService: libraryService))
     }
 
     public var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navPath) {
             ZStack {
                 Color.mixBackground.ignoresSafeArea()
 
@@ -69,6 +77,15 @@ public struct LibraryView: View {
                 PlaylistDetailView(playlist: $0)
                     .environmentObject(deps)
             }
+            #if os(iOS)
+            // Consume a cross-tab request to open a local artist (set when an
+            // artist is tapped in the mini player / now-playing sheet / Home).
+            .onChange(of: iosAppState.pendingLibraryArtist) { _, artist in
+                guard let artist else { return }
+                navPath.append(artist)
+                iosAppState.pendingLibraryArtist = nil
+            }
+            #endif
             .task { await vm.load() }
             .sheet(isPresented: $showPlaylistEditorSheet) {
                 PlaylistEditorSheet()

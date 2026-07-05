@@ -13,6 +13,9 @@ public struct NowPlayingView: View {
 
     @EnvironmentObject private var engine: PlaybackEngine
     @EnvironmentObject private var deps:   AppDependencies
+    #if os(iOS)
+    @EnvironmentObject private var iosAppState: IOSAppState
+    #endif
     @Environment(\.dismiss)  private var dismiss
 
     /// Lyrics resolution + caching.
@@ -346,23 +349,24 @@ public struct NowPlayingView: View {
 
     private var trackInfo: some View {
         HStack(alignment: .center, spacing: 12) {
-            Button {
-                showGetInfo = true
-            } label: {
-                VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 4) {
+                // Title — opens Get Info (unchanged).
+                Button {
+                    showGetInfo = true
+                } label: {
                     Text(engine.queue.currentTrack?.title ?? "—")
                         .font(.mixTitle)
                         .foregroundStyle(Color.mixTextPrimary)
                         .lineLimit(1)
-                    Text(engine.queue.currentTrack?.artistName ?? "")
-                        .font(.mixBody)
-                        .foregroundStyle(Color.mixTextSecondary)
-                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+
+                // Artist — each parsed artist is its own tap target.
+                artistLine
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .buttonStyle(.plain)
             Spacer()
             // Heart / favourite
             if let track = engine.queue.currentTrack {
@@ -380,6 +384,39 @@ public struct NowPlayingView: View {
             }
         }
     }
+
+    // MARK: - Artist Line
+
+    /// The artist line beneath the title. On iOS each parsed artist is an
+    /// individual tap target that dismisses the sheet and opens the right
+    /// profile; elsewhere it's plain text. A single artist looks identical to
+    /// the previous lone label.
+    @ViewBuilder
+    private var artistLine: some View {
+        #if os(iOS)
+        TappableArtistRow(targets: artistTargets, font: .mixBody, color: .mixTextSecondary)
+        #else
+        Text(engine.queue.currentTrack?.artistName ?? "")
+            .font(.mixBody)
+            .foregroundStyle(Color.mixTextSecondary)
+            .lineLimit(1)
+        #endif
+    }
+
+    #if os(iOS)
+    /// One tap target per individual artist. Tapping dismisses the now-playing
+    /// sheet, then routes through IOSAppState to the local Library artist or the
+    /// online Discover artist page (mirrors the mini player / macOS routing).
+    private var artistTargets: [(name: String, action: (() -> Void)?)] {
+        guard let track = engine.queue.currentTrack else { return [("", nil)] }
+        return ImportService.splitArtists(from: track.artistName).map { name in
+            (name, {
+                dismiss()
+                iosAppState.openArtist(name: name, library: deps.libraryService)
+            })
+        }
+    }
+    #endif
 
     // MARK: - Seek Bar
 

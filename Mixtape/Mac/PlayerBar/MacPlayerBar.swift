@@ -68,12 +68,7 @@ struct MacPlayerBar: View {
                             color: Color.mixTextPrimary,
                             target: albumTarget(for: track)
                         )
-                        BarLinkText(
-                            text: track.artistName,
-                            font: .system(size: 11),
-                            color: Color.mixTextSecondary,
-                            target: artistTarget(for: track)
-                        )
+                        BarArtistLine(targets: artistTargets(for: track))
                     }
 
                     Spacer(minLength: 4)
@@ -114,14 +109,24 @@ struct MacPlayerBar: View {
     }
 
     /// Navigation target for the artist line — opens the Discover artist page for
-    /// online (unsaved) tracks, otherwise the local artist page.
+    /// online (unsaved) tracks, otherwise the local artist page. Kept for the
+    /// context-menu "Go to Artist" action (routes to the primary artist).
     private func artistTarget(for track: Track) -> (() -> Void)? {
-        if deps.libraryService.track(id: track.id) == nil {
-            guard !track.artistName.isEmpty else { return nil }
-            return { appState.showOnlineArtist(name: track.artistName, trackID: nil) }
-        }
-        return deps.libraryService.artist(named: track.artistName).map { artist in
-            { appState.showArtist(artist) }
+        artistTargets(for: track).first?.action
+    }
+
+    /// One tappable target per individual artist on the track. A "feat." blob is
+    /// split into separate names so tapping a featured artist opens *their*
+    /// profile rather than failing on the whole "Drake feat. 21 Savage" string.
+    /// Each name resolves to a local library artist when one exists, otherwise to
+    /// the online (Discover) artist page by name.
+    private func artistTargets(for track: Track) -> [(name: String, action: () -> Void)] {
+        let isOnline = deps.libraryService.track(id: track.id) == nil
+        return ImportService.splitArtists(from: track.artistName).map { name in
+            if !isOnline, let artist = deps.libraryService.artist(named: name) {
+                return (name, { appState.showArtist(artist) })
+            }
+            return (name, { appState.showOnlineArtist(name: name, trackID: nil) })
         }
     }
 
@@ -514,6 +519,44 @@ private struct BarLinkText: View {
                 .font(font)
                 .foregroundStyle(color)
                 .lineLimit(1)
+        }
+    }
+}
+
+// MARK: - BarArtistLine
+//
+// Renders one or more individually-tappable artist names on the now-playing
+// artist line, comma-separated. A single artist keeps the exact look/behaviour
+// of a lone BarLinkText (with truncation); multiple artists each become their
+// own click-through target.
+
+private struct BarArtistLine: View {
+    let targets: [(name: String, action: () -> Void)]
+
+    private let font  = Font.system(size: 11)
+    private let color = Color.mixTextSecondary
+
+    var body: some View {
+        if targets.count <= 1 {
+            BarLinkText(
+                text:   targets.first?.name ?? "",
+                font:   font,
+                color:  color,
+                target: targets.first?.action
+            )
+        } else {
+            HStack(spacing: 0) {
+                ForEach(Array(targets.enumerated()), id: \.offset) { idx, item in
+                    BarLinkText(text: item.name, font: font, color: color, target: item.action)
+                    if idx < targets.count - 1 {
+                        Text(", ")
+                            .font(font)
+                            .foregroundStyle(color)
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
+                }
+            }
         }
     }
 }

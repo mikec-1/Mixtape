@@ -146,18 +146,20 @@ struct MacTrackInspector: View {
     /// song that hasn't been saved offline. Its artist/album live online.
     private var isOnlineTrack: Bool { library.track(id: track.id) == nil }
 
-    private var artistEnabled: Bool {
-        isOnlineTrack ? !track.artistName.isEmpty : matchingArtist != nil
-    }
     private var albumEnabled: Bool {
         isOnlineTrack ? !track.albumTitle.isEmpty : matchingAlbum != nil
     }
 
-    private func openArtist() {
-        if isOnlineTrack {
-            appState.showOnlineArtist(name: track.artistName, trackID: nil)
-        } else if let artist = matchingArtist {
-            appState.showArtist(artist)
+    /// One tappable target per individual artist on the track. A "feat." blob is
+    /// split into separate names so tapping a featured artist opens *their*
+    /// profile; each name resolves to a local artist when one exists, else to the
+    /// online (Discover) artist page by name.
+    private var artistTargets: [(name: String, action: () -> Void)] {
+        ImportService.splitArtists(from: track.artistName).map { name in
+            if !isOnlineTrack, let artist = library.artist(named: name) {
+                return (name, { appState.showArtist(artist) })
+            }
+            return (name, { appState.showOnlineArtist(name: name, trackID: nil) })
         }
     }
     /// Clicking the song title or album opens the album (local or Discover).
@@ -185,9 +187,7 @@ struct MacTrackInspector: View {
                                           font: .system(size: 14, weight: .semibold),
                                           lineLimit: 3) { openAlbum() }
 
-                        InspectorLinkLine(text: track.artistName,
-                                          color: Color.mixPrimary,
-                                          enabled: artistEnabled) { openArtist() }
+                        InspectorArtistLine(targets: artistTargets, color: Color.mixPrimary)
 
                         InspectorLinkLine(text: track.albumTitle,
                                           color: Color.mixTextSecondary,
@@ -392,6 +392,53 @@ private struct InspectorLinkLine: View {
                 .foregroundStyle(color)
                 .lineLimit(lineLimit)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+// MARK: - InspectorArtistLine
+//
+// Renders one or more individually-tappable artist names, comma-separated. A
+// single artist matches a lone InspectorLinkLine; multiple artists (a "feat."
+// blob) each become their own click-through target so the correct profile opens.
+
+private struct InspectorArtistLine: View {
+    let targets: [(name: String, action: () -> Void)]
+    let color:   Color
+
+    var body: some View {
+        if targets.count <= 1 {
+            InspectorLinkLine(text:    targets.first?.name ?? "",
+                              color:   color,
+                              enabled: targets.first != nil) {
+                targets.first?.action()
+            }
+        } else {
+            // Wrap to multiple lines when many features don't fit one row.
+            FlowArtistRow(targets: targets, color: color)
+        }
+    }
+}
+
+/// Comma-separated, wrapping row of tappable artist names.
+private struct FlowArtistRow: View {
+    let targets: [(name: String, action: () -> Void)]
+    let color:   Color
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(Array(targets.enumerated()), id: \.offset) { idx, item in
+                InspectorLinkLine(text: item.name, color: color, enabled: true) {
+                    item.action()
+                }
+                if idx < targets.count - 1 {
+                    Text(", ")
+                        .font(.system(size: 12))
+                        .foregroundStyle(color)
+                        .fixedSize()
+                }
+            }
+            Spacer(minLength: 0)
         }
     }
 }

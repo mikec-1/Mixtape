@@ -12,6 +12,7 @@ struct IOSDiscoverView: View {
     @EnvironmentObject private var deps:        AppDependencies
     @EnvironmentObject private var coordinator: OnlinePlaybackCoordinator
     @EnvironmentObject private var engine:      PlaybackEngine
+    @EnvironmentObject private var iosAppState:  IOSAppState
 
     @State private var query = ""
     @State private var results = DiscoverResults()
@@ -63,6 +64,18 @@ struct IOSDiscoverView: View {
         .onChange(of: query) { _, newValue in scheduleSearch(newValue) }
         .onAppear { loadBrowseIfNeeded() }
         .onDisappear { searchTask?.cancel() }
+        // Consume a cross-tab request to open an online artist by name (set when
+        // a featured/unmatched artist is tapped in the mini player / now-playing
+        // sheet / Home). Resolve the name to a Deezer artist and push its page.
+        .onChange(of: iosAppState.pendingDiscoverArtistName) { _, name in
+            guard let name else { return }
+            iosAppState.pendingDiscoverArtistName = nil
+            Task {
+                if let artist = await deps.itunesClient.resolveArtist(name: name, trackID: nil) {
+                    await MainActor.run { path.append(DiscoverDestination.artist(artist)) }
+                }
+            }
+        }
     }
 
     // MARK: - Content router
