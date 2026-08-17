@@ -48,3 +48,7 @@ Open `Mixtape.xcodeproj` in Xcode and build the **Mixtape** scheme. Dependencies
 ## Version
 
 Version 1.0 — the public macOS build, kept intentionally simple. An iPhone version is in the works.
+
+## Disclaimer
+This project was built with the help of AI tools such as Claude Code. I used them to expand my understanding of a few areas: building a combined iOS/macOS codebase, how Apple's audio engine works, and real backend/database work like syncing, importing, and file uploads. 
+This is the first personal project of mine that ties frontend, backend, and databases together in one full-stack build, and I wanted the hands-on experience of working across all of it myself. The design, direction, and architecture of the app are my own.
