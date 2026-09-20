@@ -15,9 +15,10 @@ public final class QueueSuggestionService: ObservableObject {
     // MARK: - Tuning
 
     /// Keep at least this many upcoming tracks queued ahead of the current one.
-    private let targetAhead = 10
+    /// A recommended run should feel like a station, not like three bonus songs.
+    private let targetAhead = 30
     /// Replenish once upcoming drops to this few.
-    private let lowWatermark = 5
+    private let lowWatermark = 10
 
     // MARK: - Dependencies
 
@@ -29,10 +30,6 @@ public final class QueueSuggestionService: ObservableObject {
 
     private var cancellables = Set<AnyCancellable>()
     private var isReplenishing = false
-    /// Online suggestions whose yt-dlp download is still in flight. Counted toward
-    /// the queue depth so we don't keep re-triggering (and spiralling) while they
-    /// land asynchronously.
-    private var inFlight = 0
 
     // MARK: - Init
 
@@ -70,36 +67,29 @@ public final class QueueSuggestionService: ObservableObject {
         }
     }
 
-    /// True when we should auto-fill: the user is playing songs that aren't a
-    /// curated user playlist (Songs / album / artist / All Songs / Favourites),
-    /// the queue is running low, and it isn't on repeat. Runs regardless of
-    /// shuffle so the queue always shows what plays next.
+    /// True when we should top the queue up with recommendations.
     ///
-    /// A *user* playlist shows its own tracks — no suggestions are added.
+    /// The rule is the one every other player uses: recommendations start where
+    /// the list the user chose *ends*. So this waits for the context lane to run
+    /// out entirely rather than firing at a low-water mark — a "Next up:
+    /// recommended songs" heading appearing while five songs of the playlist are
+    /// still queued is the app talking over the user.
+    ///
+    /// Shuffle doesn't suppress it: a shuffled playlist still reaches its end,
+    /// and the answer there is the same as the unshuffled one — keep the music
+    /// going with songs like it. Repeat does suppress it, because repeat is
+    /// already an answer to "what plays after the last song".
     private var shouldReplenish: Bool {
         guard !isReplenishing else { return false }
-        guard queue.currentTrack != nil else { return false }   // nothing playing
-        guard !isUserPlaylistSource else { return false }       // user playlists show their own tracks
-        guard queue.repeatMode == .off else { return false }    // repeat handles continuity
-        // Online Discover only auto-recommends when shuffle is on; with shuffle
-        // off the user plays the search results straight through.
-        if engine.hasOnlineContext && !queue.shuffleEnabled { return false }
+        guard let playing = queue.currentTrack else { return false }   // nothing playing
+        // The user cleared the queue while this song was playing: don't undo it.
+        guard queue.autoQueuePausedForID != playing.id else { return false }
+        guard queue.repeatMode == .off else { return false }     // repeat handles continuity
+        guard queue.remainingContextCount == 0 else { return false }  // the chosen list is still going
         return pendingDepth <= lowWatermark
     }
 
-    /// Upcoming tracks already queued plus online ones still downloading.
-    private var pendingDepth: Int { upcomingCount + inFlight }
-
-    /// Whether playback originated from a user-created playlist (as opposed to
-    /// the general library, an album, an artist, or the system playlists).
-    private var isUserPlaylistSource: Bool {
-        guard let id = queue.sourcePlaylistID else { return false }
-        return id != Playlist.allSongsID && id != Playlist.favouritesID
-    }
-
-    private var upcomingCount: Int {
-        max(0, queue.queue.count - 1 - queue.currentIndex)
-    }
+    private var pendingDepth: Int { queue.remainingRecommendationCount }
 
     // MARK: - Replenish
 
@@ -120,6 +110,9 @@ public final class QueueSuggestionService: ObservableObject {
         // local-library tracks don't fit the online navigation model.
         if engine.hasOnlineContext {
             let picks = Array(await deezerSuggestions(for: seed, excluding: seen).prefix(need))
+            // The search took time, and repeat may have been switched on
+            // while it ran.
+            guard queue.repeatMode == .off else { return }
             coordinator?.appendOnlineSuggestions(picks)
             return
         }
@@ -127,10 +120,11 @@ public final class QueueSuggestionService: ObservableObject {
         var localPool  = localSuggestions(for: seed, excluding: seen)
         var deezerPool = await deezerSuggestions(for: seed, excluding: seen)
 
-        // Pick `need` suggestions as a random local/Deezer mix. Locals are
-        // appended instantly; Deezer picks are collected and downloaded
-        // concurrently afterwards so a slow yt-dlp fetch never stalls the fill.
+        // Pick `need` suggestions as a random local/Deezer mix, then append
+        // each side in one go — a per-song append republishes the queue per
+        // song, which is what made a fill look like the queue reshuffling.
         var onlinePicks: [OnlineTrack] = []
+        var localPicks:  [Track]       = []
         var added = 0
         while added < need, !(localPool.isEmpty && deezerPool.isEmpty) {
             let pickDeezer = !deezerPool.isEmpty && (localPool.isEmpty || Bool.random())
@@ -141,22 +135,26 @@ public final class QueueSuggestionService: ObservableObject {
             } else {
                 let track = localPool.removeFirst()
                 guard seen.insert(Self.key(track)).inserted else { continue }
-                queue.append(track)          // instant
+                // The recommendation lane: nobody asked for this one, it is the
+                // top-up, and it sorts below both the user's own queued songs
+                // and whatever is left of the list they were playing.
+                localPicks.append(track)
             }
             added += 1
         }
 
-        // Download + append the Deezer picks concurrently in the background.
-        // `inFlight` keeps them counted toward queue depth until they land so we
-        // don't re-trigger and spiral while they download.
+        // The search took time; repeat may have been switched on while it ran.
+        guard queue.repeatMode == .off else { return }
+        if !localPicks.isEmpty { queue.append(contentsOf: localPicks, lane: .recommendation) }
+
+        // One append, not one per download. Each pick used to be downloaded
+        // first and appended as it landed, so the queue rewrote itself a dozen
+        // times over the following minute — the songs sitting after the current
+        // one kept changing under the user. A queued row needs no file (it is
+        // resolved when the queue reaches it), so they all land at once and stay
+        // put.
         guard let coordinator, !onlinePicks.isEmpty else { return }
-        inFlight += onlinePicks.count
-        for online in onlinePicks {
-            Task { [weak self] in
-                await coordinator.addToQueue(online)
-                self?.inFlight -= 1
-            }
-        }
+        await coordinator.addToQueue(onlinePicks, lane: .recommendation)
     }
 
     // MARK: - Local suggestions
@@ -190,14 +188,20 @@ public final class QueueSuggestionService: ObservableObject {
     // MARK: - Deezer suggestions
 
     private func deezerSuggestions(for seed: Track, excluding seen: Set<String>) async -> [OnlineTrack] {
-        let radio = await itunes.radioTracks(forArtist: seed.artistName, limit: 20)
+        let radio = await itunes.deepRadioTracks(forArtist: seed.artistName, limit: targetAhead + 20)
         return radio.filter { !seen.contains(Self.key(forTitle: $0.title, artist: $0.artistName)) }
                     .shuffled()
     }
 
     // MARK: - Dedup keys
 
-    private static func key(_ t: Track) -> String { key(forTitle: t.title, artist: t.artistName) }
+    // `identityTitle`, so a saved Discover song compares under the spelling the
+    // catalogue uses: the library row prints the feature credit, the suggestion
+    // coming back off the radio endpoint doesn't, and keying on the stored title
+    // made those two look like different songs — so a song already in the queue
+    // could be suggested straight back into it. An imported row has no key to
+    // check the bare spelling against, so it still compares as stored.
+    private static func key(_ t: Track) -> String { key(forTitle: t.identityTitle, artist: t.artistName) }
     private static func key(forTitle title: String, artist: String) -> String {
         "\(title.lowercased())|\(artist.lowercased())"
     }

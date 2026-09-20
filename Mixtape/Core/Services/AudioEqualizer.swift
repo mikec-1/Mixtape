@@ -58,22 +58,75 @@ public final class AudioEqualizer: ObservableObject {
     /// Allowed gain range per band, in dB.
     public static let gainRange: ClosedRange<Float> = -12...12
 
+    /// The account whose EQ settings are active. Set by the auth layer on
+    /// sign-in / account switch / sign-out so each account keeps its own EQ
+    /// instead of sharing one global curve. `nil` → a shared "guest" scope.
+    nonisolated(unsafe) public static var currentUserID: String? {
+        didSet {
+            guard oldValue != currentUserID else { return }
+            NotificationCenter.default.post(name: .mixEQAccountDidChange, object: nil)
+        }
+    }
+
     private enum Keys {
-        static let enabled = "mix.eq.enabled"
-        static let gains   = "mix.eq.gains"
-        static let preset  = "mix.eq.preset"
+        // Namespaced per account so switching users doesn't leak EQ settings.
+        private static var scope: String { AudioEqualizer.currentUserID ?? "guest" }
+        static var enabled: String { "mix.eq.\(scope).enabled" }
+        static var gains:   String { "mix.eq.\(scope).gains" }
+        static var preset:  String { "mix.eq.\(scope).preset" }
     }
 
     // MARK: - The live node (inserted into PlaybackEngine's graph)
 
-    /// The AVAudioUnitEQ node. Created once; PlaybackEngine attaches & connects it.
-    public let node: AVAudioUnitEQ
+    /// The AVAudioUnitEQ node. Created once, on first use; PlaybackEngine
+    /// attaches & connects it.
+    ///
+    /// Lazy because building it was 946 ms of a cold iOS launch — instantiating
+    /// an AVAudioUnit pulls in the audio component registry, and none of that is
+    /// needed until either something plays or the user opens the EQ. It is built
+    /// with the persisted curve already applied, so nothing has to remember to
+    /// push state into it afterwards.
+    public lazy var node: AVAudioUnitEQ = {
+        let eq = AVAudioUnitEQ(numberOfBands: Self.frequencies.count)
+        eq.globalGain = 0
+
+        // Each band is a parametric peaking filter centred on its frequency.
+        for (i, freq) in Self.frequencies.enumerated() {
+            let band = eq.bands[i]
+            band.filterType = .parametric
+            band.frequency  = freq
+            band.bandwidth  = 1.0           // octaves
+            band.bypass     = false
+            band.gain       = 0
+        }
+
+        eq.bypass = !isEnabled
+        for (i, gain) in gains.enumerated() where i < eq.bands.count {
+            eq.bands[i].gain = gain
+        }
+        nodeBuilt = true
+        return eq
+    }()
+
+    /// Whether `node` has actually been created.
+    ///
+    /// Every write to the node is guarded on this. Touching `node` to push a
+    /// value into it would build the very thing the laziness exists to defer —
+    /// and it would be pointless, because a node built later reads the current
+    /// `isEnabled` / `gains` on the way up.
+    private var nodeBuilt = false
+
+    /// Applies `body` to the node only if there is one.
+    private func withNode(_ body: (AVAudioUnitEQ) -> Void) {
+        guard nodeBuilt else { return }
+        body(node)
+    }
 
     // MARK: - Published State (UI binds to these)
 
     @Published public var isEnabled: Bool {
         didSet {
-            node.bypass = !isEnabled
+            withNode { $0.bypass = !isEnabled }
             UserDefaults.standard.set(isEnabled, forKey: Keys.enabled)
         }
     }
@@ -90,19 +143,6 @@ public final class AudioEqualizer: ObservableObject {
 
     public init() {
         let bandCount = Self.frequencies.count
-        let eq = AVAudioUnitEQ(numberOfBands: bandCount)
-        eq.globalGain = 0
-
-        // Configure each band as a parametric peaking filter centred on its frequency.
-        for (i, freq) in Self.frequencies.enumerated() {
-            let band = eq.bands[i]
-            band.filterType = .parametric
-            band.frequency  = freq
-            band.bandwidth  = 1.0           // octaves
-            band.bypass     = false
-            band.gain       = 0
-        }
-        self.node = eq
 
         // Restore persisted state.
         let defaults = UserDefaults.standard
@@ -124,10 +164,48 @@ public final class AudioEqualizer: ObservableObject {
         self.gains     = restoredGains
         self.preset    = storedPreset
 
-        // Apply restored state to the live node.
-        eq.bypass = !storedEnabled
-        for (i, gain) in restoredGains.enumerated() where i < eq.bands.count {
-            eq.bands[i].gain = gain
+        // The node applies this itself when it is built. See `node`.
+
+        // Reload this account's curve whenever the signed-in account changes.
+        accountObserver = NotificationCenter.default.addObserver(
+            forName: .mixEQAccountDidChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.reloadForCurrentAccount() }
+        }
+    }
+
+    private var accountObserver: NSObjectProtocol?
+
+    deinit {
+        if let accountObserver { NotificationCenter.default.removeObserver(accountObserver) }
+    }
+
+    /// Re-read the persisted EQ for the now-current account and apply it live.
+    public func reloadForCurrentAccount() {
+        let defaults = UserDefaults.standard
+        let bandCount = Self.frequencies.count
+
+        let storedEnabled = defaults.object(forKey: Keys.enabled) as? Bool ?? false
+        let storedPreset  = (defaults.string(forKey: Keys.preset)).flatMap(EqualizerPreset.init) ?? .flat
+
+        var restoredGains: [Float]
+        if let raw = defaults.array(forKey: Keys.gains) as? [Double], raw.count == bandCount {
+            restoredGains = raw.map { Float($0) }
+        } else if let presetGains = storedPreset.gains {
+            restoredGains = presetGains
+        } else {
+            restoredGains = Array(repeating: 0, count: bandCount)
+        }
+        restoredGains = restoredGains.map { min(max($0, Self.gainRange.lowerBound), Self.gainRange.upperBound) }
+
+        gains = restoredGains
+        preset = storedPreset
+        isEnabled = storedEnabled
+        withNode { eq in
+            eq.bypass = !storedEnabled
+            for (i, gain) in restoredGains.enumerated() where i < eq.bands.count {
+                eq.bands[i].gain = gain
+            }
         }
     }
 
@@ -138,7 +216,7 @@ public final class AudioEqualizer: ObservableObject {
         guard gains.indices.contains(index) else { return }
         let clamped = min(max(gain, Self.gainRange.lowerBound), Self.gainRange.upperBound)
         gains[index] = clamped
-        if index < node.bands.count { node.bands[index].gain = clamped }
+        withNode { if index < $0.bands.count { $0.bands[index].gain = clamped } }
         if preset != .custom { preset = .custom }
         persistGains()
     }
@@ -152,8 +230,10 @@ public final class AudioEqualizer: ObservableObject {
         }
         let clamped = presetGains.map { min(max($0, Self.gainRange.lowerBound), Self.gainRange.upperBound) }
         gains = clamped
-        for (i, gain) in clamped.enumerated() where i < node.bands.count {
-            node.bands[i].gain = gain
+        withNode { eq in
+            for (i, gain) in clamped.enumerated() where i < eq.bands.count {
+                eq.bands[i].gain = gain
+            }
         }
         self.preset = preset
         persistGains()
@@ -169,4 +249,9 @@ public final class AudioEqualizer: ObservableObject {
     private func persistGains() {
         UserDefaults.standard.set(gains.map { Double($0) }, forKey: Keys.gains)
     }
+}
+
+extension Notification.Name {
+    /// Posted when the signed-in account changes so per-account EQ can reload.
+    static let mixEQAccountDidChange = Notification.Name("mix.eq.accountDidChange")
 }
