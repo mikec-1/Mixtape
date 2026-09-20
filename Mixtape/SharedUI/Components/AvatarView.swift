@@ -48,7 +48,7 @@ public struct AvatarView: View {
         .frame(width: size, height: size)
         .clipShape(Circle())
         .overlay(Circle().stroke(Color.mixSeparator, lineWidth: 0.5))
-        .shadow(color: Color.mixPrimary.opacity(0.25), radius: size * 0.15, y: size * 0.06)
+        .mixShadow(color: Color.mixPrimary.opacity(0.25), radius: size * 0.15, y: size * 0.06)
     }
 
     private var monogram: some View {
@@ -59,7 +59,7 @@ public struct AvatarView: View {
         )
         .overlay(
             Text(initial)
-                .font(.system(size: size * 0.42, weight: .semibold, design: .rounded))
+                .font(.system(size: size * 0.42, weight: .semibold))
                 .foregroundStyle(.white)
         )
     }

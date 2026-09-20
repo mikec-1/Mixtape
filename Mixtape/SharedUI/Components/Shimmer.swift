@@ -11,27 +11,52 @@ import SwiftUI
 
 private struct Shimmer: ViewModifier {
     @State private var phase: CGFloat = -1
+    @Environment(\.mixMotion) private var motion
+    @ObservedObject private var visibility = AppVisibility.shared
 
+    /// The app's other forever-looping animation, and the more expensive one:
+    /// a skeleton screen wears it on every placeholder at once, each redrawing
+    /// a gradient every frame for as long as the load takes.
+    ///
+    /// Reduced motion drops the whole overlay rather than freezing it — a
+    /// stationary bright band across a grey box isn't a still shimmer, it's a
+    /// smear. The skeleton on its own already reads as "not here yet".
+    @ViewBuilder
     func body(content: Content) -> some View {
-        content
-            .overlay(
-                GeometryReader { geo in
-                    let width = geo.size.width
-                    LinearGradient(
-                        colors: [.clear, Color.white.opacity(0.18), .clear],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                    .frame(width: width * 0.6)
-                    .offset(x: phase * width * 1.6)
-                }
-            )
-            .clipped()
-            .onAppear {
-                withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) {
-                    phase = 1
-                }
-            }
+        if motion.isReduced {
+            content
+        } else {
+            content
+                .overlay(
+                    GeometryReader { geo in
+                        let width = geo.size.width
+                        LinearGradient(
+                            colors: [.clear, Color.white.opacity(0.18), .clear],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                        .frame(width: width * 0.6)
+                        .offset(x: phase * width * 1.6)
+                    }
+                )
+                .clipped()
+                .onAppear { sweep() }
+                // A skeleton left behind when the app is backgrounded kept
+                // redrawing its gradient every frame — see `AppVisibility`.
+                .onChange(of: visibility.isForeground) { _, _ in sweep() }
+        }
+    }
+}
+
+private extension Shimmer {
+    func sweep() {
+        guard visibility.isForeground else {
+            withMixAnimation(nil) { phase = -1 }
+            return
+        }
+        withMixAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) {
+            phase = 1
+        }
     }
 }
 
