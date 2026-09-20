@@ -993,14 +993,13 @@ public struct HomeSections: View {
     }
 
     @ViewBuilder
+    /// "Open Artist" isn't here: clicking the tile already does that, and it was
+    /// the reason this menu never grew the seven items every other artist row
+    /// now has. An artist off a track credit has no library row, so the shelf
+    /// hands over the remote image it drew the tile with.
     private func artistMenu(_ artist: HomeArtist) -> some View {
-        Button("Open Artist", systemImage: MixtapeIcons.artist) { onArtist(artist.name) }
-        let tracks = library.tracks.filter {
-            $0.artistName.localizedCaseInsensitiveCompare(artist.name) == .orderedSame
-        }
-        if let first = tracks.first {
-            Button("Play", systemImage: MixtapeIcons.play) { onPlay(first, tracks, artist.name) }
-        }
+        ArtistActionsMenu(name: artist.name,
+                          artwork: .stored(artist.artworkData, artist.artworkRef))
     }
 
     // MARK: Empty state

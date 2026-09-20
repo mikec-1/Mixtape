@@ -187,15 +187,7 @@ private struct MacArtistCard: View {
         .onHover { hovering in
             withMixAnimation(.easeOut(duration: 0.12)) { isHovered = hovering }
         }
-        .contextMenu {
-            Button("Play Artist") {
-                guard let first = artistTracks.first else { return }
-                Task { await engine.play(track: first, in: artistTracks, source: .named(artist.name)) }
-            }
-            Button("Add to Queue") {
-                artistTracks.forEach { engine.queue.append($0) }
-            }
-        }
+        .contextMenu { ArtistActionsMenu(name: artist.name) }
     }
 
     private var avatar: some View {
@@ -356,6 +348,22 @@ private struct MacArtistDetailPanel: View {
                         .controlSize(.regular)
                         .disabled(artistTracks.isEmpty)
 
+                        // The same overflow the artist page gets on iPhone.
+                        // Without it this panel could play an artist and
+                        // nothing else — not queue one, not download one.
+                        Menu {
+                            ArtistActionsMenu(name: artist.name)
+                        } label: {
+                            Image(systemName: "ellipsis")
+                                .font(.system(size: 12, weight: .semibold))
+                        }
+                        .menuStyle(.button)
+                        .buttonStyle(.bordered).mixHandCursor()
+                        .menuIndicator(.hidden)
+                        .controlSize(.regular)
+                        // Horizontal only — an unbounded vertical fixedSize in
+                        // a split view is what drives the constraint crash.
+                        .fixedSize(horizontal: true, vertical: false)
                     }
                     .padding(.top, 6)
                     .padding(.bottom, 20)

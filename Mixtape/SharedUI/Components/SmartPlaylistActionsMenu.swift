@@ -41,10 +41,22 @@ struct SmartPlaylistActionsMenu: View {
         Divider()
 
         Button {
+            // Reversed, so each insert lands after the one before it and the
+            // rule's order survives into the queue.
+            for song in tracks().reversed() { deps.playbackEngine.queue.insertNext(song) }
+        } label: {
+            Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward")
+        }
+
+        Button {
             deps.onlineCoordinator.addToQueue(localTracks: tracks())
         } label: {
             Label("Add to Queue", systemImage: "text.append")
         }
+
+        Divider()
+
+        BulkDownloadMenuItems(tracks: tracks(), downloads: deps.downloadManager)
 
         Divider()
 

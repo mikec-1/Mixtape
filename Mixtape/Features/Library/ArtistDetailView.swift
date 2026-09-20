@@ -111,6 +111,20 @@ public struct ArtistDetailView: View {
                 onShuffle: { shufflePrefs.toggle(shuffleKey) }
             ) {
                 ShareHeroButton(.artist(artist))
+
+                // The overflow the album and playlist pages already had. This
+                // was the only detail page you couldn't queue or download from.
+                Menu { ArtistActionsMenu(name: artist.name) } label: {
+                    HeroCircleLabel(systemImage: "ellipsis")
+                }
+                #if os(macOS)
+                // Left alone a Menu draws itself as a bordered pop-up button
+                // with a chevron — the wrong shape next to a circle.
+                .menuStyle(.button)
+                .buttonStyle(.plain).mixHandCursor()
+                .menuIndicator(.hidden)
+                #endif
+                .frame(width: 40, height: 40)
             }
         }
     }

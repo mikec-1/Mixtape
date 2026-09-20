@@ -654,6 +654,8 @@ public struct SearchView: View {
             Spacer()
         }
         .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .contextMenu { AlbumActionsMenu(album: album) }
     }
 
     private func artistRow(_ artist: Artist) -> some View {
@@ -674,6 +676,8 @@ public struct SearchView: View {
             Spacer()
         }
         .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .contextMenu { ArtistActionsMenu(name: artist.name) }
     }
 
     // MARK: - History (focused, nothing typed)
