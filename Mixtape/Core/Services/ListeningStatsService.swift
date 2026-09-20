@@ -4,7 +4,7 @@
 // Pure read-side aggregation over the persistent play history ("Year in
 // Mixtape"). No new schema, no writes — it joins PlayHistory play events
 // against the in-memory library to produce top tracks/artists, estimated
-// minutes, listening streaks and a by-hour distribution.
+// minutes and a by-hour distribution.
 
 import Foundation
 
@@ -60,14 +60,13 @@ public struct ListeningStats: Sendable {
     public let estimatedMinutes: Int
     public let topTracks: [TrackStat]
     public let topArtists: [ArtistStat]
-    public let currentStreakDays: Int
     public let busiestHour: Int?            // 0...23
     public let playsByHour: [Int]           // 24 buckets
     public let firstPlay: Date?
 
     public static let empty = ListeningStats(
         period: .allTime, totalPlays: 0, uniqueTracks: 0, estimatedMinutes: 0,
-        topTracks: [], topArtists: [], currentStreakDays: 0,
+        topTracks: [], topArtists: [],
         busiestHour: nil, playsByHour: Array(repeating: 0, count: 24), firstPlay: nil
     )
 
@@ -84,6 +83,11 @@ public final class ListeningStatsService {
     private let snapshots: PlayedTrackSnapshotRepository?
     private let calendar: Calendar
 
+    /// Wipes the account's play history on the server too. Set by
+    /// `AppDependencies` once the sync service exists — without it, a reset is
+    /// undone the next time another device pushes the plays it still holds.
+    public var remoteWipe: (() -> Void)?
+
     public init(history: PlayHistoryRepository, library: LibraryService,
                 snapshots: PlayedTrackSnapshotRepository? = nil, calendar: Calendar = .current) {
         self.history = history
@@ -92,27 +96,62 @@ public final class ListeningStatsService {
         self.calendar = calendar
     }
 
+    /// Erases everything the stats are computed from: the play log, and the
+    /// snapshots of played tracks that never lived in the library.
+    ///
+    /// Deleting your music does NOT do this, and shouldn't — history is a record
+    /// of what you listened to, not of what you own, and re-importing a song
+    /// should not resurrect zeroed play counts. But it does mean a wiped library
+    /// can still report top artists, which is only ever what someone wants when
+    /// they asked for it explicitly.
+    public func resetHistory() {
+        do { try history.deleteAll() } catch {
+            print("[ListeningStats] history wipe failed: \(error)")
+        }
+        remoteWipe?()
+        do { try snapshots?.deleteAll() } catch {
+            print("[ListeningStats] snapshot wipe failed: \(error)")
+        }
+    }
+
     public func compute(period: StatsPeriod, now: Date = Date()) -> ListeningStats {
-        let plays = (try? history.fetchAllPlays(since: period.startDate(now: now, calendar: calendar))) ?? []
+        mixMainActivity("stats-compute") { computeBody(period: period, now: now) }
+    }
+
+    private func computeBody(period: StatsPeriod, now: Date) -> ListeningStats {
+        // Two SwiftData fetches and then pure in-memory work, spanned apart
+        // because the cost is lopsided in a way the total hides: one call in
+        // seven measured 746 ms and the rest were single digits. That is the
+        // shape of a cold fetch, not of the loops below — and `library.track(id:)`
+        // is already an O(1) index lookup, so the loops were never the suspect
+        // they look like.
+        let plays = mixMainActivity("stats-compute ▸ fetch-plays") {
+            (try? history.fetchAllPlays(since: period.startDate(now: now, calendar: calendar))) ?? []
+        }
         guard !plays.isEmpty else { return ListeningStats.empty }
 
         // Resolve a play's track against the library first, then the online-track
         // snapshot store — so Discover plays count toward stats too.
-        let snapshotMap = (try? snapshots?.fetchAll()) ?? [:]
+        let snapshotMap = mixMainActivity("stats-compute ▸ fetch-snapshots") {
+            (try? snapshots?.fetchAll()) ?? [:]
+        }
         func resolve(_ id: UUID) -> Track? { library.track(id: id) ?? snapshotMap[id] }
 
         // Per-track play counts
         var countByTrack: [UUID: Int] = [:]
         var playsByHour = Array(repeating: 0, count: 24)
-        var dayKeys: Set<Date> = []
         var estimatedSeconds: TimeInterval = 0
 
         for play in plays {
             countByTrack[play.trackID, default: 0] += 1
             let hour = calendar.component(.hour, from: play.playedAt)
             if hour >= 0 && hour < 24 { playsByHour[hour] += 1 }
-            dayKeys.insert(calendar.startOfDay(for: play.playedAt))
-            if let track = resolve(play.trackID) {
+            // The real listen when the play recorded one; rows written before
+            // the engine reported it, and plays the app never finalised, fall
+            // back to the track's full length.
+            if play.secondsPlayed > 0 {
+                estimatedSeconds += play.secondsPlayed
+            } else if let track = resolve(play.trackID) {
                 estimatedSeconds += track.duration
             }
         }
@@ -128,20 +167,32 @@ public final class ListeningStatsService {
             .map { $0 }
 
         // Top artists (group resolved tracks by artist name)
-        var artistCount: [String: (name: String, count: Int, art: Data?)] = [:]
+        // The cover is carried as a track id rather than bytes: this loop runs
+        // over every song ever played, and only ten of them end up on screen.
+        var artistCount: [String: (name: String, count: Int, cover: UUID?)] = [:]
+        // Each credited artist counted separately: "Dave, Stormzy" is two
+        // artists, and bucketing it whole both hid them from the stats and fed
+        // the recommendation seeds a name no catalogue can resolve.
         for (id, count) in countByTrack {
             guard let track = resolve(id) else { continue }
-            let key = track.artistName.lowercased()
-            var entry = artistCount[key] ?? (track.artistName, 0, track.artworkData)
-            entry.count += count
-            if entry.art == nil { entry.art = track.artworkData }
-            artistCount[key] = entry
+            for name in ImportService.creditedArtists(from: track.artistName) {
+                let key = name.lowercased()
+                var entry = artistCount[key] ?? (name, 0, nil)
+                entry.count += count
+                if entry.cover == nil { entry.cover = track.id }
+                artistCount[key] = entry
+            }
         }
         let topArtists: [ArtistStat] = artistCount
-            .map { ArtistStat(id: $0.key, name: $0.value.name, playCount: $0.value.count, artworkData: $0.value.art) }
-            .sorted { $0.playCount > $1.playCount }
+            .sorted { $0.value.count > $1.value.count }
             .prefix(10)
-            .map { $0 }
+            .map { entry in
+                ArtistStat(id: entry.key,
+                           name: entry.value.name,
+                           playCount: entry.value.count,
+                           artworkData: entry.value.cover
+                               .flatMap { ArtworkProvider.shared.data(for: .track($0)) })
+            }
 
         let busiestHour = playsByHour.enumerated().max(by: { $0.element < $1.element })
             .flatMap { $0.element > 0 ? $0.offset : nil }
@@ -153,32 +204,9 @@ public final class ListeningStatsService {
             estimatedMinutes: Int(estimatedSeconds / 60),
             topTracks: topTracks,
             topArtists: topArtists,
-            currentStreakDays: currentStreak(dayKeys: dayKeys, now: now),
             busiestHour: busiestHour,
             playsByHour: playsByHour,
             firstPlay: plays.last?.playedAt   // plays sorted newest-first
         )
-    }
-
-    /// Consecutive days (counting back from today) that have at least one play.
-    /// Today with no plays yet doesn't break a streak that's current as of
-    /// yesterday.
-    private func currentStreak(dayKeys: Set<Date>, now: Date) -> Int {
-        guard !dayKeys.isEmpty else { return 0 }
-        let today = calendar.startOfDay(for: now)
-        var cursor = today
-        // If nothing played today, allow the streak to anchor on yesterday.
-        if !dayKeys.contains(today) {
-            guard let yesterday = calendar.date(byAdding: .day, value: -1, to: today),
-                  dayKeys.contains(yesterday) else { return 0 }
-            cursor = yesterday
-        }
-        var streak = 0
-        while dayKeys.contains(cursor) {
-            streak += 1
-            guard let prev = calendar.date(byAdding: .day, value: -1, to: cursor) else { break }
-            cursor = prev
-        }
-        return streak
     }
 }
