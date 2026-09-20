@@ -11,12 +11,12 @@ import SwiftData
 @MainActor
 public final class PlayedTrackSnapshotRepository {
 
-    private let context: ModelContext
+    /// Never stored: the context belongs to whichever account's store is open
+    /// right now. See `ModelStore`.
+    private var context: ModelContext { ModelStore.shared.context }
     private let limit = 2_000
 
-    public init(context: ModelContext) {
-        self.context = context
-    }
+    public init() {}
 
     /// Insert or update the snapshot for `track`, keyed by its (stable) id.
     public func upsert(_ track: Track) throws {
@@ -56,6 +56,37 @@ public final class PlayedTrackSnapshotRepository {
         return map
     }
 
+    /// Drops the snapshot for one id.
+    ///
+    /// A Discover song the user deletes has to lose this too: the snapshot is
+    /// what "Recently played" resolves against after a relaunch, so leaving it
+    /// behind brings the deleted song back on the next launch.
+    public func delete(id: UUID) throws {
+        try delete(ids: [id])
+    }
+
+    /// One fetch for a whole selection: a bulk library delete calls this once
+    /// per song otherwise.
+    public func delete(ids: Set<UUID>) throws {
+        guard !ids.isEmpty else { return }
+        var deleted = false
+        for row in try context.fetch(FetchDescriptor<PlayedTrackSnapshotEntity>())
+        where ids.contains(row.id) {
+            context.delete(row)
+            deleted = true
+        }
+        guard deleted else { return }
+        try context.save()
+    }
+
+    /// Drops every snapshot. These outlive the library on purpose — a Discover
+    /// track never had a TrackEntity to delete — which is exactly why wiping the
+    /// library alone leaves stats resolving names that aren't in it any more.
+    public func deleteAll() throws {
+        try context.delete(model: PlayedTrackSnapshotEntity.self)
+        try context.save()
+    }
+
     private func pruneIfNeeded() throws {
         var desc = FetchDescriptor<PlayedTrackSnapshotEntity>(
             sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
@@ -68,11 +99,13 @@ public final class PlayedTrackSnapshotRepository {
 }
 
 extension PlayedTrackSnapshotEntity {
-    /// Reconstruct a display/replayable `Track`. Empty localPath + nil remoteKey
-    /// keep it classified as a standalone online track (see
-    /// OnlinePlaybackCoordinator.isStandaloneOnline).
+    /// Reconstruct a display/replayable `Track`. A history snapshot only ever
+    /// exists for a Discover play, so the row is `.online` and carries the key
+    /// that resolves it again.
     func asTrack(deviceID: String) -> Track {
-        Track(
+        var provenance = FileProvenance.onlinePlaceholder(sourceRef: sourceKey)
+        provenance.fileHash = sourceKey
+        return Track(
             id: id,
             title: title,
             artistName: artistName,
@@ -80,7 +113,7 @@ extension PlayedTrackSnapshotEntity {
             duration: duration,
             artworkData: artworkData,
             sync: SyncMetadata(deviceID: deviceID),
-            file: FileProvenance(fileHash: sourceKey, fileSize: 0, localPath: "")
+            file: provenance
         )
     }
 }

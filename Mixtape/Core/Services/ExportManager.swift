@@ -6,6 +6,7 @@
 // ID3TagWriter (below) is kept in this file to avoid needing a separate Xcode target entry.
 
 import Foundation
+import OSLog
 import Combine
 
 // MARK: - ID3TagWriter
@@ -163,6 +164,26 @@ public final class ExportManager: ObservableObject {
         return false
     }
 
+    /// The account that chose `MixtapeLastGlobalExportPath` — the welcome prompt
+    /// offers that folder to the *next* account, so it has to name the previous one.
+    public var globalExportPathOwner: String? {
+        if let name = UserDefaults.standard.string(forKey: "MixtapeLastGlobalExportOwner"), !name.isEmpty {
+            return name
+        }
+        // Chosen before the owner was recorded: the per-account subfolders say
+        // whose it was, when there is exactly one that isn't the current account.
+        guard let path = UserDefaults.standard.string(forKey: "MixtapeLastGlobalExportPath"),
+              let names = try? FileManager.default.contentsOfDirectory(atPath: path) else { return nil }
+        let mine = currentUsername.map(sanitizeFileName)
+        let others = names.filter { name in
+            var isDir: ObjCBool = false
+            return !name.hasPrefix(".") && name != mine
+                && FileManager.default.fileExists(atPath: (path as NSString).appendingPathComponent(name), isDirectory: &isDir)
+                && isDir.boolValue
+        }
+        return others.count == 1 ? others[0] : nil
+    }
+
     private var syncMetadataToDiskKey: String {
         if let id = currentUserID {
             return "mix.syncMetadataToDisk_\(id)"
@@ -264,6 +285,7 @@ public final class ExportManager: ObservableObject {
 
         // Save globally as the last selected location for account switching suggestion
         UserDefaults.standard.set(url.path, forKey: "MixtapeLastGlobalExportPath")
+        UserDefaults.standard.set(currentUsername, forKey: "MixtapeLastGlobalExportOwner")
 
         // Always persist the plain path as a fallback so resolveExportURL() never
         // returns nil just because the security-scoped bookmark failed or went stale.
@@ -362,14 +384,31 @@ public final class ExportManager: ObservableObject {
     
     // MARK: - Export
 
-    /// Exports a track's audio file to the chosen export directory and writes
-    /// ID3v2.3 metadata (title, artist, album, artwork, year) into the copy.
+    /// Exports a track's audio to the chosen export directory, at `quality`, with
+    /// its metadata (title, artist, album, artwork, year) written into the copy.
     ///
     /// - Parameter from: Optional explicit source URL. When omitted the source is
     ///   derived from `track.file.localPath` inside the app's Documents folder.
     ///   Pass the URL returned by `SupabaseFileStorageService.download(track:)` when
     ///   you have just fetched the file and the track's `localPath` isn't updated yet.
-    public func export(track: Track, from explicitSource: URL? = nil) throws {
+    /// - Parameter quality: The Downloads setting. `.high` copies the bytes as they
+    ///   arrived; `.normal`/`.low` re-encode to AAC at 96/64 kbps.
+    ///
+    /// What this deliberately no longer does is transcode every non-MP3 source to
+    /// MP3. That was here to get artwork and titles showing in Finder, and it
+    /// worked — at the cost of a lossy re-encode on every single Discover song,
+    /// including when the user had asked for High. `MP4MetadataWriter` gets the
+    /// same result by rewriting the container's metadata atoms instead.
+    public func export(track: Track,
+                       from explicitSource: URL? = nil,
+                       quality: DownloadQuality = .high) async throws {
+        let signpost = MixSignpost.exporting.beginInterval("export-track",
+                                                           id: MixSignpost.exporting.makeSignpostID())
+        let started = CFAbsoluteTimeGetCurrent()
+        defer {
+            MixSignpost.exporting.endInterval("export-track", signpost)
+            MixLog.exporting.info("export-track \(Int((CFAbsoluteTimeGetCurrent() - started) * 1000), privacy: .public) ms")
+        }
         // Prefer the already-resolved in-memory URL; fall back to re-resolving from
         // UserDefaults (handles cases where exportURL wasn't set in this process).
         let destDir: URL
@@ -435,8 +474,7 @@ public final class ExportManager: ObservableObject {
                 throw NSError(domain: "ExportManager", code: 2,
                     userInfo: [NSLocalizedDescriptionKey: "Track file not downloaded locally yet."])
             }
-            let pathURL = URL.documentsDirectory.appending(path: track.file.localPath)
-            guard FileManager.default.fileExists(atPath: pathURL.path) else {
+            guard let pathURL = AudioPaths.resolve(localPath: track.file.localPath) else {
                 throw NSError(domain: "ExportManager", code: 2,
                     userInfo: [NSLocalizedDescriptionKey: "Track file not downloaded locally yet."])
             }
@@ -444,19 +482,14 @@ public final class ExportManager: ObservableObject {
         }
 
         let sourceExt    = sourceURL.pathExtension.isEmpty ? "mp3" : sourceURL.pathExtension
-        let isMP3        = sourceExt.lowercased() == "mp3"
         let safeTitle    = sanitizeFileName(track.title)
         let safeArtist   = sanitizeFileName(track.artistName)
         let baseName     = "\(safeArtist) - \(safeTitle)"
 
-        // ID3 tags are an MP3-container construct: writing one onto an .m4a/AAC file
-        // doesn't surface metadata/artwork in Finder and can corrupt the file. So for
-        // non-mp3 sources (e.g. yt-dlp .m4a) we transcode to a real .mp3 when ffmpeg is
-        // available, then embed the ID3 tag. Already-mp3 sources are copied verbatim to
-        // avoid a needless re-encode (and the quality loss it would cause).
-        let ffmpeg       = isMP3 ? nil : Self.locateFFmpeg()
-        let willTranscode = !isMP3 && ffmpeg != nil
-        let outExt       = willTranscode ? "mp3" : sourceExt
+        // Re-encoding is what the lower two settings *are*, so it follows the
+        // setting and nothing else. High keeps the container it arrived in.
+        let willReencode = quality.bitRate != nil
+        let outExt       = willReencode ? "m4a" : sourceExt
 
         // Avoid silently overwriting an existing export; append a counter instead.
         var destinationURL = finalDestDir.appendingPathComponent("\(baseName).\(outExt)")
@@ -466,29 +499,29 @@ public final class ExportManager: ObservableObject {
             counter += 1
         }
 
-        if let ffmpeg, willTranscode {
-            // Transcode source → real MP3 so Finder shows embedded artwork/metadata.
-            try Self.runProcess(ffmpeg, [
-                "-y",
-                "-i", sourceURL.path,
-                "-vn",
-                "-c:a", "libmp3lame",
-                "-q:a", "2",
-                destinationURL.path,
-            ])
+        if willReencode {
+            do {
+                try await AudioTranscoder.transcode(sourceURL, to: destinationURL, quality: quality)
+            } catch {
+                // A failed re-encode means "file the original", not "the save
+                // failed" — the user asked for a copy of their song, and a
+                // bigger copy is a far better answer than none.
+                try? FileManager.default.removeItem(at: destinationURL)
+                destinationURL = finalDestDir.appendingPathComponent("\(baseName).\(sourceExt)")
+                var retry = 2
+                while FileManager.default.fileExists(atPath: destinationURL.path) {
+                    destinationURL = finalDestDir.appendingPathComponent("\(baseName) (\(retry)).\(sourceExt)")
+                    retry += 1
+                }
+                try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
+            }
         } else {
-            // Either already mp3, or ffmpeg is unavailable — copy verbatim so saving
-            // still works. (In the ffmpeg-missing case the file won't be mp3.)
             try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
         }
 
-        // Write ID3v2.3 metadata into the exported copy — but ONLY when the output
-        // is a real MP3. ID3 is an MP3-container construct; prepending a tag onto an
-        // .m4a/AAC file pushes bytes in front of the MP4 `ftyp` atom and corrupts it,
-        // so ExtAudioFile/AVAudioFile then fail to open it (kAudioFileInvalidFileError).
-        // On iOS there's no ffmpeg, so non-mp3 sources are copied verbatim (.m4a) and
-        // must be left untouched. Errors here are non-fatal — the file is already saved.
-        if willTranscode || isMP3 {
+        // Metadata, by container. Errors are non-fatal — the audio is already
+        // saved, and a copy with no cover art still beats no copy.
+        if destinationURL.pathExtension.lowercased() == "mp3" {
             try? ID3TagWriter.write(
                 to:          destinationURL,
                 title:       track.title,
@@ -499,10 +532,60 @@ public final class ExportManager: ObservableObject {
                 genre:       track.genre,
                 artworkData: track.artworkData
             )
+        } else if MP4MetadataWriter.supports(destinationURL) {
+            try? await MP4MetadataWriter.write(track, to: destinationURL)
+        } else {
+            // FLAC/Opus/WAV imports kept at High keep their original container,
+            // and there's no tagger here for those. The copy is correct audio
+            // with whatever tags it already carried.
+            print("[Export] No tagger for .\(destinationURL.pathExtension.lowercased()) — copied without rewriting metadata")
         }
+
+        rememberExport(destinationURL, for: track.id)
+    }
+
+    // MARK: - Export index
+
+    /// Where each track's file copy actually went, keyed by track id.
+    ///
+    /// `exportedURL` used to reconstruct this by guessing: rebuild the filename
+    /// from the current title and artist, guess the extension, then try ten
+    /// numbered variants of each. It got the answer wrong in every case the
+    /// guess didn't hold — a renamed song, a file the user renamed themselves,
+    /// an eleventh duplicate — and "wrong" here means the app believes a copy
+    /// it did make doesn't exist. Writing down the path at the moment we choose
+    /// it costs one dictionary entry and is simply correct.
+    private static let exportIndexKey = "mix.exportedPaths"
+
+    private var exportIndex: [String: String] {
+        get { UserDefaults.standard.dictionary(forKey: Self.exportIndexKey) as? [String: String] ?? [:] }
+        set { UserDefaults.standard.set(newValue, forKey: Self.exportIndexKey) }
+    }
+
+    private func rememberExport(_ url: URL, for trackID: UUID) {
+        var index = exportIndex
+        index[trackID.uuidString] = url.path
+        exportIndex = index
+    }
+
+    private func forgetExport(for trackID: UUID) {
+        var index = exportIndex
+        index.removeValue(forKey: trackID.uuidString)
+        exportIndex = index
     }
 
     public func exportedURL(for track: Track) -> URL? {
+        // The recorded path first. A miss falls through to the probe below,
+        // which is what finds copies exported before this index existed.
+        if let path = exportIndex[track.id.uuidString] {
+            if FileManager.default.fileExists(atPath: path) {
+                return URL(fileURLWithPath: path)
+            }
+            // Recorded but gone — the user deleted or moved it. Drop the entry
+            // so it stops being consulted.
+            forgetExport(for: track.id)
+        }
+
         let destDir: URL
         if let existing = exportURL {
             destDir = existing
@@ -521,11 +604,16 @@ public final class ExportManager: ObservableObject {
             finalDestDir = destDir.appendingPathComponent(sanitizedUsername, isDirectory: true)
         }
 
-        let extensions: [String]
+        // Candidate extensions: the source's own extension first, but ALWAYS
+        // also mp3 and m4a — export() transcodes non-mp3 sources to .mp3 on
+        // macOS, so an .m4a-sourced track's exported copy is a .mp3 and a
+        // remoteKey-only lookup would never find it.
+        var extensions: [String] = []
         if let remoteKey = track.file.remoteKey, !remoteKey.isEmpty {
-            extensions = [URL(fileURLWithPath: remoteKey).pathExtension.lowercased()]
-        } else {
-            extensions = ["m4a", "mp3"]
+            extensions.append(URL(fileURLWithPath: remoteKey).pathExtension.lowercased())
+        }
+        for fallback in ["mp3", "m4a"] where !extensions.contains(fallback) {
+            extensions.append(fallback)
         }
         
         let safeTitle = sanitizeFileName(track.title)
@@ -564,6 +652,7 @@ public final class ExportManager: ObservableObject {
             defer { if startAccess { destDir.stopAccessingSecurityScopedResource() } }
 
             try? FileManager.default.removeItem(at: fileURL)
+            forgetExport(for: track.id)
         }
     }
 
@@ -586,13 +675,23 @@ public final class ExportManager: ObservableObject {
             finalDestDir = destDir.appendingPathComponent(sanitizedUsername, isDirectory: true)
         }
 
-        let ext = track.file.remoteKey.flatMap { URL(fileURLWithPath: $0).pathExtension.lowercased() } ?? "mp3"
+        // Probe the same extension candidates as exportedURL — the exported copy
+        // may be a transcoded .mp3 even when the source/remoteKey is .m4a.
+        var candidateExts: [String] = []
+        if let key = track.file.remoteKey, !key.isEmpty {
+            candidateExts.append(URL(fileURLWithPath: key).pathExtension.lowercased())
+        }
+        for fallback in ["mp3", "m4a"] where !candidateExts.contains(fallback) {
+            candidateExts.append(fallback)
+        }
         let safeOldTitle = sanitizeFileName(oldTitle)
         let safeOldArtist = sanitizeFileName(oldArtist)
         let oldBaseName = "\(safeOldArtist) - \(safeOldTitle)"
-        let oldFileURL = finalDestDir.appendingPathComponent("\(oldBaseName).\(ext)")
 
-        guard FileManager.default.fileExists(atPath: oldFileURL.path) else { return }
+        guard let (oldFileURL, ext) = candidateExts
+            .map({ (finalDestDir.appendingPathComponent("\(oldBaseName).\($0)"), $0) })
+            .first(where: { FileManager.default.fileExists(atPath: $0.0.path) })
+        else { return }
 
         let safeNewTitle = sanitizeFileName(track.title)
         let safeNewArtist = sanitizeFileName(track.artistName)
@@ -612,92 +711,32 @@ public final class ExportManager: ObservableObject {
             if newFileURL.path != oldFileURL.path {
                 try FileManager.default.moveItem(at: oldFileURL, to: newFileURL)
             }
+            // The rename is exactly the case the old filename-guessing lookup
+            // got wrong, so the index has to learn the new path.
+            rememberExport(newFileURL, for: track.id)
 
-            try ID3TagWriter.write(
-                to:          newFileURL,
-                title:       track.title,
-                artist:      track.artistName,
-                album:       track.albumTitle,
-                trackNumber: track.trackNumber,
-                year:        track.year,
-                genre:       track.genre,
-                artworkData: track.artworkData
-            )
+            // ID3 is an MP3-container construct — prepending a tag onto an
+            // .m4a pushes bytes ahead of the MP4 `ftyp` atom and corrupts it
+            // (see export()). Only rewrite tags for real MP3s; other formats
+            // just get the rename above.
+            if ext == "mp3" {
+                try ID3TagWriter.write(
+                    to:          newFileURL,
+                    title:       track.title,
+                    artist:      track.artistName,
+                    album:       track.albumTitle,
+                    trackNumber: track.trackNumber,
+                    year:        track.year,
+                    genre:       track.genre,
+                    artworkData: track.artworkData
+                )
+            }
         } catch {
             print("[ExportManager] Failed to update file metadata on disk: \(error)")
         }
     }
 
     // MARK: - Private helpers
-
-    /// Locates an `ffmpeg` binary for transcoding non-mp3 exports to real MP3.
-    /// Mirrors YTDLPService's discovery order (which we deliberately don't depend on,
-    /// since its `locate(_:)` is private): bundled binary in the .app first, then
-    /// the usual Homebrew/system install paths. Returns nil if none is found.
-    private static func locateFFmpeg() -> URL? {
-        #if !os(macOS)
-        // ffmpeg transcoding shells out via Process, which exists only on macOS.
-        // The macOS ffmpeg binary is also bundled into the iOS app (shared
-        // Resources/bin folder reference) but is the wrong architecture and can't
-        // run there, so always report "no ffmpeg" on iOS — callers then copy the
-        // source verbatim instead of attempting an impossible transcode.
-        return nil
-        #else
-        if let bundled = Bundle.main.url(forResource: "ffmpeg", withExtension: nil) {
-            ensureExecutable(bundled)
-            return bundled
-        }
-        if let bundledBin = Bundle.main.url(forResource: "ffmpeg", withExtension: nil, subdirectory: "bin") {
-            ensureExecutable(bundledBin)
-            return bundledBin
-        }
-        for path in ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"] {
-            if FileManager.default.isExecutableFile(atPath: path) {
-                return URL(fileURLWithPath: path)
-            }
-        }
-        return nil
-        #endif
-    }
-
-    private static func ensureExecutable(_ url: URL) {
-        if !FileManager.default.isExecutableFile(atPath: url.path) {
-            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
-        }
-    }
-
-    /// Runs `executable` with `args` synchronously, capturing stderr. Throws an
-    /// NSError carrying the stderr text on a non-zero exit. Used for the ffmpeg
-    /// transcode in `export(track:from:)`, which is itself a throwing sync call.
-    private static func runProcess(_ executable: URL, _ args: [String]) throws {
-        // ffmpeg transcode shells out via Process, which exists only on macOS. On
-        // iOS locateFFmpeg() returns nil so willTranscode is false and this is
-        // never called — but it must still compile, hence the guard.
-        #if os(macOS)
-        let process = Process()
-        process.executableURL = executable
-        process.arguments = args
-        let errPipe = Pipe()
-        process.standardOutput = Pipe()
-        process.standardError  = errPipe
-        do {
-            try process.run()
-        } catch {
-            throw NSError(domain: "ExportManager", code: 4,
-                userInfo: [NSLocalizedDescriptionKey: "Couldn't start ffmpeg: \(error.localizedDescription)"])
-        }
-        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else {
-            let msg = String(decoding: errData, as: UTF8.self)
-            throw NSError(domain: "ExportManager", code: 4,
-                userInfo: [NSLocalizedDescriptionKey: "Failed to convert audio to MP3.\n\(msg)"])
-        }
-        #else
-        throw NSError(domain: "ExportManager", code: 4,
-            userInfo: [NSLocalizedDescriptionKey: "Audio transcoding isn't supported on iOS."])
-        #endif
-    }
 
     /// Returns `true` if `url` lies inside the platform Trash / Recently Deleted folder.
     /// Security-scoped bookmarks silently track moves, so a bookmarked folder that is

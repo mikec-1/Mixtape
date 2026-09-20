@@ -34,6 +34,11 @@ public struct ImportView: View {
     @EnvironmentObject private var iosAppState: IOSAppState
     #endif
 
+    /// Only so the link sheet can be handed it explicitly. This view takes its
+    /// own services by hand, but a nested sheet is a new presentation and it's
+    /// cheaper to pass the container than to reason about what it inherits.
+    @EnvironmentObject private var deps: AppDependencies
+
     // MARK: - State
 
     @State private var showFilePicker    = false
@@ -44,6 +49,9 @@ public struct ImportView: View {
     @State private var showResultBanner  = false
     @State private var resultMessage     = ""
     @State private var showSpotifyImport = false
+
+    /// Which link sheet is up, if any — see `LinkImportView.Service`.
+    @State private var linkService: LinkImportView.Service?
 
     @Environment(\.dismiss) private var dismiss
 
@@ -59,119 +67,98 @@ public struct ImportView: View {
     // MARK: - Body
 
     public var body: some View {
-        NavigationStack {
-            ZStack {
-                Color.mixBackground.ignoresSafeArea()
-
-                VStack(spacing: 32) {
-                    Spacer()
-
-                    importIllustration
-
-                    VStack(spacing: 12) {
-                        Text("Add Music")
-                            .font(.mixTitle)
-                            .foregroundStyle(Color.mixTextPrimary)
-
-                        Text("Import audio files from your device.\nMP3, AAC, FLAC, AIFF and WAV are supported.")
-                            .font(.mixBody)
-                            .foregroundStyle(Color.mixTextSecondary)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 24)
-                    }
-
-                    if isImporting {
-                        ProgressView("Importing…")
-                            .tint(Color.mixPrimary)
-                            .foregroundStyle(Color.mixTextSecondary)
-                    } else {
-                        Button {
-                            showFilePicker = true
-                        } label: {
-                            Label("Choose Files", systemImage: MixtapeIcons.importFile)
-                                .font(.mixButton)
-                                .frame(maxWidth: 240)
-                                .padding(.vertical, 14)
-                                .background(Color.mixPrimary)
-                                .foregroundStyle(.white)
-                                .clipShape(RoundedRectangle(cornerRadius: 14))
-                        }
-                        .buttonStyle(.plain)
-
-                        Button {
-                            showSpotifyImport = true
-                        } label: {
-                            Label("Import from Spotify", systemImage: "music.note.list")
-                                .font(.mixButton)
-                                .frame(maxWidth: 240)
-                                .padding(.vertical, 14)
-                                .background(Color.mixSurface)
-                                .foregroundStyle(Color.mixTextPrimary)
-                                .clipShape(RoundedRectangle(cornerRadius: 14))
-                        }
-                        .buttonStyle(.plain)
-                    }
-
-                    if showResultBanner {
-                        resultBanner
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
-                    }
-
-                    Spacer()
-                }
-            }
-            .navigationTitle("Import Music")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarColorScheme(.dark, for: .navigationBar)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                        .foregroundStyle(Color.mixPrimary)
-                }
-            }
-            .fileImporter(
-                isPresented: $showFilePicker,
-                allowedContentTypes: audioTypes,
-                allowsMultipleSelection: true
-            ) { result in
-                handlePickerResult(result)
-            }
-            .sheet(isPresented: $showSpotifyImport) {
-                SpotifyImportView(spotifyClient: spotifyClient,
-                                  importService: spotifyImportService,
-                                  auth: spotifyAuth)
-            }
+        MixSheet(title: "Add Music",
+                 subtitle: "Import audio files from this device, or paste a link to a song.",
+                 size: .medium) {
+            routes
+        }
+        .fileImporter(
+            isPresented: $showFilePicker,
+            allowedContentTypes: audioTypes,
+            allowsMultipleSelection: true
+        ) { result in
+            handlePickerResult(result)
+        }
+        .sheet(item: $linkService) { service in
+            LinkImportView(service: service)
+                .environmentObject(deps)
+        }
+        .sheet(isPresented: $showSpotifyImport) {
+            SpotifyImportView(spotifyClient: spotifyClient,
+                              importService: spotifyImportService,
+                              auth: spotifyAuth,
+                              followService: deps.spotifyFollowService,
+                              ledger: deps.spotifyImportLedger)
         }
     }
 
     // MARK: - Sub-Views
 
-    private var importIllustration: some View {
-        ZStack {
-            Circle()
-                .fill(Color.mixSurface)
-                .frame(width: 120, height: 120)
-            Image(systemName: "waveform.badge.plus")
-                .font(.system(size: 52))
-                .foregroundStyle(Color.mixPrimary)
+    /// Four ways in, as rows.
+    ///
+    /// This was a 120pt circle over a centred heading over four stacked pill
+    /// buttons, each capped at 240pt and floating in the middle of the sheet.
+    /// Four equally-sized pills give no sense of which one you want and leave
+    /// no room to say what any of them do; rows do both, and they don't need
+    /// the sheet to be mostly empty in order to look composed.
+    private var routes: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if isImporting {
+                MixSheetStatus(kind: .busy, title: "Importing\u{2026}")
+            } else {
+                MixSheetOptionRow(icon: MixtapeIcons.importFile,
+                                  title: "Choose Files",
+                                  detail: "MP3, AAC, FLAC, AIFF and WAV.",
+                                  isPreferred: true) {
+                    showFilePicker = true
+                }
+
+                // Each service is named, rather than one "Add from a Link":
+                // the combined entry gave no sign YouTube was supported, and
+                // this screen is where anyone would look.
+                MixSheetOptionRow(icon: "link",
+                                  title: "Import Spotify Link",
+                                  detail: "One song, from a track link.") {
+                    linkService = .spotify
+                }
+
+                MixSheetOptionRow(icon: "link",
+                                  title: "Import YouTube Link",
+                                  detail: "One song, from a video address.") {
+                    linkService = .youTube
+                }
+
+                MixSheetOptionRow(icon: "music.note.list",
+                                  title: "Import Spotify Playlist",
+                                  detail: "Recreates it with the same cover and songs.") {
+                    showSpotifyImport = true
+                }
+
+                // Below the single-playlist row on purpose: this is the bigger
+                // commitment, and someone who came here for one playlist
+                // shouldn't have to step over a whole-library migration to
+                // reach it.
+                // Opens Settings rather than stacking another sheet on this
+                // one: Spotify is a connection now, and the picker lives with
+                // the account it reads from.
+                MixSheetOptionRow(icon: "square.stack.3d.down.right",
+                                  title: "Import Spotify Library",
+                                  detail: "Pick from your playlists, Liked Songs and saved albums.") {
+                    dismiss()
+                    SettingsRoute.shared.openSpotifyLibrary()
+                }
+            }
+
+            if showResultBanner {
+                resultBanner
+                    .transition(.opacity)
+            }
         }
     }
 
     private var resultBanner: some View {
-        HStack(spacing: 10) {
-            Image(systemName: failedCount > 0 ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
-                .foregroundStyle(failedCount > 0 ? Color.mixAccent : Color.mixSuccess)
-            Text(resultMessage)
-                .font(.mixLabel)
-                .foregroundStyle(Color.mixTextPrimary)
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
-        .background(Color.mixSurface)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .padding(.horizontal, 24)
+        MixSheetStatus(kind: failedCount > 0 ? .failure : .success,
+                       title: resultMessage)
     }
 
     // MARK: - Import Logic
@@ -193,12 +180,12 @@ public struct ImportView: View {
 
                 for r in results {
                     switch r {
-                    case .imported(let track, let candidate):
+                    case .imported(_, let review):
                         importedCount += 1
                         #if os(iOS)
-                        iosAppState.enqueueReview(MetadataReviewItem(track: track, candidate: candidate))
+                        iosAppState.enqueueReview(review)
                         #endif
-                        _ = (track, candidate) // suppress unused warning on macOS (primary import is via MacImportButton)
+                        _ = review // unused on macOS (primary import is via MacImportButton)
                     case .duplicate: duplicateCount += 1
                     case .failed:    failedCount    += 1
                     }
@@ -207,13 +194,13 @@ public struct ImportView: View {
                 isImporting = false
                 buildResultMessage()
 
-                withAnimation(.spring(duration: 0.3)) {
+                withMixAnimation(.spring(duration: 0.3)) {
                     showResultBanner = true
                 }
 
                 // Auto-dismiss the banner after 3 seconds, then close sheet if all succeeded
                 try? await Task.sleep(for: .seconds(3))
-                withAnimation { showResultBanner = false }
+                withMixAnimation { showResultBanner = false }
                 if failedCount == 0 { dismiss() }
             }
         }

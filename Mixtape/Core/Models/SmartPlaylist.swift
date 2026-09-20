@@ -16,12 +16,19 @@ import Foundation
 /// `Data` on the SwiftData entity.
 public enum SmartPlaylistRule: Codable, Hashable, Sendable {
 
-    /// Tracks imported within the last `days` days, newest first.
-    case recentlyAdded(days: Int)
+    /// The `limit` newest additions to the library, newest first.
+    ///
+    /// A count, not a date window: a library that arrived in one Spotify import
+    /// shares a single import date, so "the last 30 days" was either everything
+    /// or nothing. The newest N is right in both cases.
+    case recentlyAdded(limit: Int)
     /// The `limit` most-played tracks (by play-history count), most-played first.
     case mostPlayed(limit: Int)
     /// Tracks that have never appeared in play history.
     case neverPlayed
+    /// The songs played most often in the recent history window — what's in
+    /// rotation now, as opposed to `mostPlayed`, which is all-time.
+    case onRepeat(limit: Int)
     /// Favourited tracks not played within the last `days` days.
     case forgottenFavourites(days: Int)
     /// Simple metadata filter: the chosen field contains `value` (case-insensitive).
@@ -53,19 +60,23 @@ public struct SmartPlaylist: Identifiable, Hashable, Sendable {
     public var iconName: String
     public var rule: SmartPlaylistRule
     public var dateCreated: Date
+    /// Listed in Your Library (and the Mac sidebar). See the entity.
+    public var inLibrary: Bool
 
     public init(
         id: UUID = UUID(),
         name: String,
         iconName: String = "wand.and.stars",
         rule: SmartPlaylistRule,
-        dateCreated: Date = Date()
+        dateCreated: Date = Date(),
+        inLibrary: Bool = false
     ) {
         self.id          = id
         self.name        = name
         self.iconName    = iconName
         self.rule        = rule
         self.dateCreated = dateCreated
+        self.inLibrary   = inLibrary
     }
 }
 
@@ -80,7 +91,7 @@ extension SmartPlaylist {
     /// Decodes a rule from persisted `Data`, defaulting to a harmless rule.
     public static func decodeRule(_ data: Data) -> SmartPlaylistRule {
         (try? JSONDecoder().decode(SmartPlaylistRule.self, from: data))
-            ?? .recentlyAdded(days: 30)
+            ?? .recentlyAdded(limit: 50)
     }
 }
 
@@ -90,16 +101,52 @@ extension SmartPlaylistRule {
     /// Short human-readable description of the rule for subtitles.
     public var summary: String {
         switch self {
-        case .recentlyAdded(let days):
-            return "Added in the last \(days) day\(days == 1 ? "" : "s")"
+        case .recentlyAdded(let limit):
+            return "The \(limit) newest additions"
         case .mostPlayed(let limit):
             return "Top \(limit) most played"
         case .neverPlayed:
             return "Never played"
+        case .onRepeat(let limit):
+            return "Your \(limit) most-played lately"
         case .forgottenFavourites(let days):
             return "Loved but not played in \(days) days"
         case .fieldContains(let field, let value):
             return "\(field.displayName) contains “\(value)”"
+        }
+    }
+
+    /// A sentence for the playlist page and the Home card — the same job a
+    /// hand-written playlist description does. `summary` states the rule;
+    /// this says what the playlist is *for*.
+    public var blurb: String {
+        switch self {
+        case .recentlyAdded:
+            return "Everything you've added to Mixtape lately, newest first."
+        case .mostPlayed:
+            return "The songs you've played more than any others."
+        case .neverPlayed:
+            return "Sitting in your library, never once played. A new selection every Monday."
+        case .forgottenFavourites:
+            return "Songs you loved and then stopped playing. A new selection every Monday."
+        case .onRepeat:
+            return "What you've had on repeat recently."
+        case .fieldContains:
+            return summary
+        }
+    }
+
+    /// Whether this rule's list is re-dealt each week.
+    ///
+    /// Only the two open-ended ones. `recentlyAdded` is ordered by date and
+    /// `mostPlayed`/`onRepeat` are ordered by rank — shuffling any of those
+    /// would make the playlist disagree with its own name. "Never played" and
+    /// "Forgotten favourites" match hundreds of songs and show a hundred, so
+    /// without a redeal the other hundreds are never seen at all.
+    public var rotatesWeekly: Bool {
+        switch self {
+        case .neverPlayed, .forgottenFavourites: return true
+        default:                                 return false
         }
     }
 
@@ -108,6 +155,7 @@ extension SmartPlaylistRule {
         case .recentlyAdded:       return "clock.badge.checkmark"
         case .mostPlayed:          return "flame.fill"
         case .neverPlayed:         return "moon.zzz.fill"
+        case .onRepeat:            return "repeat"
         case .forgottenFavourites: return "heart.slash.fill"
         case .fieldContains:       return "line.3.horizontal.decrease.circle.fill"
         }

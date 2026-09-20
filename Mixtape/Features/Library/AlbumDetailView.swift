@@ -9,6 +9,12 @@ public struct AlbumDetailView: View {
 
     @EnvironmentObject private var deps:   AppDependencies
     @EnvironmentObject private var engine: PlaybackEngine
+    /// Observed directly: `engine.queue` doesn't republish through the engine,
+    /// so the shuffle button lagged behind the state it shows.
+    @EnvironmentObject private var queueService: QueueService
+    /// A header's shuffle button is this list's own setting, not the queue's
+    /// live mode — see `ShufflePreferences`.
+    @ObservedObject private var shufflePrefs = ShufflePreferences.shared
 
     private var tracks: [Track] {
         deps.libraryService.tracks(in: album)
@@ -28,9 +34,19 @@ public struct AlbumDetailView: View {
                 header
                 trackList
             }
-            .padding(.bottom, 120)
+            .padding(.bottom, 24)
         }
+        // On the container, not the hero: it stays put while the tracks scroll
+        // under it, and it feeds the window titlebar tint on macOS.
+        .artworkWash(source: album.displayArtwork)
         .background(Color.mixBackground.ignoresSafeArea())
+        .miniPlayerSafeArea()
+        // Warm the top of the album while the user is still looking at it. An
+        // album is played top-down far more often than not, so the first few
+        // rows are the ones about to be asked for.
+        .task(id: album.id) {
+            deps.onlineCoordinator.prefetchResolvable(tracks)
+        }
         .navigationTitle(album.title)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
@@ -41,83 +57,72 @@ public struct AlbumDetailView: View {
     // MARK: - Header
 
     private var header: some View {
-        VStack(spacing: 16) {
+        DetailHero(
+            eyebrow: "Album",
+            title: album.title,
+            subtitle: album.artistName,
+            subtitleIsProminent: true,
+            metadata: metadataLine
+        ) { size in
             ArtworkThumbnail(
-                data: album.artworkData,
-                size: 220,
+                data: album.artworkData, artworkRef: .album(album.id),
+                size: size,
                 cornerRadius: 14,
                 placeholder: MixtapeIcons.album
             )
-            .shadow(color: .black.opacity(0.35), radius: 24, y: 10)
-            .padding(.top, 24)
-
-            VStack(spacing: 6) {
-                Text(album.title)
-                    .font(.mixTitle)
-                    .foregroundStyle(Color.mixTextPrimary)
-                    .multilineTextAlignment(.center)
-
-                Text(album.artistName)
-                    .font(.mixBodyBold)
-                    .foregroundStyle(Color.mixPrimary)
-
-                HStack(spacing: 4) {
-                    if let year = album.year {
-                        Text(String(year))
-                    }
-                    if album.year != nil { Text("·").foregroundStyle(Color.mixTextTertiary) }
-                    Text("\(album.trackCount) songs")
-                    if !tracks.isEmpty {
-                        Text("·").foregroundStyle(Color.mixTextTertiary)
-                        Text(totalDuration)
-                    }
-                }
-                .font(.mixCaption)
-                .foregroundStyle(Color.mixTextSecondary)
-            }
-
+        } actions: {
             actionButtons
-                .padding(.horizontal, 20)
-                .padding(.bottom, 8)
         }
     }
 
-    private var actionButtons: some View {
-        HStack(spacing: 12) {
-            Button {
-                guard let first = tracks.first else { return }
-                Task { await engine.play(track: first, in: tracks) }
-            } label: {
-                Label("Play", systemImage: MixtapeIcons.play)
-                    .font(.mixButtonSmall)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .background(Color.mixPrimary)
-                    .foregroundStyle(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-            }
-            .buttonStyle(.plain)
-            .disabled(tracks.isEmpty)
+    private var metadataLine: String {
+        var parts: [String] = []
+        if let year = album.year { parts.append(String(year)) }
+        parts.append("\(album.trackCount) song\(album.trackCount == 1 ? "" : "s")")
+        if !tracks.isEmpty { parts.append(totalDuration) }
+        return parts.joined(separator: " · ")
+    }
 
-            Button {
-                if !engine.queue.shuffleEnabled { engine.queue.toggleShuffle() }
-                guard let first = tracks.first else { return }
-                Task { await engine.play(track: first, in: tracks) }
-            } label: {
-                Label("Shuffle", systemImage: MixtapeIcons.shuffle)
-                    .font(.mixButtonSmall)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .background(Color.mixSurface)
-                    .foregroundStyle(Color.mixTextPrimary)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10)
-                            .stroke(Color.mixSeparator, lineWidth: 0.5)
-                    )
-            }
-            .buttonStyle(.plain)
-            .disabled(tracks.isEmpty)
+    /// True when the engine is currently playing a track from this album.
+    /// See `PlaylistDetailView.isPlayingThisPlaylist`: asked of the queue's
+    /// source, because a song on this album is very often also in whatever list
+    /// the user actually pressed play on.
+    private var isPlayingThisAlbum: Bool {
+        engine.state.isPlaying && queueService.source == .named(album.title)
+    }
+
+    private var isPausedInThisAlbum: Bool {
+        engine.state == .paused && queueService.source == .named(album.title)
+    }
+
+    private var shuffleKey: ShufflePreferences.Key { .album(album.id) }
+
+    private var actionButtons: some View {
+        HeroActionBar(
+            isPlaying: isPlayingThisAlbum,
+            isShuffling: shufflePrefs.shuffles(shuffleKey),
+            isEmpty: tracks.isEmpty,
+            onPlay: {
+                // Playing this album already → the button is a pause control.
+                // Paused mid-album → resume. Otherwise start from the top —
+                // or from anywhere, when shuffle is on.
+                if isPlayingThisAlbum {
+                    engine.pause()
+                } else if isPausedInThisAlbum {
+                    engine.resume()
+                } else {
+                    let shuffles = shufflePrefs.shuffles(shuffleKey)
+                    engine.queue.setShuffle(shuffles)
+                    guard let first = shuffles
+                            ? tracks.randomElement() : tracks.first else { return }
+                    Task { await engine.play(track: first, in: tracks, source: .named(album.title)) }
+                }
+            },
+            onShuffle: { shufflePrefs.toggle(shuffleKey) }
+        ) {
+            AlbumSaveButton(title: album.title, artistName: album.artistName)
+            AlbumDownloadButton(ids: album.trackIDs, downloads: deps.downloadManager, library: deps.libraryService)
+            ShareHeroButton(.album(album))
         }
     }
 
@@ -135,7 +140,7 @@ public struct AlbumDetailView: View {
                 )
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    Task { await engine.play(track: track, in: tracks) }
+                    Task { await engine.play(track: track, in: tracks, source: .named(album.title)) }
                 }
 
                 Divider()
@@ -163,20 +168,25 @@ private struct AlbumTrackRow: View {
                     Image(systemName: "waveform")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Color.mixPrimary)
-                        .symbolEffect(.variableColor.iterative, isActive: isPlaying)
+                        .mixVariableColor(isActive: isPlaying)
                 } else {
                     Text("\(index)")
                         .font(.mixCaption)
                         .foregroundStyle(Color.mixTextTertiary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
                 }
             }
             .frame(width: 24, alignment: .center)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(track.title)
-                    .font(.mixBodyBold)
-                    .foregroundStyle(isCurrent ? Color.mixPrimary : Color.mixTextPrimary)
-                    .lineLimit(1)
+                HStack(spacing: 5) {
+                    Text(track.title)
+                        .font(.mixBodyBold)
+                        .foregroundStyle(isCurrent ? Color.mixPrimary : Color.mixTextPrimary)
+                        .lineLimit(1)
+                    if track.isExplicit { MixExplicitBadge() }
+                }
                 if track.artistName != track.albumTitle {
                     Text(track.artistName)
                         .font(.mixLabel)
@@ -197,7 +207,12 @@ private struct AlbumTrackRow: View {
 }
 
 // MARK: - Preview
+//
+// Guarded because `previewAlbums` is itself `#if DEBUG` — without this the
+// canvas works all day and only Archive (a Release build) fails, on a line
+// nothing ships.
 
+#if DEBUG
 #Preview {
     NavigationStack {
         AlbumDetailView(album: Album.previewAlbums[0])
@@ -209,3 +224,4 @@ private struct AlbumTrackRow: View {
             ))
     }
 }
+#endif

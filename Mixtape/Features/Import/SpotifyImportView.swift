@@ -12,11 +12,19 @@ public struct SpotifyImportView: View {
     private let spotifyClient: SpotifyClient
     private let importService: SpotifyImportService
     @ObservedObject private var auth: SpotifyAuth
+    private let followService: SpotifyFollowService?
+    private let ledger: SpotifyImportLedger?
 
-    public init(spotifyClient: SpotifyClient, importService: SpotifyImportService, auth: SpotifyAuth) {
+    public init(spotifyClient: SpotifyClient,
+                importService: SpotifyImportService,
+                auth: SpotifyAuth,
+                followService: SpotifyFollowService? = nil,
+                ledger: SpotifyImportLedger? = nil) {
         self.spotifyClient = spotifyClient
         self.importService = importService
         self.auth = auth
+        self.followService = followService
+        self.ledger = ledger
     }
 
     // MARK: - State
@@ -32,184 +40,107 @@ public struct SpotifyImportView: View {
     @State private var phase: Phase = .input
     @State private var isConnecting = false
     @State private var connectError: String?
+    /// Opt-in mirror. Off by default — see `SpotifyLibraryPickerModel.keepInSync`.
+    @State private var keepInSync = false
 
     @Environment(\.dismiss) private var dismiss
 
     // MARK: - Body
 
     public var body: some View {
-        NavigationStack {
-            ZStack {
-                Color.mixBackground.ignoresSafeArea()
-
-                VStack(spacing: 28) {
-                    Spacer()
-                    illustration
-                    content
-                    Spacer()
-                }
-                .padding(.horizontal, 24)
-                .frame(maxWidth: 460)
-            }
-            .navigationTitle("Import from Spotify")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarColorScheme(.dark, for: .navigationBar)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                        .foregroundStyle(Color.mixPrimary)
-                }
-            }
+        MixSheet(title: "Import Spotify Playlist",
+                 subtitle: auth.isAuthorized
+                     ? "Share \u{2192} Copy link on a playlist in Spotify, then paste it here. We'll recreate it with the same cover and songs."
+                     : "Spotify requires you to sign in before Mixtape can read a playlist's songs. We only ask for read access.",
+                 size: .compact,
+                 primary: primaryAction) {
+            content
         }
     }
 
     // MARK: - Sub-views
 
-    private var illustration: some View {
-        ZStack {
-            Circle()
-                .fill(Color.mixSurface)
-                .frame(width: 120, height: 120)
-            Image(systemName: "music.note.list")
-                .font(.system(size: 50))
-                .foregroundStyle(Color.mixPrimary)
+    /// Either the sign-in explanation or the field — and in both cases the
+    /// outcome shows up underneath rather than replacing the page.
+    ///
+    /// This was four full-screen states stacked behind a `switch`, each one
+    /// centred between two `Spacer`s under a 120pt circle. On a Mac that's a
+    /// 520×500 window that is mostly empty in every state it can reach.
+    @ViewBuilder
+    private var content: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if auth.isAuthorized {
+                TextField("https://open.spotify.com/playlist/\u{2026}", text: $link)
+                    #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.URL)
+                    #endif
+                    .onSubmit(startImport)
+                    .mixSheetField()
+
+                if followService != nil, case .input = phase {
+                    Toggle(isOn: $keepInSync) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Keep in sync with Spotify")
+                                .font(.system(size: 12.5, weight: .medium))
+                                .foregroundStyle(Color.mixTextPrimary)
+                            Text("Synced playlists follow the Spotify original and are read-only here. You can unlink at any time.")
+                                .font(.system(size: 11))
+                                .foregroundStyle(Color.mixTextTertiary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .toggleStyle(.switch)
+                    .tint(Color.mixPrimary)
+                }
+            }
+            statusLine
         }
     }
 
     @ViewBuilder
-    private var content: some View {
-        if !auth.isAuthorized {
-            connectContent
-        } else {
+    private var statusLine: some View {
+        if let connectError, !auth.isAuthorized {
+            MixSheetStatus(kind: .failure, title: "Couldn't connect", detail: connectError)
+        } else if auth.isAuthorized {
             switch phase {
-            case .input, .failed:
-                inputContent
+            case .input:
+                EmptyView()
+
+            case .failed(let message):
+                MixSheetStatus(kind: .failure, title: "Couldn't import that playlist", detail: message)
+
             case .working(let done, let total):
-                workingContent(done: done, total: total)
+                // Real progress, unlike the single-song importer: the playlist
+                // told us how many songs it has before we started.
+                MixSheetStatus(kind: .busy,
+                               title: total > 0 ? "Adding songs\u{2026}" : "Fetching playlist\u{2026}",
+                               detail: total > 0 ? "\(done) of \(total)" : nil,
+                               progress: total > 0 ? Double(done) / Double(total) : nil)
+
             case .finished(let name, let count):
-                finishedContent(name: name, count: count)
+                MixSheetStatus(kind: .success,
+                               title: "Added \u{201C}\(name)\u{201D}",
+                               detail: "\(count) song\(count == 1 ? "" : "s") imported.")
             }
         }
     }
 
-    private var connectContent: some View {
-        VStack(spacing: 16) {
-            VStack(spacing: 8) {
-                Text("Connect Spotify")
-                    .font(.mixTitle)
-                    .foregroundStyle(Color.mixTextPrimary)
-                Text("Spotify now requires you to sign in before Mixtape can read a playlist's songs. We only request read access to your playlists.")
-                    .font(.mixBody)
-                    .foregroundStyle(Color.mixTextSecondary)
-                    .multilineTextAlignment(.center)
-            }
-
-            if let connectError {
-                Label(connectError, systemImage: "exclamationmark.circle.fill")
-                    .font(.mixLabel)
-                    .foregroundStyle(Color.mixAccent)
-                    .multilineTextAlignment(.center)
-            }
-
-            Button(action: connect) {
-                HStack(spacing: 8) {
-                    if isConnecting { ProgressView().tint(.white) }
-                    Text(isConnecting ? "Connecting…" : "Connect Spotify")
-                        .font(.mixButton)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .background(Color.mixPrimary)
-                .foregroundStyle(.white)
-                .clipShape(RoundedRectangle(cornerRadius: 14))
-            }
-            .buttonStyle(.plain)
-            .disabled(isConnecting)
+    /// The footer button carries the whole flow: connect, then import, then
+    /// close. One control that changes what it says beats four pages that each
+    /// grow their own.
+    private var primaryAction: MixSheetAction {
+        guard auth.isAuthorized else {
+            return MixSheetAction("Connect Spotify", isBusy: isConnecting, action: connect)
         }
-    }
-
-    private var inputContent: some View {
-        VStack(spacing: 16) {
-            VStack(spacing: 8) {
-                Text("Paste a playlist link")
-                    .font(.mixTitle)
-                    .foregroundStyle(Color.mixTextPrimary)
-                Text("Open a public playlist in Spotify, tap Share → Copy link, then paste it here. We'll recreate it with the same cover and songs.")
-                    .font(.mixBody)
-                    .foregroundStyle(Color.mixTextSecondary)
-                    .multilineTextAlignment(.center)
-            }
-
-            TextField("https://open.spotify.com/playlist/…", text: $link)
-                .textFieldStyle(.plain)
-                .font(.mixBody)
-                .foregroundStyle(Color.mixTextPrimary)
-                .padding(.vertical, 12)
-                .padding(.horizontal, 14)
-                .background(Color.mixSurface)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                #if os(iOS)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .keyboardType(.URL)
-                #endif
-                .onSubmit(startImport)
-
-            if case .failed(let message) = phase {
-                Label(message, systemImage: "exclamationmark.circle.fill")
-                    .font(.mixLabel)
-                    .foregroundStyle(Color.mixAccent)
-                    .multilineTextAlignment(.center)
-            }
-
-            Button(action: startImport) {
-                Text("Import Playlist")
-                    .font(.mixButton)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .background(canImport ? Color.mixPrimary : Color.mixSurface)
-                    .foregroundStyle(canImport ? .white : Color.mixTextSecondary)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-            }
-            .buttonStyle(.plain)
-            .disabled(!canImport)
+        if case .finished = phase {
+            return MixSheetAction("Done") { dismiss() }
         }
-    }
-
-    private func workingContent(done: Int, total: Int) -> some View {
-        VStack(spacing: 14) {
-            ProgressView()
-                .tint(Color.mixPrimary)
-            Text(total > 0 ? "Adding songs… \(done) / \(total)" : "Fetching playlist…")
-                .font(.mixBody)
-                .foregroundStyle(Color.mixTextSecondary)
+        if case .working = phase {
+            return MixSheetAction("Import Playlist", isBusy: true) { }
         }
-    }
-
-    private func finishedContent(name: String, count: Int) -> some View {
-        VStack(spacing: 14) {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 40))
-                .foregroundStyle(Color.mixSuccess)
-            Text("Added “\(name)”")
-                .font(.mixTitle2)
-                .foregroundStyle(Color.mixTextPrimary)
-                .multilineTextAlignment(.center)
-            Text("\(count) song\(count == 1 ? "" : "s") imported. Tap a song to start streaming.")
-                .font(.mixBody)
-                .foregroundStyle(Color.mixTextSecondary)
-                .multilineTextAlignment(.center)
-            Button("Done") { dismiss() }
-                .font(.mixButton)
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .background(Color.mixPrimary)
-                .clipShape(RoundedRectangle(cornerRadius: 14))
-                .buttonStyle(.plain)
-        }
+        return MixSheetAction("Import Playlist", isEnabled: canImport, action: startImport)
     }
 
     // MARK: - Logic
@@ -247,6 +178,29 @@ public struct SpotifyImportView: View {
                 }
                 let created = await importService.importPlaylist(playlist) { progress in
                     phase = .working(done: progress.completed, total: progress.total)
+                }
+                if keepInSync, let followService,
+                   let sourceID = SpotifyClient.playlistID(from: input) {
+                    followService.link(
+                        .init(sourceID: sourceID, kind: .playlist, name: playlist.name,
+                              snapshotID: playlist.snapshotID, lastSyncedAt: .now),
+                        toPlaylist: created.id
+                    )
+                }
+                // Recorded here as well as in the library picker: the two are
+                // routes to the same import, and a playlist pasted in as a link
+                // should still read as "already imported" when the account's
+                // full listing is opened later.
+                if let ledger, let sourceID = SpotifyClient.playlistID(from: input) {
+                    ledger.record(
+                        SpotifyLibraryItem(sourceID: sourceID,
+                                           kind: .playlist,
+                                           name: playlist.name,
+                                           subtitle: "",
+                                           trackCount: playlist.tracks.count,
+                                           coverURL: nil),
+                        playlistID: created.id
+                    )
                 }
                 phase = .finished(name: created.name, count: playlist.tracks.count)
             } catch let error as SpotifyAuthError {

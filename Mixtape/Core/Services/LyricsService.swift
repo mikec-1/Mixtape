@@ -2,6 +2,7 @@
 // Mixtape — Core/Services
 //
 // Resolves lyrics for a Track, in priority order:
+//   0. Lyrics the user supplied themselves (`UserLyricsStore`) — always wins
 //   1. Track.lyrics (embedded tags)
 //   2. A `.lrc` sidecar file next to the local audio file
 //   3. The public LRCLIB API (https://lrclib.net) — no API key required
@@ -17,11 +18,28 @@ import Combine
 
 // MARK: - Models
 
+/// One word of a line, with the span of time it is sung over.
+public struct LyricWord: Equatable, Sendable {
+    public let time: TimeInterval
+    public let end: TimeInterval
+    public let text: String
+
+    public init(time: TimeInterval, end: TimeInterval, text: String) {
+        self.time = time
+        self.end = end
+        self.text = text
+    }
+}
+
 /// A single timestamped lyric line.
 public struct LyricLine: Identifiable, Equatable, Sendable {
     public let id = UUID()
     public let time: TimeInterval
     public let text: String
+    /// Real per-word timings, when the source carried them (Apple's word-timed
+    /// TTML). Nil for LRC sources, which only stamp the start of a line — see
+    /// `LyricSync.words(for:)`, which estimates spans for those.
+    public var words: [LyricWord]? = nil
 }
 
 /// Resolved lyrics for a track. Any field may be nil/empty.
@@ -30,6 +48,11 @@ public struct TrackLyrics: Equatable, Sendable {
     public var synced: [LyricLine]
     /// Plain (untimed) lyrics text, if available.
     public var plain: String?
+    /// True when this came from `UserLyricsStore` — the user's own text rather
+    /// than a tag or a lookup. Carried on the result because it changes what
+    /// the UI offers (Edit and Remove instead of nothing) and because it stops
+    /// `resolve` from going back to the network to "improve" on it.
+    public var isUserProvided: Bool = false
 
     public var hasSynced: Bool { !synced.isEmpty }
     public var hasAny: Bool { hasSynced || (plain?.isEmpty == false) }
@@ -76,6 +99,57 @@ public final class LyricsService: ObservableObject {
     /// finding synced lyrics for a track previously found with plain-only text).
     public func clearCache() { cache.removeAll() }
 
+    // MARK: - The user's own lyrics
+
+    /// True when this song's lyrics were supplied by the user.
+    ///
+    /// Reads the store rather than the cache, so it's right before the track
+    /// has ever been resolved — the Now Playing panel asks this to decide
+    /// between "Add lyrics" and "Edit lyrics" the moment it appears.
+    public func hasUserLyrics(for track: Track) -> Bool {
+        UserLyricsStore.shared.contains(track)
+    }
+
+    /// The raw text behind `hasUserLyrics`, for the editor to open onto.
+    public func userLyricsText(for track: Track) -> String? {
+        UserLyricsStore.shared.text(for: track)
+    }
+
+    /// Saves `text` as this song's lyrics and shows them immediately.
+    ///
+    /// The cache is written straight through instead of being invalidated: a
+    /// plain invalidate would leave the panel empty until the next resolve,
+    /// and that resolve would race the network for a song whose lyrics are now
+    /// sitting on disk. Empty text removes the override — see `UserLyricsStore.set`.
+    @discardableResult
+    public func saveUserLyrics(_ text: String, for track: Track) -> TrackLyrics {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            removeUserLyrics(for: track)
+            return .empty
+        }
+
+        UserLyricsStore.shared.set(trimmed, for: track)
+
+        var parsed = Self.parse(trimmed)
+        parsed.isUserProvided = true
+        // Any fetch still in flight would otherwise land after this and write
+        // the looked-up result over the one the user just typed.
+        inFlight[track.id]?.cancel()
+        inFlight[track.id] = nil
+        cache[track.id] = parsed
+        return parsed
+    }
+
+    /// Drops the user's lyrics for this song and forgets the cached result, so
+    /// the next resolve goes back through tags, sidecar and the databases.
+    public func removeUserLyrics(for track: Track) {
+        UserLyricsStore.shared.remove(for: track)
+        inFlight[track.id]?.cancel()
+        inFlight[track.id] = nil
+        cache[track.id] = nil
+    }
+
     /// Returns cached lyrics only when a real hit exists (synchronous, non-fetching).
     /// A cached miss returns nil so callers fall through to `resolve` and retry.
     public func cached(for track: Track) -> TrackLyrics? {
@@ -95,7 +169,10 @@ public final class LyricsService: ObservableObject {
         // Short-circuit only when we already have synced lyrics. A plain-only or
         // empty cached result is re-attempted so a track can later pick up synced
         // (interactive) lyrics instead of staying stuck on the plain text block.
-        if let hit = cache[track.id], hit.hasSynced { return hit }
+        // The user's own lyrics are the answer, synced or not. Refetching to
+        // look for a synced version would replace what they typed with what a
+        // database guessed — the exact thing they overrode.
+        if let hit = cache[track.id], hit.hasSynced || hit.isUserProvided { return hit }
 
         return await fetchTask(for: track).value
     }
@@ -105,7 +182,7 @@ public final class LyricsService: ObservableObject {
     /// non-blocking: never affects playback. Coalesces with a concurrent `resolve`
     /// for the same track id so only one network fetch runs.
     public func prefetch(for track: Track) {
-        if let hit = cache[track.id], hit.hasSynced { return }
+        if let hit = cache[track.id], hit.hasSynced || hit.isUserProvided { return }
         _ = fetchTask(for: track)
     }
 
@@ -117,6 +194,14 @@ public final class LyricsService: ObservableObject {
         let task = Task { @MainActor [weak self] in
             guard let self else { return TrackLyrics.empty }
             let result = await self.load(for: track)
+            // A fetch started before the user saved their own lyrics must not
+            // land on top of them. `Task.cancel` alone can't prevent this —
+            // nothing in `load` checks for cancellation — so the decision is
+            // made here, where the write actually happens.
+            if let own = self.cache[track.id], own.isUserProvided {
+                self.inFlight[track.id] = nil
+                return own
+            }
             self.cache[track.id] = result
             self.inFlight[track.id] = nil
             return result
@@ -128,23 +213,121 @@ public final class LyricsService: ObservableObject {
     // MARK: - Resolution pipeline
 
     private func load(for track: Track) async -> TrackLyrics {
+        // 0. The user's own lyrics. Ahead of the embedded tags on purpose: a
+        // file whose tags carry the wrong words is one of the reasons someone
+        // reaches for this, and an override that loses to the thing it was
+        // meant to override isn't an override.
+        print("[Lyrics] resolving \"\(track.title)\" — \(track.artistName) (album: \(track.albumTitle), \(Int(track.duration))s)")
+        if let own = UserLyricsStore.shared.text(for: track) {
+            var parsed = Self.parse(own)
+            parsed.isUserProvided = true
+            if parsed.hasAny { return parsed }
+        }
+
         // 1. Embedded lyrics on the track.
         if let embedded = track.lyrics, !embedded.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            print("[Lyrics] source: embedded tags")
             return Self.parse(embedded)
         }
 
         // 2. .lrc sidecar next to the local file.
         if let sidecar = Self.readSidecar(for: track) {
             let parsed = Self.parse(sidecar)
-            if parsed.hasAny { return parsed }
+            if parsed.hasAny { print("[Lyrics] source: .lrc sidecar"); return parsed }
         }
 
-        // 3. Remote fetch from LRCLIB (silent on failure).
+        // 3. Word-timed lyrics (Apple's TTML). Ahead of LRCLIB because it is a
+        // strictly better document when it exists: every word carries its own
+        // start and end, so a held note holds. Falls through when the song
+        // isn't in the index or is only line-timed.
+        if let wordTimed = await fetchWordTimed(for: track) {
+            print("[Lyrics] source: TTML (word-timed)")
+            return wordTimed
+        }
+
+        // 4. Remote fetch from LRCLIB (silent on failure).
         if let remote = await fetchRemote(for: track) {
+            print("[Lyrics] source: LRCLIB/NetEase")
             return remote
         }
 
         return .empty
+    }
+
+    // MARK: - Word-timed (Apple TTML)
+
+    /// The index that maps a song to an Apple Music TTML document. Same source
+    /// the web client uses (`src/pages/api/lyrics.ts`), so all three platforms
+    /// show the same words with the same timings.
+    private static let ttmlIndex = "https://lyrics-api.binimum.org/"
+
+    private struct TTMLIndexResponse: Decodable {
+        struct Entry: Decodable {
+            let lyricsUrl: String?
+            let timingType: String?
+            let duration: Double?
+            /// The index matches on name, so it answers a remix query with the
+            /// original. Optional because not every record carries it.
+            let name: String?
+
+            enum CodingKeys: String, CodingKey {
+                case lyricsUrl
+                case timingType = "timing_type"
+                case duration
+                case name
+            }
+        }
+        let results: [Entry]?
+    }
+
+    private func fetchWordTimed(for track: Track) async -> TrackLyrics? {
+        guard !track.title.isEmpty, !track.artistName.isEmpty else { return nil }
+        var components = URLComponents(string: Self.ttmlIndex)
+        components?.queryItems = [
+            URLQueryItem(name: "track", value: track.title),
+            URLQueryItem(name: "artist", value: track.artistName)
+        ]
+        guard let url = components?.url,
+              let index: TTMLIndexResponse = await getJSON(url) else { return nil }
+
+        // Only word timing is worth taking this path for — a line-timed hit is
+        // no better than LRCLIB and would skip the providers below.
+        let hit = (index.results ?? []).first { entry in
+            guard entry.timingType == "word", entry.lyricsUrl != nil else { return false }
+            if let name = entry.name, !name.isEmpty,
+               !LyricVersion.sameVersion(track.title, name) { return false }
+            guard track.duration > 0, let duration = entry.duration else { return true }
+            return abs(duration - track.duration) <= 20
+        }
+        guard let urlString = hit?.lyricsUrl, let documentURL = URL(string: urlString),
+              let xml = await getText(documentURL) else { return nil }
+
+        let parsed = Self.parseTTML(xml)
+        return parsed.hasSynced ? parsed : nil
+    }
+
+    /// Parses Apple's word-timed TTML: one `<p>` per line, one `<span>` per
+    /// word. Background-vocal subtrees (`ttm:role="x-bg"`) are dropped — they
+    /// are a second voice printed alongside the line, and the app draws one.
+    static func parseTTML(_ xml: String) -> TrackLyrics {
+        let delegate = TTMLParserDelegate()
+        let parser = XMLParser(data: Data(xml.utf8))
+        parser.delegate = delegate
+        guard parser.parse(), !delegate.lines.isEmpty else { return .empty }
+        let lines = delegate.lines.sorted { $0.time < $1.time }
+        return TrackLyrics(synced: lines, plain: lines.map(\.text).joined(separator: "\n"))
+    }
+
+    /// `12.5`, `1:00.216` or `1:02:03.4` → seconds.
+    static func parseTTMLTime(_ raw: String?) -> TimeInterval? {
+        guard let raw, !raw.isEmpty else { return nil }
+        let trimmed = raw.hasSuffix("s") ? String(raw.dropLast()) : raw
+        var total: TimeInterval = 0
+        for part in trimmed.split(separator: ":") {
+            guard let value = TimeInterval(part) else { return nil }
+            total = total * 60 + value
+        }
+        return total
     }
 
     // MARK: - Sidecar
@@ -162,6 +345,8 @@ public final class LyricsService: ObservableObject {
         let syncedLyrics: String?
         let plainLyrics: String?
         let duration: Double?
+        let trackName: String?
+        let artistName: String?
     }
 
     /// Tries the exact `/api/get` first, then the fuzzy `/api/search` as a fallback.
@@ -201,8 +386,14 @@ public final class LyricsService: ObservableObject {
     }
 
     /// Runs the LRCLIB lookup chain (exact → exact-without-duration → fuzzy
-    /// search). Returns the exact record and, when it lacks synced lyrics, the
-    /// best search result. Skips the search entirely once exact has synced lyrics.
+    /// search) and picks the record the uploads *agree* on.
+    ///
+    /// Metadata gates aren't enough on their own: LRCLIB's record for VULTURES 1
+    /// "DO IT" is labelled correctly — right title, right artist, right album,
+    /// right duration — and carries the words to "NEW BODY". Nothing about that
+    /// record looks wrong, so the only thing that catches it is the other
+    /// uploads of the same song: fifteen of them start "Do it stay waxed" and
+    /// five start "Oh my God, Ronny". The majority wins.
     private func fetchLRCLib(for track: Track) async -> (exact: TrackLyrics?, searched: TrackLyrics?) {
         // Strict exact match (album + duration), then a looser one without
         // duration (iTunes/Deezer durations are often a couple seconds off).
@@ -210,15 +401,62 @@ public final class LyricsService: ObservableObject {
         if exact == nil, track.duration > 0 {
             exact = await fetchExact(for: track, includeDuration: false)
         }
-        if let exact, exact.hasSynced { return (exact, nil) }
+        let searched = await searchCandidates(for: track)
 
-        // Exact is plain-only or missing: a *different* LRCLIB upload of the same
-        // song often carries synced lyrics, so the fuzzy search recovers it.
-        let searched = await fetchViaSearch(for: track)
-        return (exact, searched)
+        let pool = [exact].compactMap { $0 } + searched
+        guard let winner = Self.consensus(among: pool, preferring: exact, track: track),
+              let lyrics = Self.lyrics(from: winner), lyrics.hasAny else {
+            return (exact.flatMap(Self.lyrics(from:)), nil)
+        }
+        return (lyrics, nil)
     }
 
-    private func fetchExact(for track: Track, includeDuration: Bool) async -> TrackLyrics? {
+    /// The record the most uploads agree with, then the best copy inside that
+    /// group (synced first, closest duration next). `nil` when the pool is empty.
+    private static func consensus(among pool: [LRCLibResponse],
+                                  preferring exact: LRCLibResponse?,
+                                  track: Track) -> LRCLibResponse? {
+        let groups = Dictionary(grouping: pool.filter { !fingerprint($0).isEmpty },
+                                by: { fingerprint($0) })
+        guard !groups.isEmpty else { return pool.first }
+
+        let exactPrint = exact.map(fingerprint)
+        let best = groups.max { a, b in
+            if a.value.count != b.value.count { return a.value.count < b.value.count }
+            // A tie goes to the record LRCLIB itself called the exact match.
+            return b.key == exactPrint
+        }
+        guard let group = best else { return pool.first }
+        if let exactPrint, group.key != exactPrint {
+            print("[Lyrics] consensus overruled the exact match (\(group.value.count) uploads vs \(groups[exactPrint]?.count ?? 0))")
+        }
+        return group.value.sorted { a, b in
+            let aSynced = (a.syncedLyrics?.isEmpty == false)
+            let bSynced = (b.syncedLyrics?.isEmpty == false)
+            if aSynced != bSynced { return aSynced }
+            let aDelta = abs((a.duration ?? .greatestFiniteMagnitude) - track.duration)
+            let bDelta = abs((b.duration ?? .greatestFiniteMagnitude) - track.duration)
+            return aDelta < bDelta
+        }.first
+    }
+
+    /// What a record *says*, with nothing about who uploaded it: the first few
+    /// lines of text, timestamps and punctuation stripped. Two uploads of the
+    /// same words fingerprint the same however differently they were timed.
+    private static func fingerprint(_ r: LRCLibResponse) -> String {
+        let raw = (r.syncedLyrics?.isEmpty == false ? r.syncedLyrics : r.plainLyrics) ?? ""
+        let lines = raw.split(separator: "\n").compactMap { line -> String? in
+            let text = line.replacingOccurrences(of: "\\[[^\\]]*\\]", with: "",
+                                                 options: .regularExpression)
+                .lowercased()
+                .filter { $0.isLetter || $0.isNumber || $0 == " " }
+                .trimmingCharacters(in: .whitespaces)
+            return text.isEmpty ? nil : text
+        }
+        return lines.prefix(3).joined(separator: " ")
+    }
+
+    private func fetchExact(for track: Track, includeDuration: Bool) async -> LRCLibResponse? {
         var components = URLComponents(string: "https://lrclib.net/api/get")
         var items = [
             URLQueryItem(name: "track_name", value: track.title),
@@ -239,38 +477,57 @@ public final class LyricsService: ObservableObject {
             print("[Lyrics] get miss for \"\(track.title)\" — \(track.artistName)")
             return nil
         }
-        return Self.lyrics(from: decoded)
+        guard Self.isSameSong(decoded, as: track) else {
+            print("[Lyrics] get returned \"\(decoded.trackName ?? "?")\" — \(decoded.artistName ?? "?"); rejected")
+            return nil
+        }
+        return decoded
     }
 
-    private func fetchViaSearch(for track: Track) async -> TrackLyrics? {
+    /// Does this LRCLIB record name the song we asked for? Titles are compared
+    /// after stripping punctuation and any bracketed suffix (`(feat. …)`,
+    /// `- Remaster`), since every uploader spells those differently.
+    private static func isSameSong(_ r: LRCLibResponse, as track: Track) -> Bool {
+        let want = bareTitle(track.title)
+        let got  = bareTitle(r.trackName ?? "")
+        guard !got.isEmpty, got.contains(want) || want.contains(got) else { return false }
+        guard LyricVersion.sameVersion(track.title, r.trackName ?? "") else { return false }
+        let wantArtist = bareTitle(track.artistName)
+        let gotArtist  = bareTitle(r.artistName ?? "")
+        guard !gotArtist.isEmpty else { return false }
+        return gotArtist.contains(wantArtist) || wantArtist.contains(gotArtist)
+            || !Set(gotArtist.split(separator: " ")).isDisjoint(with: Set(wantArtist.split(separator: " ")))
+    }
+
+    private static func bareTitle(_ s: String) -> String {
+        var t = s.lowercased()
+        if let cut = t.firstIndex(where: { "([-".contains($0) }) { t = String(t[t.startIndex..<cut]) }
+        return t.filter { $0.isLetter || $0.isNumber || $0 == " " }
+            .trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Every search result that is plausibly this song, for the consensus vote.
+    private func searchCandidates(for track: Track) async -> [LRCLibResponse] {
         var components = URLComponents(string: "https://lrclib.net/api/search")
         components?.queryItems = [
             URLQueryItem(name: "track_name", value: track.title),
             URLQueryItem(name: "artist_name", value: track.artistName)
         ]
-        guard let url = components?.url else { return nil }
+        guard let url = components?.url else { return [] }
 
         guard let results: [LRCLibResponse] = await getJSON(url), !results.isEmpty else {
             print("[Lyrics] search miss for \"\(track.title)\" — \(track.artistName)")
-            return nil
+            return []
         }
 
-        // Prefer a result that has synced lyrics and is closest in duration.
-        let ranked = results.sorted { a, b in
-            let aSynced = (a.syncedLyrics?.isEmpty == false)
-            let bSynced = (b.syncedLyrics?.isEmpty == false)
-            if aSynced != bSynced { return aSynced }
-            let aDelta = abs((a.duration ?? .greatestFiniteMagnitude) - track.duration)
-            let bDelta = abs((b.duration ?? .greatestFiniteMagnitude) - track.duration)
-            return aDelta < bDelta
+        // The artist and title MUST match — a common title returns a page of
+        // unrelated uploads and duration alone is far too weak to tell them
+        // apart. Duration is only a sanity check on top of the name match.
+        return results.filter { r in
+            guard Self.isSameSong(r, as: track) else { return false }
+            guard track.duration > 0, let d = r.duration else { return true }
+            return abs(d - track.duration) <= 20
         }
-        for candidate in ranked {
-            if let lyrics = Self.lyrics(from: candidate), lyrics.hasAny {
-                print("[Lyrics] search hit for \"\(track.title)\" (synced: \(lyrics.hasSynced))")
-                return lyrics
-            }
-        }
-        return nil
     }
 
     // MARK: - Remote (NetEase Cloud Music — synced fallback)
@@ -343,6 +600,7 @@ public final class LyricsService: ObservableObject {
                 return !name.isEmpty && (name.contains(wantArtist) || wantArtist.contains(name))
             }
             guard artistOK else { return false }
+            guard LyricVersion.sameVersion(track.title, song.name ?? "") else { return false }
             guard track.duration > 0, let ms = song.duration else { return true }
             return abs((Double(ms) / 1000) - track.duration) <= 20
         }
@@ -639,6 +897,22 @@ public final class LyricsService: ObservableObject {
         }
     }
 
+    /// Fetches a document as text, on the same terms as `getJSON`.
+    private func getText(_ url: URL) async -> String? {
+        var request = URLRequest(url: url)
+        request.setValue("Mixtape/1.0 (https://github.com/mikec-1/Mixtape)", forHTTPHeaderField: "User-Agent")
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        request.timeoutInterval = 6
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
+            return String(data: data, encoding: .utf8)
+        } catch {
+            print("[Lyrics] request failed: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
     /// Builds TrackLyrics from a decoded LRCLIB record (synced preferred).
     private static func lyrics(from decoded: LRCLibResponse) -> TrackLyrics? {
         if let synced = decoded.syncedLyrics, !synced.isEmpty {
@@ -726,5 +1000,96 @@ public final class LyricsService: ObservableObject {
         // e.g. [ar:Artist] [ti:Title] [al:Album] [length:...] [by:...]
         guard line.hasPrefix("[") && line.hasSuffix("]") else { return false }
         return line.contains(":") && parseTimestamp(String(line.dropFirst().dropLast())) == nil
+    }
+}
+
+// MARK: - TTML parsing
+
+/// Pulls timed lines and words out of Apple's word-timed TTML.
+///
+/// The whitespace *between* spans is meaningful: Apple splits a held word into
+/// several spans with nothing between them ("ba" "byyy"), and separate words
+/// with a space. Dropping that distinction glues syllables into gibberish, so
+/// the text between spans is carried and a word starts a new one only when a
+/// space preceded it.
+private final class TTMLParserDelegate: NSObject, XMLParserDelegate {
+    private(set) var lines: [LyricLine] = []
+
+    private var lineStart: TimeInterval?
+    private var words: [LyricWord] = []
+    private var wordStart: TimeInterval?
+    private var wordEnd: TimeInterval?
+    private var buffer = ""
+    private var between = ""
+    /// Depth of the background-vocal subtree we're inside, if any.
+    private var backgroundDepth = 0
+
+    func parser(_ parser: XMLParser, didStartElement element: String, namespaceURI: String?,
+                qualifiedName: String?, attributes: [String: String]) {
+        if backgroundDepth > 0 {
+            backgroundDepth += 1
+            return
+        }
+        switch element {
+        case "p":
+            lineStart = LyricsService.parseTTMLTime(attributes["begin"])
+            words = []
+            between = ""
+        case "span":
+            if attributes["ttm:role"] == "x-bg" || attributes["role"] == "x-bg" {
+                backgroundDepth = 1
+                return
+            }
+            wordStart = LyricsService.parseTTMLTime(attributes["begin"])
+            wordEnd = LyricsService.parseTTMLTime(attributes["end"])
+            buffer = ""
+        default:
+            break
+        }
+    }
+
+    func parser(_ parser: XMLParser, foundCharacters string: String) {
+        guard backgroundDepth == 0 else { return }
+        if wordStart != nil {
+            buffer += string
+        } else {
+            between += string
+        }
+    }
+
+    func parser(_ parser: XMLParser, didEndElement element: String, namespaceURI: String?,
+                qualifiedName: String?) {
+        if backgroundDepth > 0 {
+            backgroundDepth -= 1
+            return
+        }
+        switch element {
+        case "span":
+            defer {
+                wordStart = nil
+                wordEnd = nil
+                between = ""
+            }
+            guard let start = wordStart, let end = wordEnd else { return }
+            let text = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { return }
+            let spaced = words.isEmpty || between.contains(where: \.isWhitespace)
+            if spaced {
+                words.append(LyricWord(time: start, end: end, text: text))
+            } else {
+                // A continuation of the word before it: one word, one span of
+                // time, so the sweep runs across the whole of it.
+                let previous = words.removeLast()
+                words.append(LyricWord(time: previous.time, end: end, text: previous.text + text))
+            }
+        case "p":
+            defer { lineStart = nil }
+            guard let start = lineStart else { return }
+            let text = words.map(\.text).joined(separator: " ")
+            guard !text.isEmpty else { return }
+            lines.append(LyricLine(time: start, text: text, words: words))
+        default:
+            break
+        }
     }
 }

@@ -3,9 +3,13 @@
 //
 // Copies imported audio files into the app's sandbox and computes a SHA-256
 // content hash for deduplication. Files are stored at:
-//   Documents/Music/<sha256>.<extension>
+//   Application Support/Mixtape/Music/<sha256>.<extension>
 //
 // Content-addressed storage means importing the same file twice is a no-op.
+//
+// Application Support, not Documents and emphatically not Library/Caches: an
+// imported original is frequently the only copy of that audio anywhere, so it
+// must survive both an OS purge and a device restore. See `AudioPaths`.
 
 import Foundation
 import CryptoKit
@@ -15,12 +19,7 @@ public final class MusicFileManager {
     // MARK: - Paths
 
     /// Root directory for all imported music. Created on first use.
-    public static var musicDirectory: URL {
-        let docs = URL.documentsDirectory
-        let music = docs.appending(path: "Music", directoryHint: .isDirectory)
-        try? FileManager.default.createDirectory(at: music, withIntermediateDirectories: true)
-        return music
-    }
+    public static var musicDirectory: URL { AudioPaths.importsDirectory }
 
     public init() {}
 
@@ -45,7 +44,10 @@ public final class MusicFileManager {
 
         let attrs    = try FileManager.default.attributesOfItem(atPath: destURL.path)
         let fileSize = (attrs[.size] as? Int64) ?? 0
-        let relPath  = "Music/\(filename)"   // relative to Documents/
+        // Stored as a bare `Music/<file>` path rather than an absolute one: the
+        // container's real path changes between installs and OS versions, and
+        // `AudioPaths.resolve(localPath:)` knows every directory this can name.
+        let relPath  = "Music/\(filename)"
 
         return FileProvenance(
             fileHash:  hash,
@@ -69,10 +71,9 @@ public final class MusicFileManager {
         }
     }
 
-    /// Delete a specific file by its relative path.
+    /// Delete a specific file by its stored path, wherever it resolves to.
     public func deleteFile(relativePath: String) throws {
-        let url = URL.documentsDirectory.appending(path: relativePath)
-        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        guard let url = AudioPaths.resolve(localPath: relativePath) else { return }
         try FileManager.default.removeItem(at: url)
     }
 
@@ -88,6 +89,13 @@ public final class MusicFileManager {
     }
 
     // MARK: - SHA-256 (streaming, 1 MB chunks — handles large FLAC/WAV files)
+
+    /// The content hash of a file that hasn't been imported: the same value
+    /// `importFile` would store in its `FileProvenance`, without copying
+    /// anything.
+    public func contentHash(of url: URL) throws -> String {
+        try sha256(of: url)
+    }
 
     private func sha256(of url: URL) throws -> String {
         let handle = try FileHandle(forReadingFrom: url)

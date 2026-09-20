@@ -96,10 +96,8 @@ public enum M3UExporter {
     private static func entryPath(for track: Track) -> String {
         let localPath = track.file.localPath
         if !localPath.isEmpty {
-            // Resolve the relative path against the app's Documents directory and
-            // emit a file URL so other players can locate it on this device.
-            let url = URL.documentsDirectory.appending(path: localPath)
-            return url.path
+            // Emit the real on-disk path so other players can locate it on this device.
+            return AudioPaths.url(forLocalPath: localPath).path
         }
         // No local file: emit a descriptive filename so the entry isn't blank.
         let ext = "mp3"

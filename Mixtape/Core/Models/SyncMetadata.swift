@@ -55,7 +55,7 @@ public struct SyncMetadata: Codable, Hashable {
     // MARK: Initialisers
 
     /// Full init used when restoring records from SwiftData persistence.
-    public init(
+    public nonisolated init(
         serverID: String?,
         status: SyncStatus,
         localModifiedAt: Date,
@@ -72,7 +72,7 @@ public struct SyncMetadata: Codable, Hashable {
     }
 
     /// Convenience init for brand-new local-only records.
-    public init(deviceID: String) {
+    public nonisolated init(deviceID: String) {
         self.serverID           = nil
         self.status             = .localOnly
         self.localModifiedAt    = Date()
@@ -119,8 +119,9 @@ public struct FileProvenance: Codable, Hashable {
     public var fileHash: String
     /// File size in bytes.
     public var fileSize: Int64
-    /// Path of the local file, relative to the app's Documents directory.
-    /// Absolute path reconstruction: `URL.documentsDirectory.appending(path: localPath)`
+    /// Path of the local file. Historically Documents-relative; imports now live
+    /// in Application Support, so resolve it through `AudioPaths`, never by
+    /// appending to a directory yourself.
     public var localPath: String
     /// Supabase Storage object key (e.g. `audio/<userID>/<hash>.m4a`).
     /// `nil` until the file has been uploaded.
@@ -129,6 +130,13 @@ public struct FileProvenance: Codable, Hashable {
     public var uploaded: Bool
     /// When this device last downloaded the file from Supabase Storage.
     public var downloadedAt: Date?
+    /// Where the audio comes from, and therefore how it gets onto disk.
+    /// Stored rather than inferred — see `TrackOrigin`.
+    public var origin: TrackOrigin
+    /// Resolver key for `.online` rows: the provider's video id once we've
+    /// picked one, otherwise the `"title|artist"` search key. This is the whole
+    /// content of an online placeholder — the row has no bytes, only this.
+    public var sourceRef: String?
 
     /// Convenience init for freshly imported files (not yet uploaded).
     public init(fileHash: String, fileSize: Int64, localPath: String) {
@@ -138,6 +146,42 @@ public struct FileProvenance: Codable, Hashable {
         self.remoteKey    = nil
         self.uploaded     = false
         self.downloadedAt = nil
+        self.origin       = .imported
+        self.sourceRef    = nil
+    }
+
+    /// A Discover song saved to the library: metadata and a way to fetch it,
+    /// nothing else. No path, no size, no upload.
+    public static func onlinePlaceholder(sourceRef: String) -> FileProvenance {
+        FileProvenance(
+            fileHash:     "",
+            fileSize:     0,
+            localPath:    "",
+            remoteKey:    nil,
+            uploaded:     false,
+            downloadedAt: nil,
+            origin:       .online,
+            sourceRef:    sourceRef
+        )
+    }
+
+    /// A file in a watched folder, played where it lies.
+    ///
+    /// The path is absolute and points outside every Mixtape directory, which is
+    /// deliberate: `AudioPaths.resolve` handles absolute paths, so playback works
+    /// without a copy. `uploaded` is false and stays false — nothing ever offers
+    /// these bytes to Supabase.
+    public nonisolated static func localFile(path: String, fileSize: Int64) -> FileProvenance {
+        FileProvenance(
+            fileHash:     "",
+            fileSize:     fileSize,
+            localPath:    path,
+            remoteKey:    nil,
+            uploaded:     false,
+            downloadedAt: nil,
+            origin:       .localFile,
+            sourceRef:    nil
+        )
     }
 
     /// Full init for restoring from SwiftData persistence.
@@ -147,7 +191,9 @@ public struct FileProvenance: Codable, Hashable {
         localPath: String,
         remoteKey: String?,
         uploaded: Bool,
-        downloadedAt: Date?
+        downloadedAt: Date?,
+        origin: TrackOrigin = .imported,
+        sourceRef: String? = nil
     ) {
         self.fileHash     = fileHash
         self.fileSize     = fileSize
@@ -155,10 +201,35 @@ public struct FileProvenance: Codable, Hashable {
         self.remoteKey    = remoteKey
         self.uploaded     = uploaded
         self.downloadedAt = downloadedAt
+        self.origin       = origin
+        self.sourceRef    = sourceRef
     }
 
-    /// Full local URL, resolved against the app's Documents directory.
+    // MARK: Legacy inference
+
+    /// What a row written before `origin` existed must have been.
+    ///
+    /// Only the persistence layer should call this, and only when the stored
+    /// origin is absent. It reproduces the old heuristics exactly — an
+    /// `OnlineCache` path or a `"title|artist"` hash meant Discover, empty
+    /// everything meant an unresolvable shared row — so a store written by an
+    /// older build reads back the way it always did.
+    public static func inferOrigin(
+        localPath: String,
+        fileHash: String,
+        fileSize: Int64,
+        remoteKey: String?
+    ) -> TrackOrigin {
+        if localPath.contains("OnlineCache") || fileHash.contains("|") { return .online }
+        if localPath.isEmpty && remoteKey == nil && fileSize == 0 && fileHash.isEmpty {
+            return .unresolvableShare
+        }
+        if remoteKey == nil && fileSize == 0 { return .online }
+        return .imported
+    }
+
+    /// Full local URL: the file if it's on disk, otherwise where it would go.
     public var localURL: URL {
-        URL.documentsDirectory.appending(path: localPath)
+        AudioPaths.url(forLocalPath: localPath)
     }
 }

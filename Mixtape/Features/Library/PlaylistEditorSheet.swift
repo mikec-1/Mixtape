@@ -5,11 +5,7 @@
 // Lets the user pick a cover photo, set a name, and write an optional description —
 // matching the Spotify "Edit details" pattern.
 
-#if os(iOS)
-import PhotosUI
-#endif
 import SwiftUI
-import UniformTypeIdentifiers
 
 // MARK: - PlaylistEditorSheet
 
@@ -23,12 +19,16 @@ public struct PlaylistEditorSheet: View {
     @State private var name        = ""
     @State private var description = ""
     @State private var artworkData: Data? = nil
-
-    #if os(iOS)
-    @State private var photoItem: PhotosPickerItem? = nil
-    #elseif os(macOS)
-    @State private var showFilePicker = false
-    #endif
+    /// What the picker was showing when the sheet opened.
+    ///
+    /// A playlist with no cover of its own still *shows* one — the mosaic it
+    /// borrows from its songs — and the picker has to show that too, or opening
+    /// Edit Details on a playlist that plainly has a cover would present an
+    /// empty square. But it must not be saved back: writing the borrowed image
+    /// in would turn a cover that follows the songs into a fixed one, and would
+    /// mark it as chosen by a user who only came here to fix a typo. So the
+    /// cover is written only when this and `artworkData` differ.
+    @State private var originalArtwork: Data? = nil
 
     public init(editingPlaylist: Playlist? = nil) {
         self.editingPlaylist = editingPlaylist
@@ -45,238 +45,101 @@ public struct PlaylistEditorSheet: View {
     // MARK: - Body
 
     public var body: some View {
-        #if os(iOS)
-        iosBody
-            .task(id: editingPlaylist?.id) { setupInitialState() }
-            .onChange(of: photoItem) { _, item in
-                Task {
-                    if let data = try? await item?.loadTransferable(type: Data.self) {
-                        artworkData = data
-                    }
-                }
-            }
-        #elseif os(macOS)
-        macBody
-            .task(id: editingPlaylist?.id) { setupInitialState() }
-            .fileImporter(isPresented: $showFilePicker, allowedContentTypes: [.image]) { result in
-                guard case .success(let url) = result,
-                      url.startAccessingSecurityScopedResource() else { return }
-                defer { url.stopAccessingSecurityScopedResource() }
-                artworkData = try? Data(contentsOf: url)
-            }
-        #endif
+        // One layout now. The two platform bodies below had drifted into
+        // different sheets entirely — different titles, different close
+        // affordances, a pill Save on one and a bordered Save on the other,
+        // and a description box that had to be height-pinned on iOS because it
+        // was the only greedy view on a full-height detent. The shared chrome
+        // bounds the sheet, so the field can just be a field.
+        MixSheet(title: titleText,
+                 subtitle: editingPlaylist == nil
+                     ? "Give it a name — you can change it later."
+                     : nil,
+                 size: .medium,
+                 primary: MixSheetAction("Save", isEnabled: canSave, action: save)) {
+            fields
+        }
+        .task(id: editingPlaylist?.id) { setupInitialState() }
     }
-    
+
+    // MARK: - Fields
+
+    private var fields: some View {
+        HStack(alignment: .top, spacing: 16) {
+            artworkPickerView(size: 120)
+            VStack(spacing: 10) {
+                nameFieldView
+                descriptionFieldView
+            }
+            .frame(height: 120)
+        }
+    }
+
     private func setupInitialState() {
         if let playlist = editingPlaylist {
             name = playlist.name
             description = playlist.description ?? ""
-            artworkData = playlist.artworkData
+            artworkData     = playlist.displayArtwork
+            originalArtwork = artworkData
         } else {
             name = defaultName()
         }
     }
 
-    // MARK: - iOS layout
-
-    #if os(iOS)
-    private var iosBody: some View {
-        ZStack {
-            Color.mixBackground.ignoresSafeArea()
-
-            VStack(alignment: .leading, spacing: 0) {
-
-                // ── Header ─────────────────────────────────────────────────────
-                HStack {
-                    Text(titleText)
-                        .font(.system(size: 22, weight: .bold))
-                        .foregroundStyle(Color.mixTextPrimary)
-                    Spacer()
-                    Button { dismiss() } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Color.mixTextSecondary)
-                            .frame(width: 28, height: 28)
-                            .background(Color.mixSurface2, in: Circle())
-                    }
-                    .buttonStyle(.plain)
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 24)
-                .padding(.bottom, 24)
-
-                // ── Fields ─────────────────────────────────────────────────────
-                HStack(alignment: .top, spacing: 14) {
-                    artworkPickerView(size: 130)
-                    VStack(spacing: 10) {
-                        nameFieldView
-                        descriptionFieldView
-                    }
-                }
-                .padding(.horizontal, 20)
-
-                Spacer()
-
-                // ── Save button ────────────────────────────────────────────────
-                Button { save() } label: {
-                    Text("Save")
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundStyle(.black)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
-                        .background(.white, in: RoundedRectangle(cornerRadius: 50))
-                }
-                .buttonStyle(.plain)
-                .disabled(!canSave)
-                .opacity(canSave ? 1 : 0.45)
-                .padding(.horizontal, 20)
-                .padding(.bottom, 36)
-            }
-        }
-    }
-    #endif
-
-    // MARK: - macOS layout
-
-    #if os(macOS)
-    private var macBody: some View {
-        VStack(spacing: 0) {
-
-            // ── Header ─────────────────────────────────────────────────────────
-            HStack {
-                Text(titleText)
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundStyle(Color.mixTextPrimary)
-                Spacer()
-                Button { dismiss() } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(Color.mixTextSecondary)
-                        .frame(width: 22, height: 22)
-                        .background(Color.mixSurface2, in: Circle())
-                }
-                .buttonStyle(.plain)
-                .keyboardShortcut(.escape, modifiers: [])
-            }
-            .padding(20)
-
-            Divider()
-
-            // ── Fields ─────────────────────────────────────────────────────────
-            HStack(alignment: .top, spacing: 16) {
-                artworkPickerView(size: 120)
-                VStack(spacing: 10) {
-                    nameFieldView
-                    descriptionFieldView
-                }
-            }
-            .padding(20)
-
-            Divider()
-
-            // ── Footer ─────────────────────────────────────────────────────────
-            HStack(spacing: 12) {
-                Spacer()
-                Button("Cancel") { dismiss() }
-                    .foregroundStyle(Color.mixTextSecondary)
-                Button("Save") { save() }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color.mixPrimary)
-                    .disabled(!canSave)
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 14)
-        }
-        .frame(width: 460)
-        .background(Color.mixBackground)
-    }
-    #endif
-
     // MARK: - Artwork picker
 
-    @ViewBuilder
     private func artworkPickerView(size: CGFloat) -> some View {
-        #if os(iOS)
-        PhotosPicker(selection: $photoItem, matching: .images) {
-            artworkSquare(size: size)
-        }
-        .buttonStyle(.plain)
-        #elseif os(macOS)
-        Button { showFilePicker = true } label: {
-            artworkSquare(size: size)
-        }
-        .buttonStyle(.plain)
-        #endif
-    }
-
-    private func artworkSquare(size: CGFloat) -> some View {
-        ZStack {
-            // Artwork or placeholder
-            if let artworkData, let img = platformImage(from: artworkData) {
-                img.resizable().scaledToFill()
-                    .frame(width: size, height: size)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-            } else {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.mixSurface2)
-                    .frame(width: size, height: size)
-                    .overlay(
-                        Image(systemName: "music.note")
-                            .font(.system(size: size * 0.28))
-                            .foregroundStyle(Color.mixTextTertiary)
-                    )
-            }
-
-            // Camera badge — bottom-right corner
-            VStack {
-                Spacer()
-                HStack {
-                    Spacer()
-                    Image(systemName: "camera.fill")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .padding(6)
-                        .background(.black.opacity(0.55), in: Circle())
-                        .padding(6)
-                }
-            }
-            .frame(width: size, height: size)
-        }
+        ArtworkPickerView<AnyView>.standard(data: $artworkData, size: size)
     }
 
     // MARK: - Name field
 
     private var nameFieldView: some View {
         TextField("Playlist name", text: $name)
-            .font(.system(size: 14))
-            .foregroundStyle(Color.mixTextPrimary)
-            #if os(macOS)
-            .textFieldStyle(.plain)
-            #endif
-            .padding(10)
-            .background(Color.mixSurface2, in: RoundedRectangle(cornerRadius: 8))
+            .mixSheetField()
     }
 
     // MARK: - Description field  (ZStack placeholder trick — TextEditor has no built-in placeholder)
+
+    /// Padding applied to the `TextEditor` itself.
+    private static let editorPadding: CGFloat = 6
+
+    /// What the text view insets its own text by, on top of `editorPadding`.
+    ///
+    /// The placeholder only lines up with the caret if it's inset by *both*
+    /// numbers. The hand-picked 12/10 this used to carry couldn't line up —
+    /// they were guessing at a platform constant instead of naming it. These
+    /// are that constant: AppKit's line-fragment padding, and on UIKit the same
+    /// plus `UITextView`'s vertical `textContainerInset`.
+    #if os(macOS)
+    private static let textInset = CGSize(width: 5, height: 0)
+    #else
+    private static let textInset = CGSize(width: 5, height: 8)
+    #endif
 
     private var descriptionFieldView: some View {
         ZStack(alignment: .topLeading) {
             if description.isEmpty {
                 Text("Add an optional description")
-                    .font(.system(size: 13))
+                    .font(.system(size: 13.5))
                     .foregroundStyle(Color.mixTextTertiary)
-                    .padding(.horizontal, 12)
-                    .padding(.top, 10)
+                    .padding(.leading, Self.editorPadding + Self.textInset.width)
+                    .padding(.trailing, Self.editorPadding)
+                    .padding(.top, Self.editorPadding + Self.textInset.height)
                     .allowsHitTesting(false)
             }
             TextEditor(text: $description)
-                .font(.system(size: 13))
+                .font(.system(size: 13.5))
                 .foregroundStyle(Color.mixTextPrimary)
                 .scrollContentBackground(.hidden)
-                .padding(6)
+                .padding(Self.editorPadding)
         }
-        .frame(minHeight: 80)
-        .background(Color.mixSurface2, in: RoundedRectangle(cornerRadius: 8))
+        // Takes whatever the column has left under the name field. The column
+        // is pinned to the cover's height in `fields`, so this is bounded on
+        // both platforms now — it used to be the only greedy view in an
+        // unbounded iOS sheet, which is how it grew to the size of a screen.
+        .frame(maxHeight: .infinity)
+        .background(Color.mixSurface2, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     // MARK: - Helpers
@@ -287,12 +150,18 @@ public struct PlaylistEditorSheet: View {
         guard !trimName.isEmpty else { return }
         
         if let playlist = editingPlaylist {
-            deps.libraryService.updatePlaylist(
+            // Details and cover written separately, and the cover only if it
+            // actually changed. They used to go through one call that always
+            // wrote both, which meant every rename also re-wrote the cover —
+            // and re-wrote a *borrowed* one as if the user had picked it.
+            deps.libraryService.setPlaylistDetails(
                 id:          playlist.id,
                 name:        trimName,
-                description: trimDesc.isEmpty ? nil : trimDesc,
-                artworkData: artworkData
+                description: trimDesc.isEmpty ? nil : trimDesc
             )
+            if artworkData != originalArtwork {
+                deps.libraryService.setPlaylistArtwork(id: playlist.id, data: artworkData)
+            }
         } else {
             _ = deps.libraryService.createPlaylist(
                 name:        trimName,
@@ -309,16 +178,6 @@ public struct PlaylistEditorSheet: View {
     private func defaultName() -> String {
         let count = deps.libraryService.playlists.filter { !$0.isSystem && !$0.isDeleted }.count
         return "My Playlist #\(count + 1)"
-    }
-
-    private func platformImage(from data: Data) -> Image? {
-        #if os(iOS)
-        guard let ui = UIImage(data: data)   else { return nil }
-        return Image(uiImage: ui)
-        #elseif os(macOS)
-        guard let ns = NSImage(data: data)   else { return nil }
-        return Image(nsImage: ns)
-        #endif
     }
 }
 

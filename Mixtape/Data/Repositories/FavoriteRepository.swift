@@ -7,11 +7,11 @@ import SwiftData
 @MainActor
 public final class FavoriteRepository {
 
-    private let context: ModelContext
+    /// Never stored: the context belongs to whichever account's store is open
+    /// right now. See `ModelStore`.
+    private var context: ModelContext { ModelStore.shared.context }
 
-    public init(context: ModelContext) {
-        self.context = context
-    }
+    public init() {}
 
     // MARK: - Query
 
@@ -19,7 +19,8 @@ public final class FavoriteRepository {
         let desc = FetchDescriptor<FavoriteEntity>(
             predicate: #Predicate { $0.trackID == trackID }
         )
-        return !(try context.fetch(desc).isEmpty)
+        // A count, not the row: nothing here reads the entity.
+        return try context.fetchCount(desc) > 0
     }
 
     public func allFavouritedIDs() throws -> [UUID] {
@@ -35,23 +36,53 @@ public final class FavoriteRepository {
         guard !(try isFavourited(trackID: trackID)) else { return }
         let entity = FavoriteEntity(trackID: trackID, syncDeviceID: deviceID)
         context.insert(entity)
-        try context.save()
+        try context.saveBatched()
+    }
+
+    /// Favourites a whole selection in one fetch and one save.
+    ///
+    /// Called per song, `add(trackID:)` is a predicate fetch *and* a full
+    /// `context.save()` each time — importing 2,200 Liked Songs meant 2,200 of
+    /// each, on the main thread, after the progress bar had already reached the
+    /// end. That was the second freeze: the one that happened when the import
+    /// looked finished.
+    public func add(trackIDs: [UUID], deviceID: String) throws {
+        guard !trackIDs.isEmpty else { return }
+        let existing = Set(try allFavouritedIDs())
+        var inserted = Set<UUID>()
+        for id in trackIDs where !existing.contains(id) && inserted.insert(id).inserted {
+            context.insert(FavoriteEntity(trackID: id, syncDeviceID: deviceID))
+        }
+        guard !inserted.isEmpty else { return }
+        try context.saveBatched()
     }
 
     public func remove(trackID: UUID) throws {
-        let desc = FetchDescriptor<FavoriteEntity>(
-            predicate: #Predicate { $0.trackID == trackID }
-        )
-        for entity in try context.fetch(desc) {
+        try remove(trackIDs: [trackID])
+    }
+
+    /// Unhearts a whole selection in one fetch and one save — the mirror of
+    /// `add(trackIDs:)`, and for the same reason. Removing 2,100 imported songs
+    /// went through the single-id version, so it was 2,100 predicate fetches and
+    /// 2,100 commits on the main thread: the app was unresponsive for the whole
+    /// of it.
+    public func remove(trackIDs: [UUID]) throws {
+        let doomed = Set(trackIDs)
+        guard !doomed.isEmpty else { return }
+        var removed = false
+        for entity in try context.fetch(FetchDescriptor<FavoriteEntity>())
+        where doomed.contains(entity.trackID) {
             context.delete(entity)
+            removed = true
         }
-        try context.save()
+        guard removed else { return }
+        try context.saveBatched()
     }
 
     /// Hard-deletes all FavoriteEntity records from the local store.
     public func deleteAll() throws {
         try context.delete(model: FavoriteEntity.self)
-        try context.save()
+        try context.saveBatched()
     }
 
     // MARK: - Sync Rebuild
@@ -77,6 +108,6 @@ public final class FavoriteRepository {
             )
             context.insert(entity)
         }
-        try context.save()
+        try context.saveBatched()
     }
 }
