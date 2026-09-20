@@ -561,7 +561,10 @@ public struct ProfilePageView: View {
         static let pageInset: CGFloat     = 18
         static let cardMin: CGFloat       = 140
         static let cardMax: CGFloat       = 180
-        static let nameFont: Font         = .system(size: 30, weight: .bold)
+        // Computed, not stored: a `static let` is initialised once per process,
+        // so it would freeze whatever text size was set the first time this
+        // page opened and never follow a change made in Settings afterwards.
+        static var nameFont: Font         { .system(size: MixFontScale.size(30), weight: .bold) }
         #endif
     }
 }
@@ -624,7 +627,7 @@ private struct ArtistCircle: View {
         Color.mixSurface
             .overlay(
                 Text(initials)
-                    .font(.system(size: 30, weight: .semibold))
+                    .font(.system(size: MixFontScale.size(30), weight: .semibold))
                     .foregroundStyle(Color.mixTextSecondary)
             )
     }

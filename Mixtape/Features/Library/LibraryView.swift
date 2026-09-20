@@ -322,7 +322,7 @@ private struct SectionChip: View {
         Button(action: action) {
             HStack(spacing: 5) {
                 if let icon {
-                    Image(systemName: icon).font(.system(size: 11, weight: .semibold))
+                    Image(systemName: icon).font(.system(size: MixFontScale.size(11), weight: .semibold))
                 }
                 Text(title)
             }

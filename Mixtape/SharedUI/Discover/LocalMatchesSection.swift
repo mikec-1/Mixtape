@@ -43,12 +43,12 @@ struct LocalMatchesSection: View {
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text("In your library")
-                            .font(.system(size: 20, weight: .bold))
+                            .font(.system(size: MixFontScale.size(20), weight: .bold))
                             .foregroundStyle(Color.mixTextPrimary)
                             .mixTightened()
                         Text(tracks.count == 1 ? "1 song you already have"
                                                : "\(tracks.count) songs you already have")
-                            .font(.system(size: 12.5))
+                            .font(.system(size: MixFontScale.size(12.5)))
                             .foregroundStyle(Color.mixTextTertiary)
                     }
                     Spacer(minLength: 8)
@@ -157,11 +157,11 @@ struct LibrarySongRow: View {
                 MixTrackArtistLink(track: track, font: .system(size: 12))
                 #else
                 Text(track.title)
-                    .font(.system(size: 13.5, weight: .medium))
+                    .font(.system(size: MixFontScale.size(13.5), weight: .medium))
                     .foregroundStyle(Color.mixTextPrimary)
                     .lineLimit(1)
                 Text(track.artistName)
-                    .font(.system(size: 12))
+                    .font(.system(size: MixFontScale.size(12)))
                     .foregroundStyle(Color.mixTextSecondary)
                     .lineLimit(1)
                 #endif

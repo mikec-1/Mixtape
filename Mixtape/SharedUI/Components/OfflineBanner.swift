@@ -25,10 +25,10 @@ struct OfflineBanner: View {
                     .font(.system(size: 11, weight: .semibold))
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Offline")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: MixFontScale.size(12), weight: .semibold))
                         .foregroundStyle(Color.mixTextPrimary)
                     Text("Downloaded music still plays. Changes sync when you reconnect.")
-                        .font(.system(size: 11))
+                        .font(.system(size: MixFontScale.size(11)))
                         .foregroundStyle(Color.mixTextTertiary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -90,7 +90,7 @@ struct OfflineStrip: View {
         Group {
             if let back {
                 Text(back ? "You're back online" : "You're offline")
-                    .font(.system(size: 13, weight: back ? .semibold : .regular))
+                    .font(.system(size: MixFontScale.size(13), weight: back ? .semibold : .regular))
                     .foregroundStyle(back ? Color.black : Color.mixTextSecondary)
                     .frame(maxWidth: .infinity)
                     .frame(height: 22)

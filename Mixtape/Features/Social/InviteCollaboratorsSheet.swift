@@ -192,7 +192,7 @@ struct InviteCollaboratorsSheet: View {
                              placeholder: MixtapeIcons.playlist)
 
             Text(name)
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: MixFontScale.size(15), weight: .semibold))
                 .foregroundStyle(Color.mixTextPrimary)
                 .lineLimit(2)
 
@@ -240,7 +240,7 @@ struct InviteCollaboratorsSheet: View {
                 .foregroundStyle(Color.mixTextSecondary)
 
             Text(link)
-                .font(.system(size: 13, weight: .medium, design: .monospaced))
+                .font(.system(size: MixFontScale.size(13), weight: .medium, design: .monospaced))
                 .foregroundStyle(Color.mixTextPrimary)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -280,7 +280,7 @@ struct InviteCollaboratorsSheet: View {
 
                     HStack(spacing: 12) {
                         Text(code)
-                            .font(.system(size: 26, weight: .bold, design: .monospaced))
+                            .font(.system(size: MixFontScale.size(26), weight: .bold, design: .monospaced))
                             .tracking(4)
                             .foregroundStyle(Color.mixTextPrimary)
                             .textSelection(.enabled)
@@ -475,7 +475,7 @@ struct InviteCollaboratorsSheet: View {
 
                     if let chip = member.chip {
                         Text(chip.text)
-                            .font(.system(size: 10, weight: .bold))
+                            .font(.system(size: MixFontScale.size(10), weight: .bold))
                             .foregroundStyle(chip.colour)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
@@ -550,7 +550,7 @@ struct InviteCollaboratorsSheet: View {
 
     private func chipLabel(_ title: String, icon: String) -> some View {
         HStack(spacing: 5) {
-            Image(systemName: icon).font(.system(size: 11, weight: .semibold))
+            Image(systemName: icon).font(.system(size: MixFontScale.size(11), weight: .semibold))
             Text(title).font(.mixLabel)
         }
         .foregroundStyle(Color.mixPrimary)

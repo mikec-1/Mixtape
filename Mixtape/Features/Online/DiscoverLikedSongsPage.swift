@@ -91,14 +91,14 @@ struct DiscoverLikedSongsPage: View {
             artwork
             VStack(alignment: .leading, spacing: 8) {
                 Text("Liked Songs")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: MixFontScale.size(12), weight: .semibold))
                     .foregroundStyle(Color.mixTextSecondary)
                 Text("By \(artist.name)")
-                    .font(.system(size: 28, weight: .bold))
+                    .font(.system(size: MixFontScale.size(28), weight: .bold))
                     .foregroundStyle(Color.mixTextPrimary)
                     .lineLimit(2)
                 Text("\(tracks.count) song\(tracks.count == 1 ? "" : "s")")
-                    .font(.system(size: 12))
+                    .font(.system(size: MixFontScale.size(12)))
                     .foregroundStyle(Color.mixTextSecondary)
                 if let first = tracks.first {
                     playButton(first)
@@ -137,7 +137,7 @@ struct DiscoverLikedSongsPage: View {
             Task { await engine.play(track: first, in: tracks, source: .named("Liked Songs")) }
         } label: {
             Label("Play", systemImage: "play.fill")
-                .font(.system(size: 13, weight: .bold))
+                .font(.system(size: MixFontScale.size(13), weight: .bold))
                 .padding(.horizontal, 20)
                 .padding(.vertical, 9)
                 .background(Color.mixAccentFill, in: Capsule())
@@ -197,7 +197,7 @@ struct DiscoverLikedSongsPage: View {
                 .font(.system(size: 34))
                 .foregroundStyle(Color.mixTextTertiary)
             Text("Nothing liked by \(artist.name) any more.")
-                .font(.system(size: 14))
+                .font(.system(size: MixFontScale.size(14)))
                 .foregroundStyle(Color.mixTextSecondary)
         }
         .frame(maxWidth: .infinity)

@@ -44,7 +44,7 @@ enum IOSTopResult {
 struct ExplicitBadge: View {
     var body: some View {
         Text("E")
-            .font(.system(size: 9, weight: .bold))
+            .font(.system(size: MixFontScale.size(9), weight: .bold))
             .foregroundStyle(Color.mixTextSecondary)
             .frame(width: 14, height: 14)
             .background(Color.mixSurface2, in: RoundedRectangle(cornerRadius: 3, style: .continuous))
@@ -95,7 +95,7 @@ struct IOSSongRow: View {
         HStack(spacing: 12) {
             if let index {
                 Text("\(index)")
-                    .font(.system(size: 12).monospacedDigit())
+                    .font(.system(size: MixFontScale.size(12)).monospacedDigit())
                     .foregroundStyle(isCurrent ? Color.mixPrimary : Color.mixTextTertiary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
@@ -117,13 +117,13 @@ struct IOSSongRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(song.displayTitle)
-                        .font(.system(size: 15, weight: .medium))
+                        .font(.system(size: MixFontScale.size(15), weight: .medium))
                         .foregroundStyle(isCurrent ? Color.mixPrimary : Color.mixTextPrimary)
                         .lineLimit(1)
                     if song.isExplicit { ExplicitBadge() }
                 }
                 Text(song.displayArtistName)
-                    .font(.system(size: 13))
+                    .font(.system(size: MixFontScale.size(13)))
                     .foregroundStyle(Color.mixTextSecondary)
                     .lineLimit(1)
             }
@@ -142,7 +142,7 @@ struct IOSSongRow: View {
                         .mixVariableColor(isActive: isPlaying)
                 } else if song.duration > 0 {
                     Text(Self.formatTime(song.duration))
-                        .font(.system(size: 12).monospacedDigit())
+                        .font(.system(size: MixFontScale.size(12)).monospacedDigit())
                         .foregroundStyle(Color.mixTextTertiary)
                 }
             }
@@ -198,16 +198,16 @@ struct IOSWideSongHero: View {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 8) {
                         Text("Song")
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(.system(size: MixFontScale.size(12), weight: .semibold))
                             .foregroundStyle(Color.mixTextSecondary)
                         if song.isExplicit { ExplicitBadge() }
                     }
                     Text(song.displayTitle)
-                        .font(.system(size: 24, weight: .bold))
+                        .font(.system(size: MixFontScale.size(24), weight: .bold))
                         .foregroundStyle(Color.mixTextPrimary)
                         .lineLimit(2)
                     Text(song.displayArtistName)
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.system(size: MixFontScale.size(14), weight: .semibold))
                         .foregroundStyle(Color.mixTextSecondary)
                         .lineLimit(1)
                 }
@@ -217,7 +217,7 @@ struct IOSWideSongHero: View {
                 Button(action: onPlay) {
                     Label(isThisPlaying ? "Pause" : "Play",
                           systemImage: isThisPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 14, weight: .bold))
+                        .font(.system(size: MixFontScale.size(14), weight: .bold))
                         .padding(.horizontal, 28).padding(.vertical, 11)
                         .frame(maxWidth: .infinity)
                         .background(Color.mixAccentFill, in: Capsule())
@@ -289,12 +289,12 @@ struct IOSTopResultCard: View {
                     discoverArtwork(url: imageURL, circle: circle, size: 72)
                     VStack(alignment: .leading, spacing: 4) {
                         Text(title)
-                            .font(.system(size: 20, weight: .semibold))
+                            .font(.system(size: MixFontScale.size(20), weight: .semibold))
                             .foregroundStyle(Color.mixTextPrimary)
                             .lineLimit(1)
                             .truncationMode(.tail)
                         Text(subtitle)
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.system(size: MixFontScale.size(12), weight: .medium))
                             .foregroundStyle(Color.mixTextSecondary)
                             .lineLimit(1)
                     }
@@ -614,7 +614,7 @@ struct IOSDiscoverArtistPage: View {
                     onPlay(first, topTracks)
                 } label: {
                     Label("Play", systemImage: "play.fill")
-                        .font(.system(size: 14, weight: .bold))
+                        .font(.system(size: MixFontScale.size(14), weight: .bold))
                         .padding(.horizontal, 24).padding(.vertical, 10)
                         .background(Color.mixAccentFill, in: Capsule())
                         .foregroundStyle(Color.mixOnAccent)
@@ -731,7 +731,7 @@ struct IOSDiscoverArtistPage: View {
         } label: {
             Label(expanded.wrappedValue ? "Show less" : "Show more",
                   systemImage: expanded.wrappedValue ? "chevron.up" : "chevron.down")
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: MixFontScale.size(12), weight: .semibold))
                 .foregroundStyle(Color.mixTextSecondary)
         }
         .buttonStyle(.plain).mixHandCursor()
@@ -777,11 +777,11 @@ struct IOSDiscoverAlbumPage: View {
                 HStack(spacing: 16) {
                     discoverArtwork(url: album.coverURL, circle: false, size: 130)
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Album").font(.system(size: 12, weight: .semibold))
+                        Text("Album").font(.system(size: MixFontScale.size(12), weight: .semibold))
                             .foregroundStyle(Color.mixTextSecondary)
-                        Text(album.title).font(.system(size: 24, weight: .bold))
+                        Text(album.title).font(.system(size: MixFontScale.size(24), weight: .bold))
                             .foregroundStyle(Color.mixTextPrimary).lineLimit(3)
-                        Text(album.artistName).font(.system(size: 14))
+                        Text(album.artistName).font(.system(size: MixFontScale.size(14)))
                             .foregroundStyle(Color.mixTextSecondary)
                         HStack(spacing: 10) {
                             AlbumSaveButton(title: album.title, artistName: album.artistName,
@@ -908,7 +908,7 @@ struct IOSGenreTile: View {
         ZStack(alignment: .topLeading) {
             color
             Text(genre.name)
-                .font(.system(size: 17, weight: .bold))
+                .font(.system(size: MixFontScale.size(17), weight: .bold))
                 .foregroundStyle(.white)
                 .lineLimit(2)
                 .padding(14)
@@ -952,7 +952,7 @@ struct IOSDiscoverGenrePage: View {
                     ProgressView().frame(maxWidth: .infinity).padding(.top, 40)
                 } else if artists.isEmpty {
                     Text("Nothing to show for this genre right now.")
-                        .font(.system(size: 14))
+                        .font(.system(size: MixFontScale.size(14)))
                         .foregroundStyle(Color.mixTextSecondary)
                 } else {
                     discoverSectionHeader("Popular artists")

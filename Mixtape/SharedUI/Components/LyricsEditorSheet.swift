@@ -157,13 +157,13 @@ struct LyricsEditorSheet: View {
     /// Monospaced once the text carries timestamps, so `[00:12.40]` columns
     /// line up down the left edge the way an .lrc is meant to read.
     private var editorFont: Font {
-        .system(size: 13, design: text.contains("[") ? .monospaced : .default)
+        .system(size: MixFontScale.size(13), design: text.contains("[") ? .monospaced : .default)
     }
 
     /// The placeholder shows only when `text` is empty, which is exactly when
     /// `editorFont` is the default design — but deriving it keeps the two from
     /// drifting apart if either changes.
-    private var placeholderFont: Font { .system(size: 13) }
+    private var placeholderFont: Font { .system(size: MixFontScale.size(13)) }
 
     /// What Save is about to produce, in the words the player uses.
     private var statusLine: some View {
@@ -171,7 +171,7 @@ struct LyricsEditorSheet: View {
             Image(systemName: statusIcon)
                 .font(.system(size: 11, weight: .semibold))
             Text(statusText)
-                .font(.system(size: 12))
+                .font(.system(size: MixFontScale.size(12)))
             Spacer(minLength: 0)
         }
         .foregroundStyle(fileError == nil ? Color.mixTextSecondary : Color.mixDestructive)
@@ -245,7 +245,7 @@ struct LyricsEditorSheet: View {
                              action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 5) {
-                Image(systemName: icon).font(.system(size: 11, weight: .semibold))
+                Image(systemName: icon).font(.system(size: MixFontScale.size(11), weight: .semibold))
                 Text(title).font(.system(size: 12, weight: .medium))
             }
             .foregroundStyle(isDestructive ? Color.mixDestructive : Color.mixTextPrimary)

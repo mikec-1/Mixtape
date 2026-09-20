@@ -140,7 +140,7 @@ public struct SpotifyExportView: View {
                     fieldLabel("Playlist name")
                     TextField("", text: $name)
                         .textFieldStyle(.plain)
-                        .font(.system(size: 13))
+                        .font(.system(size: MixFontScale.size(13)))
                         .foregroundStyle(Color.mixTextPrimary)
                         .padding(.horizontal, 9)
                         .padding(.vertical, 7)
@@ -150,7 +150,7 @@ public struct SpotifyExportView: View {
 
                 Toggle(isOn: $isPublic) {
                     Text("Make it public on Spotify")
-                        .font(.system(size: 12.5))
+                        .font(.system(size: MixFontScale.size(12.5)))
                         .foregroundStyle(Color.mixTextPrimary)
                 }
                 .toggleStyle(.switch)
@@ -216,10 +216,10 @@ public struct SpotifyExportView: View {
         Toggle(isOn: isOn) {
             VStack(alignment: .leading, spacing: 1) {
                 Text(title)
-                    .font(.system(size: 12.5))
+                    .font(.system(size: MixFontScale.size(12.5)))
                     .foregroundStyle(Color.mixTextPrimary)
                 Text(detail)
-                    .font(.system(size: 11))
+                    .font(.system(size: MixFontScale.size(11)))
                     .foregroundStyle(Color.mixTextTertiary)
             }
         }
@@ -242,7 +242,7 @@ public struct SpotifyExportView: View {
 
     private func fieldLabel(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 11, weight: .medium))
+            .font(.system(size: MixFontScale.size(11), weight: .medium))
             .foregroundStyle(Color.mixTextSecondary)
     }
 
@@ -271,7 +271,7 @@ public struct SpotifyExportView: View {
                     .foregroundStyle(Color.mixTextTertiary)
             }
         }
-        .font(.system(size: 12))
+        .font(.system(size: MixFontScale.size(12)))
         .foregroundStyle(Color.mixTextSecondary)
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -300,7 +300,7 @@ public struct SpotifyExportView: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(candidate.track.title)
-                    .font(.system(size: 12.5, weight: .medium))
+                    .font(.system(size: MixFontScale.size(12.5), weight: .medium))
                     .foregroundStyle(Color.mixTextPrimary)
                     .lineLimit(1)
 
@@ -311,7 +311,7 @@ public struct SpotifyExportView: View {
                     Text(differs(candidate.track, match)
                          ? "\u{2192} \(match.title) \u{00B7} \(match.artist)"
                          : candidate.track.artistName)
-                        .font(.system(size: 11))
+                        .font(.system(size: MixFontScale.size(11)))
                         .foregroundStyle(differs(candidate.track, match)
                                          ? Color.mixTextSecondary
                                          : Color.mixTextTertiary)
@@ -320,7 +320,7 @@ public struct SpotifyExportView: View {
                     // "Not on Spotify" is a claim about the catalogue. Only
                     // make it when a search actually came back empty.
                     Text(candidate.uncheckedReason?.phrase ?? "Not on Spotify")
-                        .font(.system(size: 11))
+                        .font(.system(size: MixFontScale.size(11)))
                         .foregroundStyle(Color.mixTextTertiary)
                 }
             }
@@ -329,7 +329,7 @@ public struct SpotifyExportView: View {
 
             if candidate.verdict == .uncertain, match != nil {
                 Text("check this one")
-                    .font(.system(size: 10.5))
+                    .font(.system(size: MixFontScale.size(10.5)))
                     .foregroundStyle(Color.mixTextTertiary)
             }
 
@@ -393,7 +393,7 @@ public struct SpotifyExportView: View {
                 // in. See `SpotifyAppLink`.
                 Button("Open it in Spotify") { SpotifyAppLink.open(url) }
                     .buttonStyle(.plain).mixHandCursor()
-                    .font(.system(size: 12.5, weight: .medium))
+                    .font(.system(size: MixFontScale.size(12.5), weight: .medium))
                     .foregroundStyle(Color.mixPrimary)
             }
             Spacer(minLength: 0)

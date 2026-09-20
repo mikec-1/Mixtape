@@ -510,12 +510,12 @@ struct PersonalLandingSections: View {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(title)
-                        .font(.system(size: 20, weight: .bold))
+                        .font(.system(size: MixFontScale.size(20), weight: .bold))
                         .foregroundStyle(Color.mixTextPrimary)
                         .mixTightened()
                     if let subtitle {
                         Text(subtitle)
-                            .font(.system(size: 12.5))
+                            .font(.system(size: MixFontScale.size(12.5)))
                             .foregroundStyle(Color.mixTextTertiary)
                     }
                 }
@@ -605,14 +605,14 @@ struct MixMosaicCard: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(mix.title)
-                    .font(.system(size: 14.5, weight: .semibold))
+                    .font(.system(size: MixFontScale.size(14.5), weight: .semibold))
                     .foregroundStyle(Color.mixTextPrimary)
                     .lineLimit(1)
                 // A mix whose line-up couldn't be named still gets a line: an
                 // empty one collapses, and the card's title then sits a few
                 // points higher than every card beside it.
                 Text(mix.subtitle.isEmpty ? "A mix built around \(mix.seedArtist)" : mix.subtitle)
-                    .font(.system(size: 12))
+                    .font(.system(size: MixFontScale.size(12)))
                     .foregroundStyle(Color.mixTextTertiary)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
@@ -741,7 +741,7 @@ struct MixNewReleaseHero: View {
             .overlay(Circle().stroke(Color.mixPrimary, lineWidth: artistHovered ? 2 : 0))
 
             Text(release.artist.name)
-                .font(.system(size: 17, weight: .semibold))
+                .font(.system(size: MixFontScale.size(17), weight: .semibold))
                 .foregroundStyle(Color.mixTextPrimary)
                 .lineLimit(1)
 
@@ -773,19 +773,19 @@ struct MixNewReleaseHero: View {
             VStack(alignment: .leading, spacing: 5) {
                 if let kind = release.album.recordTypeLabel {
                     Text(kind)
-                        .font(.system(size: 11.5, weight: .semibold))
+                        .font(.system(size: MixFontScale.size(11.5), weight: .semibold))
                         .foregroundStyle(Color.mixTextTertiary)
                         .textCase(.uppercase)
                 }
                 Text(release.album.title)
-                    .font(.system(size: 20, weight: .bold))
+                    .font(.system(size: MixFontScale.size(20), weight: .bold))
                     .foregroundStyle(Color.mixTextPrimary)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
                     .mixTightened()
                 if let released = release.album.releaseDate {
                     Text(released.formatted(date: .abbreviated, time: .omitted))
-                        .font(.system(size: 12))
+                        .font(.system(size: MixFontScale.size(12)))
                         .foregroundStyle(Color.mixTextTertiary)
                 }
             }
@@ -885,7 +885,7 @@ struct MixSongRow: View {
         HStack(spacing: 12) {
             if let index {
                 Text("\(index)")
-                    .font(.system(size: 12).monospacedDigit())
+                    .font(.system(size: MixFontScale.size(12)).monospacedDigit())
                     .foregroundStyle(isCurrent ? Color.mixPrimary : Color.mixTextTertiary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
@@ -921,13 +921,13 @@ struct MixSongRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 5) {
                     Text(song.title)
-                        .font(.system(size: 13.5, weight: .medium))
+                        .font(.system(size: MixFontScale.size(13.5), weight: .medium))
                         .foregroundStyle(isCurrent ? Color.mixPrimary : Color.mixTextPrimary)
                         .lineLimit(1)
                     if song.isExplicit { MixExplicitBadge() }
                 }
                 Text(song.artistName)
-                    .font(.system(size: 12))
+                    .font(.system(size: MixFontScale.size(12)))
                     .foregroundStyle(Color.mixTextSecondary)
                     .lineLimit(1)
             }
@@ -936,7 +936,7 @@ struct MixSongRow: View {
 
             if song.duration > 0 {
                 Text(Self.formatted(song.duration))
-                    .font(.system(size: 12).monospacedDigit())
+                    .font(.system(size: MixFontScale.size(12)).monospacedDigit())
                     .foregroundStyle(Color.mixTextTertiary)
             }
         }
@@ -989,7 +989,7 @@ struct MixArtistBubble: View {
                     radius: isHovered ? 12 : 6, y: isHovered ? 6 : 3)
 
             Text(artist.name)
-                .font(.system(size: 13, weight: .medium))
+                .font(.system(size: MixFontScale.size(13), weight: .medium))
                 .foregroundStyle(Color.mixTextPrimary)
                 .lineLimit(1)
                 .frame(width: side)
@@ -1038,11 +1038,11 @@ struct MixAlbumCard: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(album.title)
-                    .font(.system(size: 13.5, weight: .semibold))
+                    .font(.system(size: MixFontScale.size(13.5), weight: .semibold))
                     .foregroundStyle(Color.mixTextPrimary)
                     .lineLimit(1)
                 Text(album.artistName)
-                    .font(.system(size: 12))
+                    .font(.system(size: MixFontScale.size(12)))
                     .foregroundStyle(Color.mixTextTertiary)
                     .lineLimit(1)
             }
@@ -1071,7 +1071,7 @@ struct MixAlbumCard: View {
 struct MixExplicitBadge: View {
     var body: some View {
         Text("E")
-            .font(.system(size: 9, weight: .heavy))
+            .font(.system(size: MixFontScale.size(9), weight: .heavy))
             .foregroundStyle(Color.mixBackground)
             .frame(width: 14, height: 14)
             .background(
@@ -1097,9 +1097,9 @@ struct MixPillButton: View {
         Button(action: action) {
             HStack(spacing: 5) {
                 if let systemImage {
-                    Image(systemName: systemImage).font(.system(size: 10.5, weight: .semibold))
+                    Image(systemName: systemImage).font(.system(size: MixFontScale.size(10.5), weight: .semibold))
                 }
-                Text(title).font(.system(size: 12, weight: .semibold))
+                Text(title).font(.system(size: MixFontScale.size(12), weight: .semibold))
             }
             .foregroundStyle(isHovered ? Color.mixTextPrimary : Color.mixTextSecondary)
             .padding(.horizontal, 11)
@@ -1162,11 +1162,11 @@ private struct GenerateMixTile: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 Text("Generate a Mix")
-                    .font(.system(size: 14.5, weight: .semibold))
+                    .font(.system(size: MixFontScale.size(14.5), weight: .semibold))
                     .foregroundStyle(Color.mixTextPrimary)
                     .lineLimit(1)
                 Text("Pick a mood and make your own")
-                    .font(.system(size: 12))
+                    .font(.system(size: MixFontScale.size(12)))
                     .foregroundStyle(Color.mixTextTertiary)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)

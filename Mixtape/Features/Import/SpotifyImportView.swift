@@ -83,10 +83,10 @@ public struct SpotifyImportView: View {
                     Toggle(isOn: $keepInSync) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Keep in sync with Spotify")
-                                .font(.system(size: 12.5, weight: .medium))
+                                .font(.system(size: MixFontScale.size(12.5), weight: .medium))
                                 .foregroundStyle(Color.mixTextPrimary)
                             Text("Synced playlists follow the Spotify original and are read-only here. You can unlink at any time.")
-                                .font(.system(size: 11))
+                                .font(.system(size: MixFontScale.size(11)))
                                 .foregroundStyle(Color.mixTextTertiary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }

@@ -2510,7 +2510,7 @@ struct PlaylistTrackRow: View {
                     .foregroundStyle(Color.mixPrimary)
             } else {
                 Text("\(index)")
-                    .font(.system(size: 12, weight: .medium).monospacedDigit())
+                    .font(.system(size: MixFontScale.size(12), weight: .medium).monospacedDigit())
                     .foregroundStyle(Color.mixTextTertiary)
                     // Belt and braces: the column is sized for four digits, and
                     // anything past that shrinks rather than becoming "1…".
@@ -2730,10 +2730,10 @@ struct AddToPlaylistSheet: View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(sheetTitle)
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.system(size: MixFontScale.size(14), weight: .semibold))
                         .foregroundStyle(Color.mixTextPrimary)
                     Text(subtitle)
-                        .font(.system(size: 11))
+                        .font(.system(size: MixFontScale.size(11)))
                         .foregroundStyle(Color.mixTextSecondary)
                         .lineLimit(1)
                 }
@@ -2821,7 +2821,7 @@ struct AddToPlaylistSheet: View {
 
             TextField("Find a playlist", text: $query)
                 .textFieldStyle(.plain)
-                .font(.system(size: 13))
+                .font(.system(size: MixFontScale.size(13)))
                 .foregroundStyle(Color.mixTextPrimary)
 
             if !query.isEmpty {
@@ -2882,7 +2882,7 @@ struct AddToPlaylistSheet: View {
 
                 if matching.isEmpty && !query.isEmpty {
                     Text("No playlist called \u{201C}\(query)\u{201D}.")
-                        .font(.system(size: 13))
+                        .font(.system(size: MixFontScale.size(13)))
                         .foregroundStyle(Color.mixTextSecondary)
                         .frame(maxWidth: .infinity, alignment: .center)
                         .padding(.vertical, 32)
@@ -2943,7 +2943,7 @@ struct AddToPlaylistSheet: View {
 
     private func sectionHeader(_ title: String) -> some View {
         Text(title)
-            .font(.system(size: 12, weight: .semibold))
+            .font(.system(size: MixFontScale.size(12), weight: .semibold))
             .foregroundStyle(Color.mixTextSecondary)
             .padding(.horizontal, hPad)
             .padding(.top, 16)
@@ -2972,7 +2972,7 @@ struct AddToPlaylistSheet: View {
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 4) {
                         Text(playlist.name)
-                            .font(.system(size: 14, weight: .medium))
+                            .font(.system(size: MixFontScale.size(14), weight: .medium))
                             .foregroundStyle(Color.mixTextPrimary)
                             .lineLimit(1)
                         if meta.isPinned(playlistID: playlist.id) {
@@ -2983,7 +2983,7 @@ struct AddToPlaylistSheet: View {
                         }
                     }
                     Text("\(playlist.trackCount) song\(playlist.trackCount == 1 ? "" : "s")")
-                        .font(.system(size: 12))
+                        .font(.system(size: MixFontScale.size(12)))
                         .foregroundStyle(Color.mixTextSecondary)
                 }
 
@@ -3036,10 +3036,10 @@ struct AddToPlaylistSheet: View {
 
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Your Library")
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.system(size: MixFontScale.size(14), weight: .medium))
                         .foregroundStyle(Color.mixTextPrimary)
                     Text("\(playlist.trackCount) song\(playlist.trackCount == 1 ? "" : "s")")
-                        .font(.system(size: 12))
+                        .font(.system(size: MixFontScale.size(12)))
                         .foregroundStyle(Color.mixTextSecondary)
                 }
 
@@ -3119,14 +3119,14 @@ struct AddToPlaylistSheet: View {
 
                 TextField("Playlist name", text: $newPlaylistName)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 14))
+                    .font(.system(size: MixFontScale.size(14)))
                     .foregroundStyle(Color.mixTextPrimary)
                     .focused($newNameFocused)
                     .onSubmit { createAndAdd() }
 
                 Button("Create") { createAndAdd() }
                     .buttonStyle(.plain).mixHandCursor()
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: MixFontScale.size(13), weight: .semibold))
                     .foregroundStyle(canCreate ? Color.mixPrimary : Color.mixTextTertiary)
                     .disabled(!canCreate)
             }
@@ -3144,7 +3144,7 @@ struct AddToPlaylistSheet: View {
                     newPlaylistTile
 
                     Text("New playlist")
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.system(size: MixFontScale.size(14), weight: .medium))
                         .foregroundStyle(Color.mixTextPrimary)
 
                     Spacer()

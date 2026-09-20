@@ -84,7 +84,7 @@ struct UsernamePromptView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 8) {
                         Text("@")
-                            .font(.system(size: 14))
+                            .font(.system(size: MixFontScale.size(14)))
                             .foregroundStyle(Color.mixTextTertiary)
                         TextField("username", text: $username)
                             .autocorrectionDisabled()
@@ -161,7 +161,7 @@ struct UsernamePromptView: View {
             dismiss()
         }
         .buttonStyle(.plain).mixHandCursor()
-        .font(.system(size: 14, weight: .medium))
+        .font(.system(size: MixFontScale.size(14), weight: .medium))
         .foregroundStyle(Color.mixTextSecondary)
     }
 

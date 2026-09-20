@@ -54,8 +54,8 @@ struct KaraokeView: View {
                                  clock: engine.clock,
                                  isPlaying: engine.state.isPlaying,
                                  onTapLine: { engine.seek(to: $0) },
-                                 lineFont: .system(size: 30 * zoom, weight: .semibold),
-                                 activeFont: .system(size: 30 * zoom, weight: .heavy),
+                                 lineFont: .system(size: MixFontScale.size(30) * zoom, weight: .semibold),
+                                 activeFont: .system(size: MixFontScale.size(30) * zoom, weight: .heavy),
                                  sung: .white,
                                  unsung: .white.opacity(0.4),
                                  gapSize: 34,
@@ -139,7 +139,7 @@ struct KaraokeView: View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(track?.displayTitle ?? "Karaoke")
-                    .font(.system(size: 17, weight: .bold))
+                    .font(.system(size: MixFontScale.size(17), weight: .bold))
                     .foregroundStyle(.white)
                     .lineLimit(1)
                 // Every name on the record, not the stored credit — a Discover
@@ -148,7 +148,7 @@ struct KaraokeView: View {
                     Text(ImportService.displayArtists(title: track.title,
                                                       artistName: track.artistName)
                             .joined(separator: ", "))
-                        .font(.system(size: 13))
+                        .font(.system(size: MixFontScale.size(13)))
                         .foregroundStyle(.white.opacity(0.7))
                         .lineLimit(1)
                 }
@@ -236,11 +236,11 @@ struct KaraokeView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text(title)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(size: MixFontScale.size(14), weight: .semibold))
                     .foregroundStyle(.white)
                 if let hint {
                     Text(hint)
-                        .font(.system(size: 11))
+                        .font(.system(size: MixFontScale.size(11)))
                         .foregroundStyle(.white.opacity(0.55))
                 }
                 Spacer()
@@ -260,7 +260,7 @@ struct KaraokeView: View {
             HStack(spacing: 0) {
                 stepper("minus", "Decrease \(title.lowercased())", action: onMinus)
                 Text(value)
-                    .font(.system(size: 15, weight: .bold).monospacedDigit())
+                    .font(.system(size: MixFontScale.size(15), weight: .bold).monospacedDigit())
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
                 stepper("plus", "Increase \(title.lowercased())", action: onPlus)

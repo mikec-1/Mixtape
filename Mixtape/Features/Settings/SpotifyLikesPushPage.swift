@@ -308,7 +308,7 @@ struct SpotifyLikesPushPage: View {
 
             ForEach(missing) { candidate in
                 Text("\(candidate.track.title) \u{00B7} \(candidate.track.artistName)")
-                    .font(.system(size: 11.5))
+                    .font(.system(size: MixFontScale.size(11.5)))
                     .foregroundStyle(Color.mixTextTertiary)
                     .lineLimit(1)
                     .padding(.horizontal, 9)
@@ -336,7 +336,7 @@ struct SpotifyLikesPushPage: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(candidate.track.title)
-                    .font(.system(size: 12.5, weight: .medium))
+                    .font(.system(size: MixFontScale.size(12.5), weight: .medium))
                     .foregroundStyle(Color.mixTextPrimary)
                     .lineLimit(1)
 
@@ -347,7 +347,7 @@ struct SpotifyLikesPushPage: View {
                     Text(differs(candidate.track, match)
                          ? "\u{2192} \(match.title) \u{00B7} \(match.artist)"
                          : candidate.track.artistName)
-                        .font(.system(size: 11))
+                        .font(.system(size: MixFontScale.size(11)))
                         .foregroundStyle(differs(candidate.track, match)
                                          ? Color.mixTextSecondary
                                          : Color.mixTextTertiary)
@@ -359,7 +359,7 @@ struct SpotifyLikesPushPage: View {
 
             if candidate.verdict == .uncertain {
                 Text("check this one")
-                    .font(.system(size: 10.5))
+                    .font(.system(size: MixFontScale.size(10.5)))
                     .foregroundStyle(Color.mixTextTertiary)
             }
 

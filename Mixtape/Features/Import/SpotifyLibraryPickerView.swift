@@ -201,7 +201,7 @@ struct SpotifyLibraryChooser: View {
                     Text(warning)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                .font(.system(size: 11.5))
+                .font(.system(size: MixFontScale.size(11.5)))
                 .foregroundStyle(Color.mixTextSecondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -234,7 +234,7 @@ struct SpotifyLibraryChooser: View {
 
                 if let note = alreadyImportedNote {
                     Text(note)
-                        .font(.system(size: 11.5))
+                        .font(.system(size: MixFontScale.size(11.5)))
                         .foregroundStyle(Color.mixTextTertiary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -256,11 +256,11 @@ struct SpotifyLibraryChooser: View {
                         .font(.system(size: 11.5, weight: .semibold))
                         .foregroundStyle(model.keepInSync ? Color.mixPrimary : Color.mixTextSecondary)
                     Text("Keep in sync with Spotify")
-                        .font(.system(size: 12.5, weight: .semibold))
+                        .font(.system(size: MixFontScale.size(12.5), weight: .semibold))
                         .foregroundStyle(Color.mixTextPrimary)
                 }
                 Text("Checks for changes every so often. Synced playlists are read-only here, and can be unlinked at any time.")
-                    .font(.system(size: 11))
+                    .font(.system(size: MixFontScale.size(11)))
                     .foregroundStyle(Color.mixTextTertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -297,7 +297,7 @@ struct SpotifyLibraryChooser: View {
             model.toggleAllVisible()
         }
         .buttonStyle(.plain).mixHandCursor()
-        .font(.system(size: 12.5, weight: .medium))
+        .font(.system(size: MixFontScale.size(12.5), weight: .medium))
         .foregroundStyle(Color.mixPrimary)
         .disabled(model.visibleSections.isEmpty)
     }
@@ -305,10 +305,10 @@ struct SpotifyLibraryChooser: View {
     private func sectionHeader(_ title: String, count: Int) -> some View {
         HStack(spacing: 6) {
             Text(title)
-                .font(.system(size: 11.5, weight: .semibold))
+                .font(.system(size: MixFontScale.size(11.5), weight: .semibold))
                 .foregroundStyle(Color.mixTextSecondary)
             Text("\(count)")
-                .font(.system(size: 11.5))
+                .font(.system(size: MixFontScale.size(11.5)))
                 .foregroundStyle(Color.mixTextTertiary)
             Spacer(minLength: 0)
         }
@@ -349,7 +349,7 @@ struct SpotifyLibraryChooser: View {
             Image(systemName: icon)
                 .font(.system(size: 9, weight: .semibold))
             Text(text)
-                .font(.system(size: 10, weight: .semibold))
+                .font(.system(size: MixFontScale.size(10), weight: .semibold))
         }
         .foregroundStyle(tint)
         .padding(.horizontal, 5)
@@ -380,12 +380,12 @@ struct SpotifyLibraryChooser: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(item.name)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.system(size: MixFontScale.size(13), weight: .medium))
                         .foregroundStyle(Color.mixTextPrimary)
                         .lineLimit(1)
                     HStack(spacing: 6) {
                         Text(item.subtitle)
-                            .font(.system(size: 11.5))
+                            .font(.system(size: MixFontScale.size(11.5)))
                             .foregroundStyle(Color.mixTextTertiary)
                             .lineLimit(1)
                         importedBadge(for: item)
@@ -395,7 +395,7 @@ struct SpotifyLibraryChooser: View {
                 Spacer(minLength: 8)
 
                 Text("\(item.trackCount)")
-                    .font(.system(size: 11.5))
+                    .font(.system(size: MixFontScale.size(11.5)))
                     .foregroundStyle(Color.mixTextTertiary)
                     .monospacedDigit()
             }
@@ -535,12 +535,12 @@ struct SpotifyLibraryStatus: View {
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 8) {
                     Text("Overall")
-                        .font(.system(size: 11.5, weight: .medium))
+                        .font(.system(size: MixFontScale.size(11.5), weight: .medium))
                         .foregroundStyle(Color.mixTextTertiary)
                     Spacer(minLength: 4)
                     if overallTotal > 0 {
                         Text("\(overallDone) of \(overallTotal) songs")
-                            .font(.system(size: 11.5, weight: .medium))
+                            .font(.system(size: MixFontScale.size(11.5), weight: .medium))
                             .foregroundStyle(Color.mixTextTertiary)
                             .monospacedDigit()
                     }
@@ -572,16 +572,16 @@ struct SpotifyLibraryStatus: View {
             if !result.failures.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Couldn't import \(result.failures.count) of them")
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.system(size: MixFontScale.size(12), weight: .medium))
                         .foregroundStyle(Color.mixTextSecondary)
 
                     ForEach(result.failures) { failure in
                         VStack(alignment: .leading, spacing: 1) {
                             Text(failure.name)
-                                .font(.system(size: 12, weight: .medium))
+                                .font(.system(size: MixFontScale.size(12), weight: .medium))
                                 .foregroundStyle(Color.mixTextPrimary)
                             Text(failure.reason)
-                                .font(.system(size: 11.5))
+                                .font(.system(size: MixFontScale.size(11.5)))
                                 .foregroundStyle(Color.mixTextTertiary)
                                 .lineLimit(3)
                                 .fixedSize(horizontal: false, vertical: true)

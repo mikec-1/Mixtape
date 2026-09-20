@@ -210,18 +210,18 @@ private struct ShareCard: View {
                 .shadow(color: .black.opacity(0.35), radius: 18, y: 8)
 
             Text(item.title)
-                .font(.system(size: 22, weight: .bold))
+                .font(.system(size: MixFontScale.size(22), weight: .bold))
                 .foregroundStyle(.white)
                 .lineLimit(2)
                 .padding(.top, 20)
             Text(item.subtitle)
-                .font(.system(size: 15, weight: .medium))
+                .font(.system(size: MixFontScale.size(15), weight: .medium))
                 .foregroundStyle(.white.opacity(0.72))
                 .lineLimit(1)
                 .padding(.top, 3)
 
             Label("Mixtape", systemImage: MixtapeIcons.nowPlaying)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.system(size: MixFontScale.size(13), weight: .semibold))
                 .foregroundStyle(.white)
                 .padding(.top, 20)
         }

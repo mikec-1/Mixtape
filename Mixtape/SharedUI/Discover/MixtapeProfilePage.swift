@@ -84,7 +84,7 @@ struct MixtapeProfilePage: View {
                     .textCase(.uppercase)
 
                 Text("Mixtape")
-                    .font(.system(size: 44, weight: .bold))
+                    .font(.system(size: MixFontScale.size(44), weight: .bold))
                     .foregroundStyle(Color.mixTextPrimary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)

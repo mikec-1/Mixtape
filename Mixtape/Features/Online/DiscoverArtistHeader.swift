@@ -90,7 +90,7 @@ struct DiscoverArtistBanner: View {
     private var identity: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(artist.name)
-                .font(.system(size: 52, weight: .heavy))
+                .font(.system(size: MixFontScale.size(52), weight: .heavy))
                 .foregroundStyle(.white)
                 .lineLimit(2)
                 .minimumScaleFactor(0.4)
@@ -101,10 +101,10 @@ struct DiscoverArtistBanner: View {
                          ? "No liked songs yet"
                          : "\(likedCount) liked song\(likedCount == 1 ? "" : "s")")
                     if likedCount > 0, onOpenLiked != nil {
-                        Image(systemName: "chevron.right").font(.system(size: 11, weight: .bold))
+                        Image(systemName: "chevron.right").font(.system(size: MixFontScale.size(11), weight: .bold))
                     }
                 }
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: MixFontScale.size(14), weight: .semibold))
                 .foregroundStyle(.white.opacity(likedCount == 0 ? 0.7 : 0.95))
                 .contentShape(Rectangle())
             }
@@ -143,7 +143,7 @@ struct DiscoverArtistAbout: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("About")
-                .font(.system(size: 18, weight: .bold))
+                .font(.system(size: MixFontScale.size(18), weight: .bold))
                 .foregroundStyle(Color.mixTextPrimary)
 
             HStack(alignment: .top, spacing: 16) {
@@ -158,7 +158,7 @@ struct DiscoverArtistAbout: View {
                 VStack(alignment: .leading, spacing: 6) {
                     if let fans = fanCount, fans > 0 {
                         Text("\(fans.formatted(.number)) followers")
-                            .font(.system(size: 15, weight: .semibold))
+                            .font(.system(size: MixFontScale.size(15), weight: .semibold))
                             .foregroundStyle(Color.mixTextPrimary)
                     }
                     DiscoverArtistCounts(artistName: artist.name,
@@ -174,7 +174,7 @@ struct DiscoverArtistAbout: View {
             // no article rather than filled in with something invented.
             if let bio {
                 Text(bio)
-                    .font(.system(size: 13))
+                    .font(.system(size: MixFontScale.size(13)))
                     .foregroundStyle(Color.mixTextSecondary)
                     .lineLimit(bioExpanded ? nil : 4)
                     .fixedSize(horizontal: false, vertical: true)
@@ -186,11 +186,11 @@ struct DiscoverArtistAbout: View {
                             withMixAnimation(.easeInOut(duration: 0.15)) { bioExpanded.toggle() }
                         }
                         .buttonStyle(.plain).mixHandCursor()
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: MixFontScale.size(12), weight: .semibold))
                         .foregroundStyle(Color.mixPrimary)
                     }
                     Text("From Wikipedia")
-                        .font(.system(size: 11))
+                        .font(.system(size: MixFontScale.size(11)))
                         .foregroundStyle(Color.mixTextTertiary)
                 }
             }

@@ -121,7 +121,7 @@ public struct PlaylistEditorSheet: View {
         ZStack(alignment: .topLeading) {
             if description.isEmpty {
                 Text("Add an optional description")
-                    .font(.system(size: 13.5))
+                    .font(.system(size: MixFontScale.size(13.5)))
                     .foregroundStyle(Color.mixTextTertiary)
                     .padding(.leading, Self.editorPadding + Self.textInset.width)
                     .padding(.trailing, Self.editorPadding)
@@ -129,7 +129,7 @@ public struct PlaylistEditorSheet: View {
                     .allowsHitTesting(false)
             }
             TextEditor(text: $description)
-                .font(.system(size: 13.5))
+                .font(.system(size: MixFontScale.size(13.5)))
                 .foregroundStyle(Color.mixTextPrimary)
                 .scrollContentBackground(.hidden)
                 .padding(Self.editorPadding)

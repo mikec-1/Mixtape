@@ -48,7 +48,7 @@ struct JoinSharedPlaylistSheet: View {
                 // characters rather than as a word.
                 TextField("Share code", text: $code)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 22, weight: .bold, design: .monospaced))
+                    .font(.system(size: MixFontScale.size(22), weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.mixTextPrimary)
                     .multilineTextAlignment(.center)
                     .tracking(4)

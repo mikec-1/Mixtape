@@ -157,7 +157,7 @@ struct MixSavedToast: View {
         HStack(spacing: 10) {
             cover
             Text(toast.text)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.system(size: MixFontScale.size(13), weight: .semibold))
                 .foregroundStyle(Color.mixTextPrimary)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)

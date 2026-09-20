@@ -279,7 +279,7 @@ struct IOSDiscoverView: View {
             }
             .padding(.horizontal, 16)
             VStack(alignment: .leading, spacing: 12) {
-                Text("While you're offline").font(.system(size: 22, weight: .bold)).padding(.horizontal, 16)
+                Text("While you're offline").font(.system(size: MixFontScale.size(22), weight: .bold)).padding(.horizontal, 16)
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(alignment: .top, spacing: 14) {
                         ForEach(playlists) { p in
@@ -305,7 +305,7 @@ struct IOSDiscoverView: View {
     private func offlineTileLabel<A: View>(_ title: String, @ViewBuilder art: () -> A) -> some View {
         HStack(spacing: 8) {
             art().frame(width: 52, height: 52).clipped()
-            Text(title).font(.system(size: 13, weight: .semibold)).foregroundStyle(Color.mixTextPrimary).lineLimit(2)
+            Text(title).font(.system(size: MixFontScale.size(13), weight: .semibold)).foregroundStyle(Color.mixTextPrimary).lineLimit(2)
             Spacer(minLength: 0)
         }
         .background(Color.mixTextPrimary.opacity(0.08))
@@ -315,8 +315,8 @@ struct IOSDiscoverView: View {
     private func offlineCard<A: View>(_ title: String, _ subtitle: String, @ViewBuilder art: () -> A) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             art()
-            Text(title).font(.system(size: 13, weight: .semibold)).foregroundStyle(Color.mixTextPrimary).lineLimit(1)
-            Text(subtitle).font(.system(size: 12)).foregroundStyle(Color.mixTextSecondary).lineLimit(1)
+            Text(title).font(.system(size: MixFontScale.size(13), weight: .semibold)).foregroundStyle(Color.mixTextPrimary).lineLimit(1)
+            Text(subtitle).font(.system(size: MixFontScale.size(12))).foregroundStyle(Color.mixTextSecondary).lineLimit(1)
         }.frame(width: 140, alignment: .leading)
     }
 

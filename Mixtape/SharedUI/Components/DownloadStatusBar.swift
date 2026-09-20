@@ -37,11 +37,11 @@ struct DownloadStatusBar: View {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
                     Text(downloads.isConnectedForDownload ? "Downloading" : "Downloads paused")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: MixFontScale.size(12), weight: .semibold))
                         .foregroundStyle(Color.mixTextPrimary)
                     Spacer(minLength: 4)
                     Text("\(done) of \(total)")
-                        .font(.system(size: 11.5, weight: .medium))
+                        .font(.system(size: MixFontScale.size(11.5), weight: .medium))
                         .foregroundStyle(Color.mixTextTertiary)
                         .monospacedDigit()
                 }

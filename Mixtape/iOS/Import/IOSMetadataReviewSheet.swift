@@ -178,16 +178,16 @@ struct IOSMetadataReviewSheet: View {
     private var summarySection: some View {
         VStack(spacing: 6) {
             Text(draft.fields.title.isEmpty ? "Unknown Title" : draft.fields.title)
-                .font(.system(size: 18, weight: .semibold))
+                .font(.system(size: MixFontScale.size(18), weight: .semibold))
                 .foregroundStyle(Color.mixTextPrimary)
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
             Text(draft.fields.artist.isEmpty ? "Unknown Artist" : draft.fields.artist)
-                .font(.system(size: 14))
+                .font(.system(size: MixFontScale.size(14)))
                 .foregroundStyle(Color.mixPrimary)
                 .lineLimit(1)
             Text(draft.fields.album.isEmpty ? "" : draft.fields.album)
-                .font(.system(size: 13))
+                .font(.system(size: MixFontScale.size(13)))
                 .foregroundStyle(Color.mixTextSecondary)
                 .lineLimit(1)
             // Confidence badge — shown inline under album so it always has room
@@ -223,11 +223,11 @@ struct IOSMetadataReviewSheet: View {
     private var featuredRow: some View {
         HStack(spacing: 12) {
             Text("Featured")
-                .font(.system(size: 13))
+                .font(.system(size: MixFontScale.size(13)))
                 .foregroundStyle(Color.mixTextSecondary)
                 .frame(width: 70, alignment: .leading)
             TextField("Collaborating artist(s)", text: $draft.fields.featured)
-                .font(.system(size: 14))
+                .font(.system(size: MixFontScale.size(14)))
                 .foregroundStyle(Color.mixTextPrimary)
                 .autocorrectionDisabled()
             if !draft.fields.featured.isEmpty {
@@ -235,7 +235,7 @@ struct IOSMetadataReviewSheet: View {
                     Image(systemName: "person.2.fill")
                         .font(.system(size: 9))
                     Text("ft.")
-                        .font(.system(size: 9, weight: .medium))
+                        .font(.system(size: MixFontScale.size(9), weight: .medium))
                 }
                 .foregroundStyle(Color.mixPrimary.opacity(0.8))
                 .padding(.horizontal, 6)
@@ -256,11 +256,11 @@ struct IOSMetadataReviewSheet: View {
                              keyboard: UIKeyboardType) -> some View {
         HStack(spacing: 12) {
             Text(label)
-                .font(.system(size: 13))
+                .font(.system(size: MixFontScale.size(13)))
                 .foregroundStyle(Color.mixTextSecondary)
                 .frame(width: 50, alignment: .leading)
             TextField(label, text: text)
-                .font(.system(size: 14))
+                .font(.system(size: MixFontScale.size(14)))
                 .foregroundStyle(Color.mixTextPrimary)
                 .keyboardType(keyboard)
                 .autocorrectionDisabled()
@@ -295,10 +295,10 @@ struct IOSMetadataReviewSheet: View {
             if isLookingUp {
                 ProgressView().scaleEffect(0.5).frame(width: 10, height: 10)
             } else if candidate.source == .itunes {
-                Image(systemName: "music.note").font(.system(size: 9))
+                Image(systemName: "music.note").font(.system(size: MixFontScale.size(9)))
             }
             Text(sourceLabel)
-                .font(.system(size: 10, weight: .medium))
+                .font(.system(size: MixFontScale.size(10), weight: .medium))
         }
         .foregroundStyle(tint)
         .padding(.horizontal, 8)
@@ -322,7 +322,7 @@ struct IOSMetadataReviewSheet: View {
             )
             Button("Skip This Song") { appState.dequeueReview() }
                 .buttonStyle(.plain).mixHandCursor()
-                .font(.system(size: 14, weight: .medium))
+                .font(.system(size: MixFontScale.size(14), weight: .medium))
                 .foregroundStyle(Color.mixTextSecondary)
                 .disabled(isApplying)
         }

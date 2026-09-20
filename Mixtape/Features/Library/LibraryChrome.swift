@@ -39,7 +39,7 @@ struct LibraryHeader: View {
                 ProfileMenuButton(size: 30)
 
                 Text("Your Library")
-                    .font(.system(size: 24, weight: .bold))
+                    .font(.system(size: MixFontScale.size(24), weight: .bold))
                     .foregroundStyle(Color.mixTextPrimary)
 
                 Spacer(minLength: 8)

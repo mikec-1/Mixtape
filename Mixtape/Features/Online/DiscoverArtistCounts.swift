@@ -47,7 +47,7 @@ struct DiscoverArtistCounts: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(catalogueLine)
-                .font(.system(size: 12))
+                .font(.system(size: MixFontScale.size(12)))
                 .foregroundStyle(Color.mixTextSecondary)
 
             // Absent entirely when nothing is liked: "0 liked songs" is noise on
@@ -89,7 +89,7 @@ struct DiscoverArtistCounts: View {
                     .font(.system(size: 9, weight: .bold))
             }
         }
-        .font(.system(size: 12, weight: .semibold))
+        .font(.system(size: MixFontScale.size(12), weight: .semibold))
         .foregroundStyle(Color.mixPrimary)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)

@@ -30,7 +30,7 @@ struct LibraryActivityBar: View {
                     .controlSize(.small)
 
                 Text(label)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: MixFontScale.size(12), weight: .semibold))
                     .foregroundStyle(Color.mixTextPrimary)
                     .lineLimit(1)
 
@@ -38,7 +38,7 @@ struct LibraryActivityBar: View {
 
                 if let detail = library.activity.detail {
                     Text(detail)
-                        .font(.system(size: 11.5, weight: .medium))
+                        .font(.system(size: MixFontScale.size(11.5), weight: .medium))
                         .foregroundStyle(Color.mixTextTertiary)
                         .monospacedDigit()
                         .lineLimit(1)

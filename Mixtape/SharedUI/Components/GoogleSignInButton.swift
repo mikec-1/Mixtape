@@ -17,7 +17,7 @@ struct GoogleSignInButton: View {
     private let font = Font.system(size: 14, weight: .semibold)
     #else
     private let height: CGFloat = 50
-    private let font = Font.system(size: 16, weight: .semibold)
+    private let font = Font.system(size: MixFontScale.size(16), weight: .semibold)
     #endif
 
     var body: some View {

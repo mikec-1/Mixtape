@@ -30,6 +30,32 @@ enum MixFontScale {
     static func size(_ points: CGFloat, _ style: UIFont.TextStyle) -> CGFloat {
         UIFontMetrics(forTextStyle: style).scaledValue(for: points)
     }
+
+    /// Scales a one-off point size without naming a style.
+    ///
+    /// The app has hundreds of hardcoded sizes outside this file — 12, 14, 17,
+    /// 11.5 — that no tier covers and that redesigning onto one would resize.
+    /// They still have to grow on Larger Text, so they borrow the growth curve
+    /// of whichever tier they sit closest to. The thresholds *are* the table
+    /// above, read as ranges: 34 is the display tier, so 31pt and up grows like
+    /// a large title; 15 is body, so 14–16 grows like body; and so on down.
+    ///
+    /// Name the style directly when the size is a considered tier. This is for
+    /// the long tail.
+    static func size(_ points: CGFloat) -> CGFloat {
+        let style: UIFont.TextStyle
+        switch points {
+        case 31...:      style = .largeTitle
+        case 25..<31:    style = .title1
+        case 20..<25:    style = .title2
+        case 16.5..<20:  style = .title3
+        case 14..<16.5:  style = .body
+        case 12..<14:    style = .footnote
+        case 10.5..<12:  style = .caption1
+        default:         style = .caption2
+        }
+        return size(points, style)
+    }
     #else
     static func size(_ points: CGFloat, _ style: Int = 0) -> CGFloat { points }
     #endif

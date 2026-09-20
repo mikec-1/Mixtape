@@ -86,17 +86,17 @@ struct MergeDuplicatesSheet: View {
     private func row(_ group: DuplicateMergePlan.Group) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(group.title)
-                .font(.system(size: 13.5, weight: .medium))
+                .font(.system(size: MixFontScale.size(13.5), weight: .medium))
                 .foregroundStyle(Color.mixTextPrimary)
                 .lineLimit(1)
 
             Text(group.artistName)
-                .font(.system(size: 12))
+                .font(.system(size: MixFontScale.size(12)))
                 .foregroundStyle(Color.mixTextSecondary)
                 .lineLimit(1)
 
             Text(detail(for: group))
-                .font(.system(size: 11.5))
+                .font(.system(size: MixFontScale.size(11.5)))
                 .foregroundStyle(Color.mixTextTertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }

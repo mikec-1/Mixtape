@@ -490,7 +490,7 @@ public struct NowPlayingView: View {
                     showKaraoke = true
                 } label: {
                     Label("Karaoke", systemImage: "music.mic")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.system(size: MixFontScale.size(13), weight: .semibold))
                         .foregroundStyle(Color.mixTextPrimary)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 8)
@@ -1452,7 +1452,7 @@ private struct UpNextSheet: View {
     private var repeatDivider: some View {
         HStack(spacing: 6) {
             Text("Repeats from here")
-                .font(.system(size: 10, weight: .semibold))
+                .font(.system(size: MixFontScale.size(10), weight: .semibold))
                 .foregroundStyle(Color.mixRepeatBoundary)
                 .fixedSize(horizontal: true, vertical: false)
             Rectangle()
@@ -1601,7 +1601,7 @@ struct GetInfoSheet: View {
                 if let (format, size) = fileInfo(track) {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("FILE")
-                            .font(.system(size: 10.5, weight: .semibold))
+                            .font(.system(size: MixFontScale.size(10.5), weight: .semibold))
                             .foregroundStyle(Color.mixTextTertiary)
                             .tracking(0.8)
                         infoGroup {
@@ -1655,10 +1655,10 @@ struct GetInfoSheet: View {
             }
         HStack(alignment: .firstTextBaseline, spacing: 16) {
             Text("Artist")
-                .font(.system(size: 12.5))
+                .font(.system(size: MixFontScale.size(12.5)))
                 .foregroundStyle(Color.mixTextSecondary)
             Spacer(minLength: 0)
-            TappableArtistRow(targets: targets, font: .system(size: 13), color: .mixPrimary)
+            TappableArtistRow(targets: targets, font: .system(size: MixFontScale.size(13)), color: .mixPrimary)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
@@ -1689,11 +1689,11 @@ struct GetInfoSheet: View {
     private func row(_ label: String, _ value: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 16) {
             Text(label)
-                .font(.system(size: 12.5))
+                .font(.system(size: MixFontScale.size(12.5)))
                 .foregroundStyle(Color.mixTextSecondary)
             Spacer(minLength: 0)
             Text(value)
-                .font(.system(size: 13))
+                .font(.system(size: MixFontScale.size(13)))
                 .foregroundStyle(Color.mixTextPrimary)
                 .multilineTextAlignment(.trailing)
         }

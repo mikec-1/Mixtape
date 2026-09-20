@@ -62,10 +62,10 @@ struct WelcomeDownloadPrompt: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Mixtape")
-                        .font(.system(size: 13.5, weight: .semibold))
+                        .font(.system(size: MixFontScale.size(13.5), weight: .semibold))
                         .foregroundStyle(Color.mixTextPrimary)
                     Text(suggestedDisplayPath)
-                        .font(.system(size: 12))
+                        .font(.system(size: MixFontScale.size(12)))
                         .foregroundStyle(Color.mixTextSecondary)
                         .lineLimit(1)
                         .truncationMode(.middle)

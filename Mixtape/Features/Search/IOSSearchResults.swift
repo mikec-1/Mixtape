@@ -307,7 +307,7 @@ struct IOSSearchResults: View {
             ForEach(results.lyricMatches) { song in
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 4) {
-                        Image(systemName: "quote.bubble.fill").font(.system(size: 8, weight: .bold))
+                        Image(systemName: "quote.bubble.fill").font(.system(size: MixFontScale.size(8), weight: .bold))
                         Text("Lyrics match").font(.system(size: 9, weight: .semibold))
                     }
                     .foregroundStyle(Color.mixOnAccent)

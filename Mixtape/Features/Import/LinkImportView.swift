@@ -116,7 +116,7 @@ public struct LinkImportView: View {
                     if let clipboard = Self.clipboardString() { link = clipboard }
                 }
                 .buttonStyle(.plain).mixHandCursor()
-                .font(.system(size: 13, weight: .medium))
+                .font(.system(size: MixFontScale.size(13), weight: .medium))
                 .foregroundStyle(Color.mixPrimary)
             }
 

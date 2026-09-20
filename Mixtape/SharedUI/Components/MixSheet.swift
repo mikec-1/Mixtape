@@ -161,7 +161,7 @@ struct MixSheet<Content: View, Footer: View>: View {
 
                     if let subtitle {
                         Text(subtitle)
-                            .font(.system(size: 12.5))
+                            .font(.system(size: MixFontScale.size(12.5)))
                             .foregroundStyle(Color.mixTextSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -363,7 +363,7 @@ struct MixSheetActions: View {
             if showsCancel, primary != nil {
                 Button(cancelTitle) { dismiss() }
                     .buttonStyle(.plain).mixHandCursor()
-                    .font(.system(size: 14, weight: .medium))
+                    .font(.system(size: MixFontScale.size(14), weight: .medium))
                     .foregroundStyle(Color.mixTextSecondary)
             } else if showsCancel {
                 MixSheetPrimaryButton(
@@ -480,12 +480,12 @@ struct MixSheetStatus: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: MixFontScale.size(13), weight: .medium))
                     .foregroundStyle(Color.mixTextPrimary)
 
                 if let detail {
                     Text(detail)
-                        .font(.system(size: 12))
+                        .font(.system(size: MixFontScale.size(12)))
                         .foregroundStyle(Color.mixTextSecondary)
                         // Capped: unbounded, a `fixedSize` measured against a
                         // narrow column locks in a minimum height that can
@@ -542,11 +542,11 @@ struct MixSheetOptionRow: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .font(.system(size: 13.5, weight: .medium))
+                        .font(.system(size: MixFontScale.size(13.5), weight: .medium))
                         .foregroundStyle(Color.mixTextPrimary)
                     if let detail {
                         Text(detail)
-                            .font(.system(size: 12))
+                            .font(.system(size: MixFontScale.size(12)))
                             .foregroundStyle(Color.mixTextSecondary)
                             .multilineTextAlignment(.leading)
                             .lineLimit(4)
@@ -598,7 +598,7 @@ struct MixSheetHairline: View {
 extension View {
     func mixSheetField() -> some View {
         self
-            .font(.system(size: 13.5))
+            .font(.system(size: MixFontScale.size(13.5)))
             .foregroundStyle(Color.mixTextPrimary)
             #if os(macOS)
             .textFieldStyle(.plain)

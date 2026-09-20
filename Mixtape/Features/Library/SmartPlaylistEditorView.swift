@@ -136,10 +136,10 @@ public struct SmartPlaylistEditorView: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(kind.rawValue)
-                        .font(.system(size: 13, weight: isSelected ? .semibold : .medium))
+                        .font(.system(size: MixFontScale.size(13), weight: isSelected ? .semibold : .medium))
                         .foregroundStyle(Color.mixTextPrimary)
                     Text(kind.blurb)
-                        .font(.system(size: 11.5))
+                        .font(.system(size: MixFontScale.size(11.5)))
                         .foregroundStyle(Color.mixTextSecondary)
                         .multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
@@ -187,7 +187,7 @@ public struct SmartPlaylistEditorView: View {
             // Nothing to configure — say so rather than leaving a gap that
             // looks like something failed to load.
             Text("No settings for this one — it's every song you've never played.")
-                .font(.system(size: 12))
+                .font(.system(size: MixFontScale.size(12)))
                 .foregroundStyle(Color.mixTextTertiary)
         case .fieldFilter:
             parameterCard {
@@ -219,17 +219,17 @@ public struct SmartPlaylistEditorView: View {
     private func parameterLabel(_ title: String, value: String) -> some View {
         HStack(spacing: 6) {
             Text(title)
-                .font(.system(size: 13))
+                .font(.system(size: MixFontScale.size(13)))
                 .foregroundStyle(Color.mixTextSecondary)
             Text(value)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.system(size: MixFontScale.size(13), weight: .semibold))
                 .foregroundStyle(Color.mixTextPrimary)
         }
     }
 
     private func sectionLabel(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 10.5, weight: .semibold))
+            .font(.system(size: MixFontScale.size(10.5), weight: .semibold))
             .foregroundStyle(Color.mixTextTertiary)
             .tracking(0.8)
     }

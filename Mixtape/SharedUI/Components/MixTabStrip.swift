@@ -61,7 +61,7 @@ struct MixTabStrip<Tab: Hashable>: View {
         } label: {
             VStack(spacing: 8) {
                 Text(title(tab))
-                    .font(.system(size: 17, weight: isActive ? .semibold : .medium))
+                    .font(.system(size: MixFontScale.size(17), weight: isActive ? .semibold : .medium))
                     .foregroundStyle(isActive ? Color.mixTextPrimary
                                      : hovered == tab ? Color.mixTextPrimary
                                                       : Color.mixTextSecondary)
