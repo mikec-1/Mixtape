@@ -1,14 +1,17 @@
 // IOSMetadataReviewSheet.swift
 // Mixtape — iOS/Import
 //
-// Full-screen sheet shown after importing a track when the enrichment service
-// finds a metadata candidate. The user can review/edit proposed values, then
-// tap Apply (downloads artwork + writes tags) or Skip.
+// Full-screen sheet shown after importing a track. The user can review/edit
+// proposed values, then tap Apply (downloads artwork + writes tags) or Skip.
 //
 // Mirrors MacMetadataReviewSheet but designed for touch:
 //   • Large artwork hero at the top
 //   • Form-style editable fields
 //   • Sticky action bar at the bottom
+//
+// It also mirrors the Mac sheet's timing: it opens on the filename reading
+// straight away and runs the iTunes lookup itself, rather than making import
+// wait for it and arriving long after the user has moved on.
 
 #if os(iOS)
 import SwiftUI
@@ -20,14 +23,20 @@ struct IOSMetadataReviewSheet: View {
     @EnvironmentObject private var deps:     AppDependencies
     @EnvironmentObject private var appState: IOSAppState
 
-    @State private var draftTitle:    String
-    /// Primary artist only — the track is filed under this artist folder.
-    @State private var draftArtist:   String
-    /// Featured/collaborating artist (everything after the & / ft. / feat. separator).
-    @State private var draftFeatured: String
-    @State private var draftAlbum:    String
-    @State private var draftYear:     String
-    @State private var draftGenre:    String
+    @State private var draft: MetadataDraft
+
+    /// The candidate currently on screen. Starts as the item's local reading
+    /// and is replaced if the lookup finds something better — the artwork and
+    /// the confidence badge both come from here, not from `item`.
+    @State private var candidate: EnrichmentCandidate
+
+    @State private var isLookingUp = false
+
+    /// A cover the user chose here. Nil while they leave the candidate alone.
+    @State private var draftArtwork:  Data? = nil
+    /// Set by the bin. Distinct from `draftArtwork == nil`, which is also the
+    /// untouched state — without this the bin would have nothing to record.
+    @State private var artworkCleared = false
 
     @State private var isApplying = false
 
@@ -35,97 +44,109 @@ struct IOSMetadataReviewSheet: View {
 
     init(item: MetadataReviewItem) {
         self.item = item
-        let c       = item.candidate
-        let t       = item.track
-        let raw     = c.artistName ?? t.artistName
-        let (primary, featured) = ImportService.splitArtist(from: raw)
-        _draftTitle    = State(initialValue: c.title ?? t.title)
-        _draftArtist   = State(initialValue: primary)
-        _draftFeatured = State(initialValue: featured ?? "")
-        _draftAlbum    = State(initialValue: c.albumTitle ?? t.albumTitle)
-        _draftYear     = State(initialValue: (c.year ?? t.year).map(String.init) ?? "")
-        _draftGenre    = State(initialValue: c.genre ?? t.genre ?? "")
+        _draft     = State(initialValue: MetadataDraft(candidate: item.candidate, track: item.track))
+        _candidate = State(initialValue: item.candidate)
     }
 
     var body: some View {
-        NavigationStack {
-            ZStack(alignment: .bottom) {
-                // Scrollable content
-                ScrollView {
-                    VStack(spacing: 0) {
-                        artworkHero
-                        summarySection
-                        Divider().padding(.horizontal, 16)
-                        fieldsSection
-                        // Extra bottom padding so content clears the sticky action bar
-                        Color.clear.frame(height: 100)
-                    }
-                }
-                .scrollContentBackground(.hidden)
-                .background(Color.mixBackground)
-
-                // Sticky action bar pinned to bottom
-                actionBar
-                    .background(.ultraThinMaterial)
+        MixSheet(title: "Review Metadata",
+                 subtitle: batchLabel,
+                 size: .large) {
+            VStack(spacing: 18) {
+                artworkHero
+                summarySection
+                fieldsSection
             }
-            .navigationTitle("Review Metadata")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarColorScheme(.dark, for: .navigationBar)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    if appState.batchTotal > 1 {
-                        Text("\(appState.currentItemNumber) of \(appState.batchTotal)")
-                            .font(.system(size: 12))
-                            .foregroundStyle(Color.mixTextTertiary)
-                    }
-                }
-            }
+        } footer: {
+            actionBar
         }
-        .presentationDetents([.large])
-        .presentationDragIndicator(.visible)
         .interactiveDismissDisabled(isApplying)
         // Reset draft fields each time the review queue advances to a new song.
-        .onChange(of: item.track.id) { _, _ in
-            let c = item.candidate
-            let t = item.track
-            let raw = c.artistName ?? t.artistName
-            let (primary, featured) = ImportService.splitArtist(from: raw)
-            draftTitle    = c.title ?? t.title
-            draftArtist   = primary
-            draftFeatured = featured ?? ""
-            draftAlbum    = c.albumTitle ?? t.albumTitle
-            draftYear     = (c.year ?? t.year).map(String.init) ?? ""
-            draftGenre    = c.genre ?? t.genre ?? ""
+        .onChange(of: item.id) { _, _ in
+            draft.reset(to: item.candidate, track: item.track)
+            candidate = item.candidate
+            // The cover edit belongs to the song that was on screen, not to
+            // the next one in the queue.
+            draftArtwork   = nil
+            artworkCleared = false
         }
+        // Keyed on the item, so advancing the queue cancels the outgoing song's
+        // lookup instead of letting it come back and overwrite the next one.
+        .task(id: item.id) { await runLookup() }
+    }
+
+    /// Where you are in the queue. This was a tiny grey label crammed into the
+    /// navigation bar's trailing slot; it belongs with the title, which is the
+    /// one place a sheet says what it is.
+    private var batchLabel: String? {
+        appState.batchTotal > 1
+            ? "Song \(appState.currentItemNumber) of \(appState.batchTotal)"
+            : "Check what we found before it's written to the file."
+    }
+
+    // MARK: - Lookup
+
+    private func runLookup() async {
+        guard let lookup = item.lookup else { return }
+        isLookingUp = true
+        defer { isLookingUp = false }
+
+        guard let found = await deps.enrichmentService.enrich(url: lookup.sourceURL,
+                                                              existing: lookup.existing)
+        else { return }
+        // The queue may have moved on while this was in flight; `.task(id:)`
+        // cancels then, and applying a stale answer to a new song is exactly
+        // the bug that check prevents.
+        guard !Task.isCancelled else { return }
+
+        // A filename-only answer is what's already on screen. Replacing the
+        // candidate anyway would just re-badge the sheet for no gain.
+        guard found.source == .itunes else { return }
+        candidate = found
+        draft.merge(found, track: item.track)
     }
 
     // MARK: - Artwork Hero
 
+    /// The cover, and the tap target for changing it.
+    ///
+    /// It used to sit on a 220pt bleed of its own artwork, blurred and darkened
+    /// — an iOS music-app flourish that made a data-entry sheet look like a
+    /// player. The cover is the thing being reviewed, so it just gets to be the
+    /// cover.
     private var artworkHero: some View {
-        ZStack(alignment: .bottom) {
-            // Blurred background
-            artworkImage
-                .scaledToFill()
-                .frame(height: 220)
-                .clipped()
-                .overlay(Color.black.opacity(0.45))
-                .blur(radius: 20)
-                .clipped()
-
-            // Crisp artwork thumbnail centred
-            artworkImage
-                .scaledToFit()
-                .frame(width: 140, height: 140)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .shadow(color: .black.opacity(0.5), radius: 16, y: 6)
-                .padding(.bottom, 20)
-        }
-        .frame(height: 220)
+        ArtworkPickerView(
+            data: $draftArtwork,
+            size: 140,
+            cornerRadius: 10,
+            showsRemoveBadge: showsRemoveBadge,
+            onRemove: { artworkCleared = true },
+            placeholder: { candidateArtworkImage.scaledToFill() }
+        )
+        .shadow(color: .black.opacity(0.28), radius: 12, y: 5)
+        .frame(maxWidth: .infinity)
     }
 
+    /// Whether there is a cover to throw away: one the user just chose, or the
+    /// candidate's, as long as they haven't already cleared it.
+    private var showsRemoveBadge: Bool {
+        if draftArtwork != nil { return true }
+        if artworkCleared      { return false }
+        return candidate.artworkURL != nil || item.track.artworkData != nil
+    }
+
+    private var artworkChoice: ImportService.ArtworkChoice {
+        if let draftArtwork { return .replace(draftArtwork) }
+        return artworkCleared ? .remove : .keep
+    }
+
+    /// What sits behind the picker when the user hasn't supplied their own —
+    /// the candidate's remote cover, the file's embedded art, or nothing.
     @ViewBuilder
-    private var artworkImage: some View {
-        if let url = item.candidate.artworkURL {
+    private var candidateArtworkImage: some View {
+        if artworkCleared {
+            artworkPlaceholder
+        } else if let url = candidate.artworkURL {
             AsyncImage(url: url) { phase in
                 switch phase {
                 case .success(let img): img.resizable()
@@ -135,7 +156,7 @@ struct IOSMetadataReviewSheet: View {
                         .overlay(ProgressView().tint(Color.mixTextTertiary))
                 }
             }
-        } else if let data = item.track.artworkData,
+        } else if let data = item.track.displayArtwork,
                   let ui   = UIImage(data: data) {
             Image(uiImage: ui).resizable()
         } else {
@@ -156,16 +177,16 @@ struct IOSMetadataReviewSheet: View {
 
     private var summarySection: some View {
         VStack(spacing: 6) {
-            Text(draftTitle.isEmpty ? "Unknown Title" : draftTitle)
+            Text(draft.fields.title.isEmpty ? "Unknown Title" : draft.fields.title)
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(Color.mixTextPrimary)
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
-            Text(draftArtist.isEmpty ? "Unknown Artist" : draftArtist)
+            Text(draft.fields.artist.isEmpty ? "Unknown Artist" : draft.fields.artist)
                 .font(.system(size: 14))
                 .foregroundStyle(Color.mixPrimary)
                 .lineLimit(1)
-            Text(draftAlbum.isEmpty ? "" : draftAlbum)
+            Text(draft.fields.album.isEmpty ? "" : draft.fields.album)
                 .font(.system(size: 13))
                 .foregroundStyle(Color.mixTextSecondary)
                 .lineLimit(1)
@@ -174,30 +195,27 @@ struct IOSMetadataReviewSheet: View {
                 .padding(.top, 4)
         }
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, 24)
-        .padding(.vertical, 16)
     }
 
     // MARK: - Editable Fields
 
     private var fieldsSection: some View {
         VStack(spacing: 0) {
-            reviewField("Title",    text: $draftTitle,    keyboard: .default)
+            reviewField("Title",    text: $draft.fields.title,    keyboard: .default)
             divider
             // Artist = primary / folder; Featured = collaborator after the separator
-            reviewField("Artist",   text: $draftArtist,   keyboard: .default)
+            reviewField("Artist",   text: $draft.fields.artist,   keyboard: .default)
             divider
             featuredRow
             divider
-            reviewField("Album",    text: $draftAlbum,    keyboard: .default)
+            reviewField("Album",    text: $draft.fields.album,    keyboard: .default)
             divider
-            reviewField("Year",     text: $draftYear,     keyboard: .numberPad)
+            reviewField("Year",     text: $draft.fields.year,     keyboard: .numberPad)
             divider
-            reviewField("Genre",    text: $draftGenre,    keyboard: .default)
+            reviewField("Genre",    text: $draft.fields.genre,    keyboard: .default)
         }
-        .background(Color.mixSurface, in: RoundedRectangle(cornerRadius: 12))
-        .padding(.horizontal, 16)
-        .padding(.top, 16)
+        .background(Color.mixSurface,
+                    in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     /// Featured artist row. Leave empty if the track has no feature.
@@ -208,11 +226,11 @@ struct IOSMetadataReviewSheet: View {
                 .font(.system(size: 13))
                 .foregroundStyle(Color.mixTextSecondary)
                 .frame(width: 70, alignment: .leading)
-            TextField("Collaborating artist(s)", text: $draftFeatured)
+            TextField("Collaborating artist(s)", text: $draft.fields.featured)
                 .font(.system(size: 14))
                 .foregroundStyle(Color.mixTextPrimary)
                 .autocorrectionDisabled()
-            if !draftFeatured.isEmpty {
+            if !draft.fields.featured.isEmpty {
                 HStack(spacing: 3) {
                     Image(systemName: "person.2.fill")
                         .font(.system(size: 9))
@@ -253,67 +271,61 @@ struct IOSMetadataReviewSheet: View {
 
     // MARK: - Confidence Badge
 
+    /// Says where the values on screen came from — including "still asking",
+    /// which is the honest answer for the first few seconds now that the sheet
+    /// doesn't wait for iTunes before showing itself.
     private var confidenceBadge: some View {
         let (label, color): (String, Color) = {
-            switch item.candidate.confidence {
+            switch candidate.confidence {
             case 0.7...: return ("High confidence",   .green)
             case 0.4...: return ("Medium confidence", .yellow)
             default:     return ("Low confidence",    .orange)
             }
         }()
         let sourceLabel: String = {
-            switch item.candidate.source {
+            if isLookingUp { return "Looking up\u{2026}" }
+            switch candidate.source {
             case .itunes:           return "iTunes · \(label)"
             case .filenameOnly:     return "Filename only"
             case .existingMetadata: return "Your existing tags"
             }
         }()
+        let tint = isLookingUp ? Color.mixTextSecondary : color
         return HStack(spacing: 4) {
-            if item.candidate.source == .itunes {
+            if isLookingUp {
+                ProgressView().scaleEffect(0.5).frame(width: 10, height: 10)
+            } else if candidate.source == .itunes {
                 Image(systemName: "music.note").font(.system(size: 9))
             }
             Text(sourceLabel)
                 .font(.system(size: 10, weight: .medium))
         }
-        .foregroundStyle(color)
+        .foregroundStyle(tint)
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .background(color.opacity(0.15), in: Capsule())
+        .background(tint.opacity(0.15), in: Capsule())
+        .mixAnimation(.easeOut(duration: 0.15), value: isLookingUp)
     }
 
     // MARK: - Action Bar
 
+    /// Apply commits, Skip moves the queue on — which is why Skip isn't the
+    /// chrome's Cancel: closing the sheet and passing on this song aren't the
+    /// same act, and the two used to be the same-sized button side by side.
     private var actionBar: some View {
-        HStack(spacing: 12) {
-            Button("Skip") {
-                appState.dequeueReview()
-            }
-            .font(.system(size: 16, weight: .medium))
-            .foregroundStyle(Color.mixTextSecondary)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 14)
-            .background(Color.mixSurface, in: RoundedRectangle(cornerRadius: 12))
-
-            Button {
-                applyChanges()
-            } label: {
-                Group {
-                    if isApplying {
-                        ProgressView().tint(.white)
-                    } else {
-                        Text("Apply Changes")
-                            .font(.system(size: 16, weight: .semibold))
-                    }
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-            }
-            .background(Color.mixPrimary, in: RoundedRectangle(cornerRadius: 12))
-            .foregroundStyle(.white)
-            .disabled(isApplying)
+        VStack(spacing: 10) {
+            MixSheetPrimaryButton(
+                action: MixSheetAction("Apply Changes",
+                                       isBusy: isApplying,
+                                       action: applyChanges),
+                fullWidth: true
+            )
+            Button("Skip This Song") { appState.dequeueReview() }
+                .buttonStyle(.plain).mixHandCursor()
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(Color.mixTextSecondary)
+                .disabled(isApplying)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
     }
 
     // MARK: - Apply
@@ -321,16 +333,16 @@ struct IOSMetadataReviewSheet: View {
     private func applyChanges() {
         isApplying = true
         let trackID    = item.track.id
-        let artworkURL = item.candidate.artworkURL
-        let title      = draftTitle
-        // Recombine primary + featured into the stored artist string.
-        // The track is always filed under `primary` (passed as primaryArtistOverride).
-        let primary    = draftArtist.trimmingCharacters(in: .whitespaces)
-        let featured   = draftFeatured.trimmingCharacters(in: .whitespaces)
-        let fullArtist = featured.isEmpty ? primary : "\(primary) ft. \(featured)"
-        let album      = draftAlbum
-        let year       = Int(draftYear)
-        let genre      = draftGenre.isEmpty ? nil : draftGenre
+        let artworkURL = candidate.artworkURL
+        let title      = draft.fields.title
+        // The track is always filed under the primary artist, passed separately
+        // as primaryArtistOverride; the stored name keeps the feature.
+        let primary    = draft.primaryArtist
+        let fullArtist = draft.fullArtist
+        let album      = draft.fields.album
+        let year       = Int(draft.fields.year)
+        let genre      = draft.fields.genre.isEmpty ? nil : draft.fields.genre
+        let choice     = artworkChoice
 
         Task {
             await deps.importService.applyEnrichment(
@@ -341,8 +353,9 @@ struct IOSMetadataReviewSheet: View {
                 year:                  year,
                 genre:                 genre,
                 artworkURL:            artworkURL,
-                artistImageURL:        item.candidate.artistImageURL,
-                primaryArtistOverride: primary.isEmpty ? nil : primary
+                artistImageURL:        candidate.artistImageURL,
+                primaryArtistOverride: primary.isEmpty ? nil : primary,
+                artwork:               choice
             )
             await MainActor.run {
                 isApplying = false
