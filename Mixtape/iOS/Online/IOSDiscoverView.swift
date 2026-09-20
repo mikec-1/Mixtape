@@ -755,24 +755,21 @@ struct IOSDiscoverView: View {
     }
 
     /// The song verbs, for the landing cards that only knew how to be tapped.
-    @ViewBuilder
     private func onlineSongMenu(_ song: OnlineTrack, context: [OnlineTrack]) -> some View {
-        Button("Play", systemImage: "play.fill") {
-            let ctx = engine.queue.shuffleEnabled ? [song] : context
-            Task { await play(song, context: ctx) }
-        }
-        Button("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") {
-            Task { await coordinator.playNext(song) }
-        }
-        Button("Add to Queue", systemImage: "text.append") {
-            Task { await coordinator.addToQueue(song) }
-        }
-        Divider()
-        Button("Add to Library", systemImage: "plus") {
-            Task { await coordinator.addToLibrary(song) }
-        }
-        Divider()
-        ShareMenuItems(.track(song))
+        OnlineSongMenu(
+            song: song,
+            onPlay: {
+                let ctx = engine.queue.shuffleEnabled ? [song] : context
+                Task { await play(song, context: ctx) }
+            },
+            onPlayNext:     { Task { await coordinator.playNext(song) } },
+            onAddToQueue:   { Task { await coordinator.addToQueue(song) } },
+            onWrongVersion: { Task { await coordinator.reResolveAndPlay(song, context: context) } },
+            // The landing has no resolved album or artist in hand, so both are
+            // looked up by name on the way — same as the Mac landing does.
+            onOpenAlbum:  song.albumTitle.isEmpty ? nil : { openAlbum(for: song) },
+            onOpenArtist: { openArtist(named: $0) }
+        )
     }
 
     private func banner(_ text: String) -> some View {
@@ -870,6 +867,14 @@ struct IOSDiscoverView: View {
         Task {
             if let artist = await deps.itunesClient.resolveArtist(name: name, trackID: nil) {
                 await MainActor.run { path.append(DiscoverDestination.artist(artist)) }
+            }
+        }
+    }
+
+    private func openAlbum(for song: OnlineTrack) {
+        Task {
+            if let album = await deps.itunesClient.resolveAlbum(for: song) {
+                await MainActor.run { path.append(DiscoverDestination.album(album)) }
             }
         }
     }

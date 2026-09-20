@@ -22,6 +22,9 @@ struct OnlineSongMenu: View {
 
     let song: OnlineTrack
     let onPlay:       () -> Void
+    /// True when this song is the one playing. The heroes' `onPlay` toggles
+    /// rather than restarts, so without this the item reads "Play" and pauses.
+    var isPlaying:    Bool = false
     /// Nil where the surface genuinely has no queue to act on — the hero on a
     /// page that isn't a list.
     var onPlayNext:   (() -> Void)? = nil
@@ -41,7 +44,8 @@ struct OnlineSongMenu: View {
     #endif
 
     var body: some View {
-        Button("Play", systemImage: "play.fill", action: onPlay)
+        Button(isPlaying ? "Pause" : "Play",
+               systemImage: isPlaying ? "pause.fill" : "play.fill", action: onPlay)
         if let onPlayNext {
             Button("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward", action: onPlayNext)
         }

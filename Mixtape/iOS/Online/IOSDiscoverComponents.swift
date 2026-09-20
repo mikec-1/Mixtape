@@ -152,29 +152,13 @@ struct IOSSongRow: View {
         .contentShape(Rectangle())
         .onTapGesture(perform: onPlay)
         .contextMenu {
-            Button("Play", systemImage: "play.fill", action: onPlay)
-            Button("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward", action: onPlayNext)
-            Button("Add to Queue", systemImage: "text.append", action: onAddToQueue)
-            Divider()
-            Button("Add to Library", systemImage: "plus", action: onAdd)
-            if onOpenAlbum != nil || onOpenArtist != nil { Divider() }
-            if let onOpenArtist {
-                // One entry per credited name. A row can't make each name its own
-                // link the way the Mac's credit line does — the whole row is the
-                // play target — so the menu is where a guest gets a way through.
-                ForEach(song.displayArtists, id: \.self) { name in
-                    Button("Go to \(name)", systemImage: "music.mic") { onOpenArtist(name) }
-                }
-            }
-            if let onOpenAlbum {
-                Button("Go to Album", systemImage: "square.stack", action: onOpenAlbum)
-            }
-            if let onWrongVersion {
-                Divider()
-                Button("Wrong Version? Re-resolve", systemImage: "arrow.triangle.2.circlepath", action: onWrongVersion)
-            }
-            Divider()
-            ShareMenuItems(.track(song))
+            OnlineSongMenu(song: song,
+                           onPlay: onPlay,
+                           onPlayNext: onPlayNext,
+                           onAddToQueue: onAddToQueue,
+                           onWrongVersion: onWrongVersion,
+                           onOpenAlbum: onOpenAlbum,
+                           onOpenArtist: onOpenArtist)
         }
     }
 
@@ -253,36 +237,13 @@ struct IOSWideSongHero: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.mixSurface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .contextMenu {
-            Button(isThisPlaying ? "Pause" : "Play",
-                   systemImage: isThisPlaying ? "pause.fill" : "play.fill", action: onPlay)
-            if let onPlayNext {
-                Button("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward", action: onPlayNext)
-            }
-            if let onAddToQueue {
-                Button("Add to Queue", systemImage: "text.append", action: onAddToQueue)
-            }
-            if let onAdd {
-                Divider()
-                Button("Add to Library", systemImage: "plus", action: onAdd)
-            }
-            if onOpenArtist != nil || onOpenAlbum != nil { Divider() }
-            if let onOpenArtist {
-                // One entry per credited name. A row can't make each name its own
-                // link the way the Mac's credit line does — the whole row is the
-                // play target — so the menu is where a guest gets a way through.
-                ForEach(song.displayArtists, id: \.self) { name in
-                    Button("Go to \(name)", systemImage: "music.mic") { onOpenArtist(name) }
-                }
-            }
-            if let onOpenAlbum {
-                Button("Go to Album", systemImage: "square.stack", action: onOpenAlbum)
-            }
-            if let onWrongVersion {
-                Divider()
-                Button("Wrong Version? Re-resolve", systemImage: "arrow.triangle.2.circlepath", action: onWrongVersion)
-            }
-            Divider()
-            ShareMenuItems(.track(song))
+            OnlineSongMenu(song: song,
+                           onPlay: onPlay, isPlaying: isThisPlaying,
+                           onPlayNext: onPlayNext,
+                           onAddToQueue: onAddToQueue,
+                           onWrongVersion: onWrongVersion,
+                           onOpenAlbum: onOpenAlbum,
+                           onOpenArtist: onOpenArtist)
         }
     }
 }

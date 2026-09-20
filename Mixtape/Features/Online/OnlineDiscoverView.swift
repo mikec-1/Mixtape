@@ -1560,7 +1560,8 @@ private struct WideSongHero: View {
         .mixAnimation(.easeInOut(duration: 0.12), value: isResolving)
         .contextMenu {
             OnlineSongMenu(song: song,
-                           onPlay: onPlay, onPlayNext: onPlayNext,
+                           onPlay: onPlay, isPlaying: isThisPlaying,
+                           onPlayNext: onPlayNext,
                            onAddToQueue: onAddToQueue,
                            onWrongVersion: onWrongVersion,
                            onOpenAlbum: onOpenAlbum, onOpenArtist: onOpenArtist)
