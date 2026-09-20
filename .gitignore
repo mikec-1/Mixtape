@@ -47,3 +47,7 @@ Mixtape/iOS/Online/RemoteResolverService.swift
 
 # ─── Supabase CLI local state ────────────────────────
 supabase/.temp/
+
+# Service internals — production schema + deploy recipe, deliberately untracked
+server/
+supabase/
