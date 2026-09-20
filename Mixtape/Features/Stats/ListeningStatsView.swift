@@ -2,8 +2,8 @@
 // Mixtape — Features/Stats
 //
 // "Year in Mixtape" — a read-only listening dashboard over the play history:
-// headline counts, top tracks & artists, a listening-by-hour chart and the
-// current daily streak. Period-switchable (30 days / this year / all time).
+// headline counts, top tracks & artists and a listening-by-hour chart.
+// Period-switchable (30 days / this year / all time).
 
 import SwiftUI
 
@@ -11,37 +11,16 @@ public struct ListeningStatsView: View {
 
     @EnvironmentObject private var deps:   AppDependencies
     @EnvironmentObject private var engine: PlaybackEngine
-    @Environment(\.dismiss) private var dismiss
-
-    /// When true, shows a Done button (used when presented as a sheet).
-    private let showsDismiss: Bool
-
     @State private var period: StatsPeriod = .allTime
     @State private var stats: ListeningStats = .empty
 
-    public init(showsDismiss: Bool = true) {
-        self.showsDismiss = showsDismiss
-    }
+    public init() {}
 
     public var body: some View {
-        NavigationStack {
-            ZStack {
-                Color.mixBackground.ignoresSafeArea()
-                content
-            }
-            .navigationTitle("Your Stats")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.large)
-            .toolbarColorScheme(.dark, for: .navigationBar)
-            #endif
-            .toolbar {
-                if showsDismiss {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { dismiss() }
-                            .foregroundStyle(Color.mixPrimary)
-                    }
-                }
-            }
+        MixSheet(title: "Your Stats",
+                 subtitle: "What you've actually been listening to.",
+                 size: .large) {
+            content
         }
         .onAppear(perform: recompute)
         .onChange(of: period) { _, _ in
@@ -54,31 +33,29 @@ public struct ListeningStatsView: View {
         stats = deps.statsService.compute(period: period)
     }
 
+    /// No `ScrollView` and no margins of its own — the sheet owns both, which
+    /// is what lets the header and footer hairlines know when they're actually
+    /// separating something.
     @ViewBuilder
     private var content: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                periodPicker
+        VStack(alignment: .leading, spacing: 24) {
+            periodPicker
 
-                if stats.hasData {
-                    headlineGrid
-                    if let busiest = stats.busiestHour {
-                        byHourCard(busiestHour: busiest)
-                    }
-                    if !stats.topTracks.isEmpty { topTracksSection }
-                    if !stats.topArtists.isEmpty { topArtistsSection }
-                } else {
-                    EmptyStateView(
-                        icon: "chart.bar.xaxis",
-                        title: "No listening yet",
-                        message: "Play some music and your stats will appear here."
-                    )
-                    .padding(.top, 40)
+            if stats.hasData {
+                headlineGrid
+                if let busiest = stats.busiestHour {
+                    byHourCard(busiestHour: busiest)
                 }
+                if !stats.topTracks.isEmpty { topTracksSection }
+                if !stats.topArtists.isEmpty { topArtistsSection }
+            } else {
+                EmptyStateView(
+                    icon: "chart.bar.xaxis",
+                    title: "No listening yet",
+                    message: "Play some music and your stats will appear here."
+                )
+                .padding(.top, 40)
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 8)
-            .padding(.bottom, 120)
         }
     }
 
@@ -98,11 +75,13 @@ public struct ListeningStatsView: View {
         let hoursLabel: String = minutes >= 60
             ? "\(minutes / 60)h \(minutes % 60)m"
             : "\(minutes)m"
-        return LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+        // Three columns rather than the two this had as a 2×2: with the streak
+        // card gone the fourth slot is empty, and a half-width card sitting
+        // alone under a full row reads as something that failed to load.
+        return LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 12) {
             statCard(value: "\(stats.totalPlays)", label: "Plays", icon: MixtapeIcons.play)
             statCard(value: hoursLabel, label: "Listened", icon: "hourglass")
             statCard(value: "\(stats.uniqueTracks)", label: "Unique tracks", icon: MixtapeIcons.track)
-            statCard(value: "\(stats.currentStreakDays)", label: stats.currentStreakDays == 1 ? "Day streak" : "Day streak", icon: "flame.fill")
         }
     }
 
@@ -143,7 +122,7 @@ public struct ListeningStatsView: View {
                 ForEach(0..<24, id: \.self) { hour in
                     let count = stats.playsByHour[hour]
                     let frac = CGFloat(count) / CGFloat(maxCount)
-                    RoundedRectangle(cornerRadius: 2)
+                    RoundedRectangle(cornerRadius: 2, style: .continuous)
                         .fill(hour == busiestHour ? Color.mixPrimary : Color.mixSurface2)
                         .frame(height: max(3, frac * 80))
                         .frame(maxWidth: .infinity)
@@ -177,11 +156,11 @@ public struct ListeningStatsView: View {
             ForEach(Array(stats.topTracks.enumerated()), id: \.element.id) { index, item in
                 Button {
                     Haptics.play(.light)
-                    Task { await engine.play(track: item.track, in: deps.libraryService.tracks) }
+                    Task { await engine.play(track: item.track, in: deps.libraryService.tracks, source: .playlist(id: Playlist.allSongsID, name: "All Songs")) }
                 } label: {
                     rankedRow(
                         rank: index + 1,
-                        artwork: item.track.artworkData,
+                        artwork: item.track.displayArtwork,
                         placeholder: MixtapeIcons.track,
                         corner: 6,
                         title: item.track.title,
@@ -189,7 +168,7 @@ public struct ListeningStatsView: View {
                         count: item.playCount
                     )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.plain).mixHandCursor()
             }
         }
     }

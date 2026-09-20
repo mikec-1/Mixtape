@@ -24,6 +24,11 @@ public struct AccountSettingsView: View {
     @State private var photoItem: PhotosPickerItem?
     #endif
 
+    // MARK: Display Name
+    @State private var nameField: String = ""
+    @State private var nameBusy: Bool = false
+    @State private var nameResult: ActionResult?
+
     // MARK: Change Username
     @State private var usernameField: String = ""
     @State private var usernameBusy: Bool = false
@@ -50,6 +55,10 @@ public struct AccountSettingsView: View {
     }
 
     private var currentUsername: String {
+        deps.authService.currentUser?.username ?? deps.authService.currentUser?.displayName ?? "—"
+    }
+
+    private var currentName: String {
         deps.authService.currentUser?.displayName ?? "—"
     }
 
@@ -84,6 +93,7 @@ public struct AccountSettingsView: View {
         List {
             avatarSection
             currentInfoSection
+            displayNameSection
             usernameSection
             emailSection
             passwordSection
@@ -108,20 +118,23 @@ public struct AccountSettingsView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     #if os(iOS)
                     PhotosPicker(selection: $photoItem, matching: .images, photoLibrary: .shared()) {
-                        Text(avatarBusy ? "Uploading…" : "Change Photo")
+                        Text(avatarBusy ? "Uploading…" : "Change Photo…")
                             .font(.mixButton)
                             .foregroundStyle(avatarBusy ? Color.mixTextTertiary : Color.mixPrimary)
+                            .frame(minHeight: 44)
+                            .contentShape(Rectangle())
                     }
+                    .buttonStyle(.borderless)
                     .disabled(avatarBusy)
                     #else
                     Button {
                         pickAvatarMac()
                     } label: {
-                        Text(avatarBusy ? "Uploading…" : "Change Photo")
+                        Text(avatarBusy ? "Uploading…" : "Change Photo…")
                             .font(.mixButton)
                             .foregroundStyle(avatarBusy ? Color.mixTextTertiary : Color.mixPrimary)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.plain).mixHandCursor()
                     .disabled(avatarBusy)
                     #endif
 
@@ -129,11 +142,15 @@ public struct AccountSettingsView: View {
                         Button(role: .destructive) {
                             removeAvatar()
                         } label: {
-                            Text("Remove")
+                            Text("Remove Photo")
                                 .font(.mixCaptionBold)
                                 .foregroundStyle(Color.mixDestructive)
+                                #if os(iOS)
+                                .frame(minHeight: 44)
+                                .contentShape(Rectangle())
+                                #endif
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.plain).mixHandCursor()
                         .disabled(avatarBusy)
                     }
                 }
@@ -157,9 +174,34 @@ public struct AccountSettingsView: View {
     private var currentInfoSection: some View {
         Section {
             infoRow(label: "Email", value: currentEmail)
-            infoRow(label: "Username", value: currentUsername)
+            infoRow(label: "Display name", value: currentName)
+            infoRow(label: "Username", value: (deps.authService.currentUser?.username).map { "@" + $0 } ?? "—")
         } header: {
             sectionHeader("Current Account")
+        }
+        .listRowBackground(Color.mixSurface)
+    }
+
+    /// Free-form: no availability check. Saving it empty falls back to the username.
+    private var displayNameSection: some View {
+        Section {
+            TextField("Display name", text: $nameField)
+                .textFieldStyle(.plain)
+                .font(.mixBody)
+                .foregroundStyle(Color.mixTextPrimary)
+                .onAppear { if nameField.isEmpty, currentName != "—" { nameField = currentName } }
+
+            resultText(nameResult)
+
+            saveButton(
+                title: "Save Display Name",
+                busy: nameBusy,
+                disabled: nameBusy || nameField.trimmingCharacters(in: .whitespacesAndNewlines) == currentName
+            ) {
+                saveDisplayName()
+            }
+        } header: {
+            sectionHeader("Display Name")
         }
         .listRowBackground(Color.mixSurface)
     }
@@ -376,6 +418,21 @@ public struct AccountSettingsView: View {
                 avatarResult = .success("Profile picture removed.")
             } catch {
                 avatarResult = .failure(error.localizedDescription)
+            }
+        }
+    }
+
+    private func saveDisplayName() {
+        nameResult = nil
+        nameBusy = true
+        Task {
+            defer { nameBusy = false }
+            do {
+                try await deps.authService.updateDisplayName(nameField)
+                nameResult = .success("Display name updated.")
+                nameField = currentName
+            } catch {
+                nameResult = .failure(error.localizedDescription)
             }
         }
     }

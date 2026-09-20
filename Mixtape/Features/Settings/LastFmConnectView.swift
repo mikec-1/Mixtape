@@ -23,36 +23,46 @@ struct LastFmConnectView: View {
     @State private var errorText: String?
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                Color.mixBackground.ignoresSafeArea()
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 20) {
-                        if scrobbler.isConfigured {
-                            connectedCard
-                        } else {
-                            credentialsForm
-                        }
-                        if let errorText = errorText ?? scrobbler.lastAuthError {
-                            Text(errorText)
-                                .font(.mixCaption)
-                                .foregroundStyle(Color.mixDestructive)
-                        }
-                    }
-                    .padding(20)
+        MixSheet(title: "Last.fm",
+                 subtitle: scrobbler.isConfigured
+                     ? "Mixtape sends what you play to your Last.fm profile."
+                     : "Create an API account at last.fm/api, then paste the two values it gives you.",
+                 size: .medium,
+                 primary: primaryAction) {
+            VStack(alignment: .leading, spacing: 16) {
+                if scrobbler.isConfigured {
+                    connectedCard
+                } else {
+                    credentialsForm
                 }
-            }
-            .navigationTitle("Last.fm")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                if let errorText = errorText ?? scrobbler.lastAuthError {
+                    MixSheetStatus(kind: .failure,
+                                   title: "Couldn't connect",
+                                   detail: errorText)
                 }
             }
         }
         .tint(Color.mixPrimary)
+    }
+
+    /// Three steps, one button: connect, come back from the browser, finish.
+    /// Each of those used to be its own full-width block inside the form, which
+    /// left two buttons on screen at once with no sign which one was next.
+    private var primaryAction: MixSheetAction {
+        if scrobbler.isConfigured {
+            return MixSheetAction("Done") { dismiss() }
+        }
+        if didOpenAuth {
+            return MixSheetAction("Finish Connecting",
+                                  isBusy: scrobbler.isConnecting) {
+                Task { await finish() }
+            }
+        }
+        return MixSheetAction("Connect",
+                              isEnabled: canConnect,
+                              isBusy: scrobbler.isConnecting) {
+            Task { await connect() }
+        }
     }
 
     // MARK: - Connected
@@ -87,7 +97,7 @@ struct LastFmConnectView: View {
                     .font(.mixBodyBold)
                     .foregroundStyle(Color.mixDestructive)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.plain).mixHandCursor()
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -100,56 +110,26 @@ struct LastFmConnectView: View {
     // MARK: - Credentials form
 
     private var credentialsForm: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Create an API account at last.fm/api, then paste your credentials below.")
-                .font(.mixCaption)
-                .foregroundStyle(Color.mixTextSecondary)
-
+        VStack(alignment: .leading, spacing: 14) {
             field(title: "API Key", text: $apiKey, secure: false)
             field(title: "Shared Secret", text: $apiSecret, secure: true)
 
-            Button {
-                Task { await connect() }
-            } label: {
-                HStack {
-                    if scrobbler.isConnecting { ProgressView().controlSize(.small) }
-                    Text(didOpenAuth ? "Re-open authorize page" : "Connect")
-                        .font(.mixBodyBold)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(canConnect ? Color.mixPrimary : Color.mixSurface2)
-                )
-                .foregroundStyle(canConnect ? Color.white : Color.mixTextTertiary)
-            }
-            .buttonStyle(.plain)
-            .disabled(!canConnect || scrobbler.isConnecting)
-
             if didOpenAuth {
-                Text("Approve access in your browser, then tap below.")
-                    .font(.mixCaption)
-                    .foregroundStyle(Color.mixTextSecondary)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Approve access in your browser, then choose Finish Connecting.")
+                        .font(.mixCaption)
+                        .foregroundStyle(Color.mixTextSecondary)
 
-                Button {
-                    Task { await finish() }
-                } label: {
-                    HStack {
-                        if scrobbler.isConnecting { ProgressView().controlSize(.small) }
-                        Text("Finish connecting")
-                            .font(.mixBodyBold)
+                    // Only a way back to a page they already have open — it
+                    // shouldn't compete with the step that's actually next.
+                    Button("Re-open the authorize page") {
+                        Task { await connect() }
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(Color.mixPrimary, lineWidth: 1.5)
-                    )
+                    .buttonStyle(.plain).mixHandCursor()
+                    .font(.mixLabel)
                     .foregroundStyle(Color.mixPrimary)
+                    .mixHoverCursor { _ in }
                 }
-                .buttonStyle(.plain)
-                .disabled(scrobbler.isConnecting)
             }
         }
     }
@@ -170,14 +150,7 @@ struct LastFmConnectView: View {
                         #endif
                 }
             }
-            .textFieldStyle(.plain)
-            .font(.mixBody)
-            .foregroundStyle(Color.mixTextPrimary)
-            .padding(10)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.mixSurface)
-            )
+            .mixSheetField()
         }
     }
 

@@ -15,8 +15,14 @@ public struct EqualizerView: View {
 
     @ObservedObject private var equalizer: AudioEqualizer
 
-    public init(equalizer: AudioEqualizer) {
+    /// `true` when something else already supplies a title and margins — the
+    /// `MixSheet` on iOS. Inline in macOS Settings it's a card and draws its own
+    /// heading, padding and background.
+    private let isEmbedded: Bool
+
+    public init(equalizer: AudioEqualizer, isEmbedded: Bool = false) {
         self.equalizer = equalizer
+        self.isEmbedded = isEmbedded
     }
 
     public var body: some View {
@@ -26,22 +32,31 @@ public struct EqualizerView: View {
             bands
             footnote
         }
-        .padding(20)
+        .padding(isEmbedded ? 0 : 20)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.mixBackground)
+        .background(isEmbedded ? Color.clear : Color.mixBackground)
     }
 
     // MARK: - Header (title + enable toggle)
 
+    /// Embedded, the sheet's own title says "Equalizer" — repeating it here is
+    /// what made these sheets read as two headers stacked on each other. The
+    /// switch still needs a label, so it gets the one it's actually for.
     private var header: some View {
         HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Equalizer")
-                    .font(.mixTitle)
+            if isEmbedded {
+                Text("Enabled")
+                    .font(.mixLabel)
                     .foregroundStyle(Color.mixTextPrimary)
-                Text("10-band graphic EQ")
-                    .font(.mixCaption)
-                    .foregroundStyle(Color.mixTextTertiary)
+            } else {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Equalizer")
+                        .font(.mixTitle)
+                        .foregroundStyle(Color.mixTextPrimary)
+                    Text("10-band graphic EQ")
+                        .font(.mixCaption)
+                        .foregroundStyle(Color.mixTextTertiary)
+                }
             }
             Spacer()
             Toggle("", isOn: $equalizer.isEnabled)
@@ -73,7 +88,7 @@ public struct EqualizerView: View {
             Button("Reset") { equalizer.reset() }
                 .font(.mixButtonSmall)
                 .foregroundStyle(Color.mixPrimary)
-                .buttonStyle(.plain)
+                .buttonStyle(.plain).mixHandCursor()
                 .disabled(!equalizer.isEnabled)
         }
         .opacity(equalizer.isEnabled ? 1 : 0.5)
@@ -103,7 +118,8 @@ public struct EqualizerView: View {
                     EQBandSlider(
                         value: bandBinding(index),
                         range: AudioEqualizer.gainRange,
-                        enabled: equalizer.isEnabled
+                        enabled: equalizer.isEnabled,
+                        label: "\(frequencyLabel(freq)) hertz"
                     )
                     .frame(height: 140)
 
@@ -149,6 +165,13 @@ private struct EQBandSlider: View {
     @Binding var value: Float
     let range: ClosedRange<Float>
     let enabled: Bool
+    /// Spoken name of the band, e.g. "1k hertz". The visible label under the
+    /// slider is a two-character abbreviation, which VoiceOver reads as noise.
+    let label: String
+
+    /// One press of an increment/decrement gesture, in dB. Matches the
+    /// granularity the readout shows, so every step changes what is spoken.
+    private let step: Float = 1
 
     var body: some View {
         GeometryReader { geo in
@@ -174,11 +197,14 @@ private struct EQBandSlider: View {
                 fillSegment(height: height, knobY: knobY)
 
                 // Knob
+                // 20pt rather than 16: the drag area is the whole column, but
+                // the knob is also the only thing saying where the value sits,
+                // and 16pt of it was under the size a fingertip can place.
                 Circle()
                     .fill(enabled ? Color.mixPrimary : Color.mixTextTertiary)
-                    .frame(width: 16, height: 16)
+                    .frame(width: 20, height: 20)
                     .frame(maxWidth: .infinity)
-                    .offset(y: knobY - 8)
+                    .offset(y: knobY - 10)
             }
             .contentShape(Rectangle())
             .gesture(
@@ -193,6 +219,27 @@ private struct EQBandSlider: View {
             .allowsHitTesting(enabled)
         }
         .frame(maxWidth: .infinity)
+        // A gesture-driven shape is invisible to VoiceOver on its own: without
+        // this the equaliser was ten unlabelled blanks with no way to change a
+        // value. `.adjustable` gives it the swipe-up/down that a real Slider has.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+        .accessibilityValue(gainDescription)
+        .accessibilityAdjustableAction { direction in
+            guard enabled else { return }
+            switch direction {
+            case .increment: value = min(range.upperBound, value + step)
+            case .decrement: value = max(range.lowerBound, value - step)
+            @unknown default: break
+            }
+        }
+
+    }
+
+    /// What the value sounds like: the readout above the slider, spoken.
+    private var gainDescription: String {
+        let rounded = Int(value.rounded())
+        return rounded > 0 ? "plus \(rounded) decibels" : "\(rounded) decibels"
     }
 
     @ViewBuilder
