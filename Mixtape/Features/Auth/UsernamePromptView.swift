@@ -11,6 +11,7 @@ struct UsernamePromptView: View {
     @ObservedObject var authService: SupabaseAuthService
     @Environment(\.dismiss) private var dismiss
 
+    @State private var displayName: String = ""
     @State private var username: String = ""
     @State private var password: String = ""
     @State private var isSaving  = false
@@ -35,63 +36,63 @@ struct UsernamePromptView: View {
     }
 
     private var isValid: Bool {
+        if authService.promptNameOnly {
+            return !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
         let trimmed = username.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.count >= 3 && validationError == nil && passwordError == nil
     }
 
     var body: some View {
-        ZStack {
-            Color.mixBackground.ignoresSafeArea()
+        // This was an 80pt circled glyph over a centred paragraph over two
+        // full-width pills, in a 420×460 window — a phone's welcome screen with
+        // a Mac frame around it. It asks for one name and one optional
+        // password, so it looks like what it is: a short form.
+        MixSheet(title: authService.promptNameOnly ? "Add a Display Name" : "Finish Setting Up",
+                 subtitle: authService.promptNameOnly
+                    ? "Your display name can be anything. Your username stays how people find you."
+                    : "Choose your name and a username other listeners can find you by.",
+                 size: .medium) {
+            fields
+        } footer: {
+            actions
+        }
+        .onAppear {
+            if username.isEmpty, let suggested = authService.suggestedUsername {
+                username = suggested
+            }
+            if displayName.isEmpty, let suggested = authService.suggestedDisplayName {
+                displayName = suggested
+            }
+        }
+    }
 
-            VStack(spacing: 24) {
-                Spacer(minLength: 24)
+    // MARK: - Fields
 
-                ZStack {
-                    Circle()
-                        .fill(Color.mixPrimary.opacity(0.12))
-                        .frame(width: 80, height: 80)
-                    Image(systemName: "at")
-                        .font(.system(size: 36))
-                        .foregroundStyle(Color.mixPrimary)
+    private var fields: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            TextField("Display name", text: $displayName)
+                .mixSheetField()
+
+            if authService.promptNameOnly {
+                if let errorText {
+                    Text(errorText)
+                        .font(.mixCaption)
+                        .foregroundStyle(Color.mixDestructive)
                 }
-
-                VStack(spacing: 8) {
-                    Text("Finish setting up")
-                        .font(.mixTitle)
-                        .foregroundStyle(Color.mixTextPrimary)
-                    Text("Pick a username so other listeners can find you. You can also set a password to sign in with your email next time.")
-                        .font(.mixBody)
-                        .foregroundStyle(Color.mixTextSecondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 24)
-                }
-
+            } else {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 8) {
-                        Image(systemName: "at")
-                            .font(.system(size: 15))
+                        Text("@")
+                            .font(.system(size: 14))
                             .foregroundStyle(Color.mixTextTertiary)
-                            .frame(width: 18)
                         TextField("username", text: $username)
-                            .font(.mixBody)
-                            .foregroundStyle(Color.mixTextPrimary)
                             .autocorrectionDisabled()
                             #if os(iOS)
                             .textInputAutocapitalization(.never)
                             #endif
                     }
-                    .padding(14)
-                    .background(Color.mixSurface2)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10)
-                            .stroke(
-                                (validationError ?? errorText) != nil
-                                    ? Color.mixDestructive.opacity(0.6)
-                                    : Color.mixSeparator,
-                                lineWidth: 1
-                            )
-                    )
+                    .mixSheetField()
 
                     if let err = validationError ?? errorText {
                         Text(err)
@@ -99,23 +100,16 @@ struct UsernamePromptView: View {
                             .foregroundStyle(Color.mixDestructive)
                     }
                 }
-                .padding(.horizontal, 24)
 
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 8) {
-                        Image(systemName: "lock")
-                            .font(.system(size: 15))
-                            .foregroundStyle(Color.mixTextTertiary)
-                            .frame(width: 18)
                         Group {
                             if revealPassword {
-                                TextField("Password (optional)", text: $password)
+                                TextField("Password", text: $password)
                             } else {
-                                SecureField("Password (optional)", text: $password)
+                                SecureField("Password", text: $password)
                             }
                         }
-                        .font(.mixBody)
-                        .foregroundStyle(Color.mixTextPrimary)
                         .autocorrectionDisabled()
                         #if os(iOS)
                         .textInputAutocapitalization(.never)
@@ -125,69 +119,56 @@ struct UsernamePromptView: View {
                             revealPassword.toggle()
                         } label: {
                             Image(systemName: revealPassword ? "eye.slash" : "eye")
-                                .font(.system(size: 14))
+                                .font(.system(size: 13))
                                 .foregroundStyle(Color.mixTextTertiary)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.plain).mixHandCursor()
                     }
-                    .padding(14)
-                    .background(Color.mixSurface2)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10)
-                            .stroke(
-                                passwordError != nil
-                                    ? Color.mixDestructive.opacity(0.6)
-                                    : Color.mixSeparator,
-                                lineWidth: 1
-                            )
-                    )
+                    .mixSheetField()
 
-                    Text(passwordError ?? "Optional — leave blank to keep signing in with Google.")
+                    Text(passwordError ?? "Optional \u{2014} leave it blank to keep signing in with Google.")
                         .font(.mixCaption)
                         .foregroundStyle(passwordError != nil ? Color.mixDestructive : Color.mixTextTertiary)
                 }
-                .padding(.horizontal, 24)
-
-                Button {
-                    Task { await save() }
-                } label: {
-                    Group {
-                        if isSaving {
-                            ProgressView().tint(.white).frame(height: 24).frame(maxWidth: .infinity)
-                        } else {
-                            Text("Save").font(.mixButton).frame(maxWidth: .infinity)
-                        }
-                    }
-                    .padding(.vertical, 16)
-                    .background(isValid ? Color.mixPrimary : Color.mixPrimary.opacity(0.4))
-                    .foregroundStyle(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-                }
-                .buttonStyle(.plain)
-                .disabled(!isValid || isSaving)
-                .padding(.horizontal, 24)
-
-                Button("Skip for now") {
-                    authService.dismissUsernamePrompt()
-                    dismiss()
-                }
-                .font(.mixLabel)
-                .foregroundStyle(Color.mixTextTertiary)
-                .buttonStyle(.plain)
-
-                Spacer(minLength: 24)
-            }
-            .frame(maxWidth: 360)
-        }
-        .onAppear {
-            if username.isEmpty, let suggested = authService.suggestedUsername {
-                username = suggested
             }
         }
+    }
+
+    // MARK: - Actions
+
+    /// Skip records a decision (never ask again), so it isn't the chrome's
+    /// dismiss button — it's its own control that says what it does.
+    private var actions: some View {
         #if os(macOS)
-        .frame(minWidth: 420, minHeight: 460)
+        HStack(spacing: 12) {
+            Spacer(minLength: 0)
+            skipButton
+                .keyboardShortcut(.cancelAction)
+            MixSheetPrimaryButton(action: saveAction, fullWidth: false)
+                .keyboardShortcut(.defaultAction)
+        }
+        #else
+        VStack(spacing: 10) {
+            MixSheetPrimaryButton(action: saveAction, fullWidth: true)
+            skipButton
+        }
         #endif
+    }
+
+    private var skipButton: some View {
+        Button("Skip for now") {
+            authService.dismissUsernamePrompt()
+            dismiss()
+        }
+        .buttonStyle(.plain).mixHandCursor()
+        .font(.system(size: 14, weight: .medium))
+        .foregroundStyle(Color.mixTextSecondary)
+    }
+
+    private var saveAction: MixSheetAction {
+        MixSheetAction("Save", isEnabled: isValid, isBusy: isSaving) {
+            Task { await save() }
+        }
     }
 
     private func save() async {
@@ -196,7 +177,14 @@ struct UsernamePromptView: View {
         errorText = nil
         defer { isSaving = false }
         do {
-            try await authService.chooseUsername(trimmed, password: password.isEmpty ? nil : password)
+            if authService.promptNameOnly {
+                try await authService.updateDisplayName(displayName)
+                authService.dismissUsernamePrompt()
+                dismiss()
+                return
+            }
+            try await authService.chooseUsername(trimmed, displayName: displayName,
+                                                 password: password.isEmpty ? nil : password)
             dismiss()
         } catch let error as AuthError {
             errorText = error.errorDescription

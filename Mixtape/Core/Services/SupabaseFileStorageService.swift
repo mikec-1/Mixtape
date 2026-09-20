@@ -59,7 +59,13 @@ public final class SupabaseFileStorageService: ObservableObject, FileStorageProt
 
     // MARK: - Dependencies
 
-    private let client: SupabaseClient
+    // Held as a provider rather than a value: building the SupabaseClient costs
+    // ~1.3 s and, taken eagerly in `AppDependencies.init`, that whole second sat
+    // on the main thread before the first frame. `@autoclosure` keeps every call
+    // site written exactly as before while moving the work to first real use —
+    // which is a network call, and so already off the launch path.
+    private let clientProvider: () -> SupabaseClient
+    private lazy var client: SupabaseClient = clientProvider()
     private static let bucket = "audio"
 
     /// Set by AppDependencies when the user signs in; cleared on sign-out.
@@ -67,11 +73,13 @@ public final class SupabaseFileStorageService: ObservableObject, FileStorageProt
 
     // MARK: - Init
 
-    public init(client: SupabaseClient) {
-        self.client = client
-        // Move any leftover files from the old Documents/Music/ cache location.
+    public init(client: @autoclosure @escaping () -> SupabaseClient) {
+        self.clientProvider = client
+        // Empty the pre-split Documents/Music/ folder into the durable imports
+        // directory. This used to sweep it into Library/Caches/Music/ instead,
+        // which quietly made every imported original OS-purgeable.
         Task.detached(priority: .background) {
-            Self.migrateOldCacheIfNeeded()
+            AudioPaths.migrateLegacyDocumentsMusic()
         }
     }
 
@@ -83,8 +91,7 @@ public final class SupabaseFileStorageService: ObservableObject, FileStorageProt
         guard let userID = currentUserID else { throw FileStorageError.notAuthenticated }
         guard !track.file.localPath.isEmpty else { throw FileStorageError.noLocalFile }
 
-        let localURL = URL.documentsDirectory.appending(path: track.file.localPath)
-        guard FileManager.default.fileExists(atPath: localURL.path(percentEncoded: false)) else {
+        guard let localURL = AudioPaths.resolve(localPath: track.file.localPath) else {
             throw FileStorageError.noLocalFile
         }
 
@@ -195,79 +202,67 @@ public final class SupabaseFileStorageService: ObservableObject, FileStorageProt
 
     // MARK: - Local Cache
 
-    /// Library/Caches/Music/ — private to the app, invisible in Files, not backed up.
-    /// `nonisolated` so it can be read from background threads (e.g. during migration).
-    nonisolated static var cacheDirectory: URL {
-        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Music", isDirectory: true)
-    }
+    /// Library/Caches/Music/ — private to the app, invisible in Files, not backed up,
+    /// and evictable by the OS. Downloaded copies only; see `AudioPaths`.
+    /// `nonisolated` so it can be read from background threads.
+    nonisolated static var cacheDirectory: URL { AudioPaths.cacheDirectory }
 
-    /// Moves any files that were cached in the old `Documents/Music/` location to
-    /// `Library/Caches/Music/` and removes the old directory. Safe to call repeatedly —
-    /// exits immediately if the old directory no longer exists.
-    nonisolated static func migrateOldCacheIfNeeded() {
-        let fm     = FileManager.default
-        let oldDir = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
-                       .appendingPathComponent("Music")
-        guard fm.fileExists(atPath: oldDir.path) else { return }
-
-        let newDir = cacheDirectory
-        try? fm.createDirectory(at: newDir, withIntermediateDirectories: true)
-
-        let items = (try? fm.contentsOfDirectory(at: oldDir, includingPropertiesForKeys: nil)) ?? []
-        for src in items {
-            let dst = newDir.appendingPathComponent(src.lastPathComponent)
-            if !fm.fileExists(atPath: dst.path) { try? fm.moveItem(at: src, to: dst) }
-        }
-        // Remove the old directory (now empty, or force-remove any stragglers).
-        try? fm.removeItem(at: oldDir)
-        print("[FileStorage] Migrated playback cache from Documents/Music/ to Library/Caches/Music/")
-    }
-
+    /// Where this track's audio is on disk, or nil if it isn't.
+    ///
+    /// Delegates to `AudioLocator` so that every caller — playback, downloads,
+    /// export, the badge in the track list — agrees about which copy wins. The
+    /// ordering used to be duplicated here and differed from the engine's, which
+    /// is how a song could be "playable" and "not downloaded" simultaneously.
     public func localURL(for track: Track) -> URL? {
-        // 0. Check the user's public exported Mixtape folder first.
-        if let exportedURL = ExportManager.shared.exportedURL(for: track) {
-            return exportedURL
-        }
-
-        // 1. Prefer the stored localPath (may be absolute or relative to Documents).
-        if !track.file.localPath.isEmpty {
-            let url = URL.documentsDirectory.appending(path: track.file.localPath)
-            if FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) { return url }
-        }
-        // 2. Check the current cache location: Library/Caches/Music/<hash>.<ext>
-        if let remoteKey = track.file.remoteKey {
-            let ext      = URL(fileURLWithPath: remoteKey).pathExtension.lowercased()
-            let filename = "\(track.file.fileHash).\(ext)"
-            let url      = Self.cacheDirectory.appendingPathComponent(filename)
-            if FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) { return url }
-        }
-        // 3. Legacy fallback: Documents/Music/ (old location before cache was moved).
-        if let remoteKey = track.file.remoteKey {
-            let ext      = URL(fileURLWithPath: remoteKey).pathExtension.lowercased()
-            let filename = "\(track.file.fileHash).\(ext)"
-            let url      = URL.documentsDirectory.appending(path: "Music/\(filename)")
-            if FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) { return url }
-        }
-        return nil
+        AudioLocator.readyURL(for: track)
     }
 
+    /// Every directory that can hold library audio. `localURL(for:)` reads from
+    /// all of them, so anything that wipes audio has to empty all of them — a
+    /// wipe that clears one path leaves files on disk the app goes on playing.
+    nonisolated static var audioDirectories: [URL] { AudioPaths.allAudioDirectories }
+
+    /// Empties every audio directory, imports included. This is the *deletion*
+    /// path (Clear Everything / Delete All Music), not the cache-clear one —
+    /// see `clearLocalCache()`. `nonisolated static` so the destructive library
+    /// actions can reach it without holding a storage instance.
+    nonisolated static func purgeLocalAudio() {
+        let fm = FileManager.default
+        for dir in audioDirectories {
+            guard fm.fileExists(atPath: dir.path(percentEncoded: false)) else { continue }
+            let items = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+            for url in items { try? fm.removeItem(at: url) }
+        }
+    }
+
+    /// Clears only what can be fetched again. The imports directory is left
+    /// alone on purpose: for a track that was never uploaded, the file there is
+    /// the only copy that exists, and "Clear Playback Cache" is not a request to
+    /// delete the user's music.
     public func clearLocalCache() throws {
-        for dir in [Self.cacheDirectory,
-                    URL.documentsDirectory.appending(path: "Music")] {
-            guard FileManager.default.fileExists(atPath: dir.path(percentEncoded: false)) else { continue }
-            let items = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
-            for url in items { try? FileManager.default.removeItem(at: url) }
+        PlaybackCache.clear()
+        // The legacy Documents folder is a cache too, for as long as anything is
+        // still left in it.
+        let fm  = FileManager.default
+        let old = AudioPaths.legacyDocumentsDirectory
+        if fm.fileExists(atPath: old.path(percentEncoded: false)) {
+            let items = (try? fm.contentsOfDirectory(at: old, includingPropertiesForKeys: nil)) ?? []
+            for url in items { try? fm.removeItem(at: url) }
         }
     }
 
+    /// Size of the purgeable cache only, to match what `clearLocalCache()` frees.
+    ///
+    /// This counts Discover audio as well now. It used to look only in the two
+    /// directories that Supabase downloads land in, which on the Mac that
+    /// authored the library are always empty — so the number was structurally
+    /// zero no matter how much audio was actually cached.
     public func localCacheSize() throws -> Int64 {
-        var total = Int64(0)
-        for dir in [Self.cacheDirectory,
-                    URL.documentsDirectory.appending(path: "Music")] {
-            guard FileManager.default.fileExists(atPath: dir.path(percentEncoded: false)) else { continue }
+        var total = PlaybackCache.totalBytes
+        let old = AudioPaths.legacyDocumentsDirectory
+        if FileManager.default.fileExists(atPath: old.path(percentEncoded: false)) {
             let items = try FileManager.default.contentsOfDirectory(
-                at: dir, includingPropertiesForKeys: [.fileSizeKey])
+                at: old, includingPropertiesForKeys: [.fileSizeKey])
             for url in items {
                 total += Int64(try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0)
             }

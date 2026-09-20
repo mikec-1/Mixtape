@@ -73,12 +73,14 @@ public final class MockAuthService: ObservableObject, AuthServiceProtocol {
     }
 
     @discardableResult
-    public func signUp(email: String, password: String, username: String) async throws -> Bool {
+    public func signUp(email: String, password: String, username: String, displayName: String) async throws -> Bool {
         guard password.count >= 8 else { throw AuthError.weakPassword }
         try await Task.sleep(for: .seconds(1))
+        let name = displayName.isEmpty ? username : displayName
         let user = AppUser(
             email: email,
-            displayName: username.isEmpty ? Self.displayName(from: email) : username
+            displayName: name.isEmpty ? Self.displayName(from: email) : name,
+            username: username
         )
         storedPassword = password
         persist(user)
@@ -91,7 +93,7 @@ public final class MockAuthService: ObservableObject, AuthServiceProtocol {
         // Mock: always succeeds silently
     }
 
-    public func signOut() async throws {
+    public func signOut(everywhere: Bool = false) async throws {
         try await Task.sleep(for: .milliseconds(300))
         storedPassword = nil
         clearPersisted()
@@ -118,11 +120,19 @@ public final class MockAuthService: ObservableObject, AuthServiceProtocol {
             throw AuthError.unknown("Username cannot be empty.")
         }
         guard var user = currentUser else { throw AuthError.sessionExpired }
-        if cleaned != user.displayName.lowercased() {
+        if cleaned != user.username {
             if try await isUsernameTaken(cleaned) { throw AuthError.usernameTaken }
         }
         try await Task.sleep(for: .milliseconds(500))
-        user.displayName = cleaned
+        user.username = cleaned
+        persist(user)
+        authState = .authenticated(user)
+    }
+
+    public func updateDisplayName(_ newName: String) async throws {
+        guard var user = currentUser else { throw AuthError.sessionExpired }
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        user.displayName = trimmed.isEmpty ? (user.username ?? Self.displayName(from: user.email)) : trimmed
         persist(user)
         authState = .authenticated(user)
     }

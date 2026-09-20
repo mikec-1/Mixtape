@@ -14,6 +14,8 @@ public final class AuthViewModel: ObservableObject {
     @Published public var email: String = ""
     @Published public var password: String = ""
     @Published public var username: String = ""
+    /// Free-form — no format rules, no availability check.
+    @Published public var displayName: String = ""
     @Published public var isSignUpMode: Bool = false
 
     // MARK: - Async State
@@ -63,7 +65,8 @@ public final class AuthViewModel: ObservableObject {
     public var isFormValid: Bool {
         let emailOK = email.contains("@") && email.contains(".")
         let passwordOK = password.count >= 8
-        let usernameOK = !isSignUpMode || (!username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && usernameError == nil)
+        let usernameOK = !isSignUpMode || (!username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && usernameError == nil
+            && !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         return emailOK && passwordOK && usernameOK
     }
 
@@ -126,7 +129,8 @@ public final class AuthViewModel: ObservableObject {
                 let requiresConfirmation = try await authService.signUp(
                     email:       email,
                     password:    password,
-                    username:    cleanUsername
+                    username:    cleanUsername,
+                    displayName: displayName
                 )
                 if requiresConfirmation {
                     showCheckEmail = true
@@ -220,7 +224,7 @@ public final class AuthViewModel: ObservableObject {
     }
 
     public func toggleMode() {
-        withAnimation(.easeInOut(duration: 0.2)) {
+        withMixAnimation(.easeInOut(duration: 0.2)) {
             isSignUpMode.toggle()
             errorMessage = nil
             password = ""

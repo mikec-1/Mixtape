@@ -37,8 +37,8 @@ public struct SignInView: View {
                     ))
             }
         }
-        .animation(.spring(response: 0.36, dampingFraction: 0.86), value: authService.isAwaitingPasswordReset)
-        .animation(.spring(response: 0.36, dampingFraction: 0.86), value: vm.showCheckEmail)
+        .mixAnimation(.spring(response: 0.36, dampingFraction: 0.86), value: authService.isAwaitingPasswordReset)
+        .mixAnimation(.spring(response: 0.36, dampingFraction: 0.86), value: vm.showCheckEmail)
         .alert("Sign In Error", isPresented: $vm.showError) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -84,13 +84,14 @@ public struct SignInView: View {
                 Circle()
                     .fill(Color.mixPrimary.opacity(0.15))
                     .frame(width: 80, height: 80)
-                Image(systemName: "waveform.circle.fill")
+                Image(systemName: MixtapeMark.symbolName)
                     .font(.system(size: 44))
                     .foregroundStyle(Color.mixPrimary)
             }
             Text("Mixtape")
                 .font(.mixDisplay)
                 .foregroundStyle(Color.mixTextPrimary)
+                .mixTightened()
             Text("Your music, everywhere.")
                 .font(.mixBody)
                 .foregroundStyle(Color.mixTextSecondary)
@@ -105,6 +106,13 @@ public struct SignInView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             if vm.isSignUpMode {
+                MixtapeTextField(
+                    label: "Display name",
+                    placeholder: "What should we call you?",
+                    text: $vm.displayName,
+                    icon: "person.text.rectangle"
+                )
+                .transition(.move(edge: .top).combined(with: .opacity))
                 MixtapeTextField(
                     label: "Username",
                     placeholder: "Choose a username",
@@ -160,17 +168,17 @@ public struct SignInView: View {
                     }
                 }
                 .padding(.vertical, 16)
-                .background(vm.isFormValid ? Color.mixPrimary : Color.mixPrimary.opacity(0.4))
-                .foregroundStyle(.white)
-                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .background(vm.isFormValid ? Color.mixAccentFill : Color.mixAccentFill.opacity(0.4))
+                .foregroundStyle(Color.mixOnAccent)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
             .disabled(!vm.isFormValid || vm.isLoading)
-            .animation(.easeInOut(duration: 0.15), value: vm.isFormValid)
+            .mixAnimation(.easeInOut(duration: 0.15), value: vm.isFormValid)
             .padding(.top, 8)
         }
         .padding(24)
         .background(Color.mixSurface)
-        .clipShape(RoundedRectangle(cornerRadius: 20))
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
     // MARK: - Social Sign-In
@@ -187,26 +195,7 @@ public struct SignInView: View {
                 Rectangle().fill(Color.mixSeparator).frame(height: 1)
             }
 
-            Button {
-                Task { await vm.signInWithGoogle() }
-            } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: "g.circle.fill")
-                        .font(.system(size: 18))
-                    Text("Continue with Google")
-                        .font(.mixButton)
-                }
-                .frame(maxWidth: .infinity)
-                .frame(height: 50)
-                .foregroundStyle(Color.mixTextPrimary)
-                .background(Color.mixSurface)
-                .clipShape(RoundedRectangle(cornerRadius: 14))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14)
-                        .strokeBorder(Color.mixSeparator, lineWidth: 1)
-                )
-            }
-            .buttonStyle(.plain)
+            GoogleSignInButton { Task { await vm.signInWithGoogle() } }
             .disabled(vm.isSocialLoading)
             .opacity(vm.isSocialLoading ? 0.6 : 1)
         }
@@ -223,7 +212,7 @@ public struct SignInView: View {
                     .foregroundStyle(Color.mixPrimary)
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.plain).mixHandCursor()
     }
 }
 
@@ -292,9 +281,9 @@ private struct IOSSetNewPasswordView: View {
                         }
                     }
                     .padding(.vertical, 16)
-                    .background(vm.isNewPasswordValid ? Color.mixPrimary : Color.mixPrimary.opacity(0.4))
-                    .foregroundStyle(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                    .background(vm.isNewPasswordValid ? Color.mixAccentFill : Color.mixAccentFill.opacity(0.4))
+                    .foregroundStyle(Color.mixOnAccent)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
                 .disabled(!vm.isNewPasswordValid || vm.isUpdatingPassword)
                 .padding(.horizontal, 24)
@@ -307,7 +296,7 @@ private struct IOSSetNewPasswordView: View {
                         .font(.mixLabel)
                         .foregroundStyle(Color.mixTextTertiary)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.plain).mixHandCursor()
 
                 Spacer(minLength: 40)
             }
@@ -378,10 +367,10 @@ private struct CheckEmailView: View {
                     Button {
                         Task {
                             await vm.resendConfirmationEmail()
-                            withAnimation { didResend = true }
+                            withMixAnimation { didResend = true }
                             Task {
                                 try? await Task.sleep(for: .seconds(8))
-                                withAnimation { didResend = false }
+                                withMixAnimation { didResend = false }
                             }
                         }
                     } label: {
@@ -397,9 +386,9 @@ private struct CheckEmailView: View {
                         .padding(.vertical, 16)
                         .background(Color.mixSurface)
                         .foregroundStyle(Color.mixPrimary)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                         .overlay(
-                            RoundedRectangle(cornerRadius: 14)
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
                                 .strokeBorder(Color.mixPrimary.opacity(0.4), lineWidth: 1)
                         )
                     }
@@ -409,13 +398,13 @@ private struct CheckEmailView: View {
 
                 // Back to sign-in
                 Button {
-                    withAnimation { vm.showCheckEmail = false }
+                    withMixAnimation { vm.showCheckEmail = false }
                 } label: {
                     Text("← Back to sign in")
                         .font(.mixLabel)
                         .foregroundStyle(Color.mixTextTertiary)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.plain).mixHandCursor()
 
                 Text("Check your spam folder if you don't see it within a minute.")
                     .font(.mixCaption)
@@ -426,7 +415,7 @@ private struct CheckEmailView: View {
                 Spacer(minLength: 40)
             }
         }
-        .animation(.easeInOut(duration: 0.2), value: didResend)
+        .mixAnimation(.easeInOut(duration: 0.2), value: didResend)
     }
 }
 
@@ -464,9 +453,9 @@ private struct MixtapeTextField: View {
             }
             .padding(14)
             .background(Color.mixSurface2)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 10)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .stroke(
                         errorMessage != nil ? Color.mixDestructive.opacity(0.6) : Color.mixSeparator,
                         lineWidth: 1
@@ -480,7 +469,7 @@ private struct MixtapeTextField: View {
                     .transition(.opacity)
             }
         }
-        .animation(.easeInOut(duration: 0.15), value: errorMessage)
+        .mixAnimation(.easeInOut(duration: 0.15), value: errorMessage)
     }
 }
 
@@ -527,9 +516,9 @@ private struct MixtapeSecureField: View {
             }
             .padding(14)
             .background(Color.mixSurface2)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 10)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .stroke(
                         errorMessage != nil ? Color.mixDestructive.opacity(0.6) : Color.mixSeparator,
                         lineWidth: 1
@@ -543,109 +532,7 @@ private struct MixtapeSecureField: View {
                     .transition(.opacity)
             }
         }
-        .animation(.easeInOut(duration: 0.15), value: errorMessage)
-    }
-}
-
-// MARK: - Forgot Password Sheet
-
-private struct ForgotPasswordSheet: View {
-
-    @ObservedObject var vm: AuthViewModel
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            ZStack {
-                Color.mixBackground.ignoresSafeArea()
-
-                VStack(spacing: 24) {
-                    Spacer()
-
-                    ZStack {
-                        Circle()
-                            .fill(Color.mixPrimary.opacity(0.12))
-                            .frame(width: 72, height: 72)
-                        Image(systemName: "lock.rotation")
-                            .font(.system(size: 32))
-                            .foregroundStyle(Color.mixPrimary)
-                    }
-
-                    if vm.resetEmailSent {
-                        VStack(spacing: 12) {
-                            Text("Check your inbox")
-                                .font(.mixTitle)
-                                .foregroundStyle(Color.mixTextPrimary)
-                            Text("We've sent a password reset link to\n\(vm.resetEmail)")
-                                .font(.mixBody)
-                                .foregroundStyle(Color.mixTextSecondary)
-                                .multilineTextAlignment(.center)
-                                .padding(.horizontal, 24)
-                        }
-
-                        Button("Done") { dismiss() }
-                            .font(.mixButton)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 16)
-                            .background(Color.mixPrimary)
-                            .foregroundStyle(.white)
-                            .clipShape(RoundedRectangle(cornerRadius: 14))
-                            .padding(.horizontal, 24)
-
-                    } else {
-                        VStack(spacing: 12) {
-                            Text("Reset Password")
-                                .font(.mixTitle)
-                                .foregroundStyle(Color.mixTextPrimary)
-                            Text("Enter your email and we'll send you a reset link.")
-                                .font(.mixBody)
-                                .foregroundStyle(Color.mixTextSecondary)
-                                .multilineTextAlignment(.center)
-                                .padding(.horizontal, 24)
-                        }
-
-                        MixtapeTextField(
-                            label: "Email",
-                            placeholder: "you@example.com",
-                            text: $vm.resetEmail,
-                            icon: "envelope",
-                            isEmail: true
-                        )
-                        .padding(.horizontal, 24)
-
-                        Button {
-                            Task { await vm.sendPasswordReset() }
-                        } label: {
-                            Group {
-                                if vm.isResettingPassword {
-                                    ProgressView().tint(.white).frame(maxWidth: .infinity).frame(height: 24)
-                                } else {
-                                    Text("Send Reset Link").font(.mixButton).frame(maxWidth: .infinity)
-                                }
-                            }
-                            .padding(.vertical, 16)
-                            .background(vm.resetEmail.contains("@") ? Color.mixPrimary : Color.mixPrimary.opacity(0.4))
-                            .foregroundStyle(.white)
-                            .clipShape(RoundedRectangle(cornerRadius: 14))
-                        }
-                        .disabled(!vm.resetEmail.contains("@") || vm.isResettingPassword)
-                        .padding(.horizontal, 24)
-                    }
-
-                    Spacer()
-                }
-            }
-            .navigationTitle("")
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Cancel") {
-                        vm.resetEmailSent = false
-                        dismiss()
-                    }
-                    .foregroundStyle(Color.mixTextSecondary)
-                }
-            }
-        }
+        .mixAnimation(.easeInOut(duration: 0.15), value: errorMessage)
     }
 }
 

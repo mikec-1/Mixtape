@@ -65,8 +65,8 @@ public protocol AuthServiceProtocol: AnyObject {
     func isUsernameTaken(_ username: String) async throws -> Bool
     /// Returns `true` when email confirmation is required before the user is signed in.
     @discardableResult
-    func signUp(email: String, password: String, username: String) async throws -> Bool
-    func signOut() async throws
+    func signUp(email: String, password: String, username: String, displayName: String) async throws -> Bool
+    func signOut(everywhere: Bool) async throws
     /// Send a password reset email. Throws if the address is unknown or network is unavailable.
     func resetPassword(email: String) async throws
 
@@ -81,6 +81,10 @@ public protocol AuthServiceProtocol: AnyObject {
     /// `.usernameTaken` if the name is already in use by another account.
     /// Updates both the `profiles` table and the auth user metadata.
     func updateUsername(_ newUsername: String) async throws
+
+    /// Sets the free-form name people see. Not unique, nothing to check; an
+    /// empty string clears it, and the @username shows in its place.
+    func updateDisplayName(_ newName: String) async throws
 
     /// Changes the current user's password after re-authenticating with their
     /// current password. Distinct from the reset-link recovery flow
@@ -104,10 +108,15 @@ public protocol AuthServiceProtocol: AnyObject {
 
     // MARK: Discovery
 
-    /// Searches public profiles whose username matches `query` (prefix, case-
-    /// insensitive). Returns up to `limit` results, excluding the current user.
+    /// Searches public profiles whose username starts with, or display name
+    /// contains, `query` (case-insensitive). Returns up to `limit` results, excluding the current user.
     func searchUsers(matching query: String, limit: Int) async throws -> [UserProfile]
 
     /// Fetches a single public profile by its id, or nil if it doesn't exist.
     func fetchProfile(id: UUID) async throws -> UserProfile?
+}
+
+public extension AuthServiceProtocol {
+    /// This device only.
+    func signOut() async throws { try await signOut(everywhere: false) }
 }

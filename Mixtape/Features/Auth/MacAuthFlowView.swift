@@ -67,7 +67,7 @@ struct MacAuthFlowView: View {
                         .transition(slide(forward: pushForward))
                 }
             }
-            .animation(.spring(response: 0.36, dampingFraction: 0.86), value: screen)
+            .mixAnimation(.spring(response: 0.36, dampingFraction: 0.86), value: screen)
         }
         .frame(minWidth: 480, minHeight: 540)
         .alert("Error", isPresented: $vm.showError) {
@@ -111,15 +111,15 @@ private struct MacAuthLandingView: View {
 
             // Wordmark
             VStack(spacing: 14) {
-                Image(systemName: "waveform.circle.fill")
+                Image(systemName: MixtapeMark.symbolName)
                     .font(.system(size: 54, weight: .light))
                     .foregroundStyle(Color.mixPrimary)
 
                 VStack(spacing: 5) {
                     Text("Mixtape")
-                        .font(.system(size: 30, weight: .bold, design: .rounded))
+                        .font(.system(size: 30, weight: .bold))
                         .foregroundStyle(Color.mixTextPrimary)
-                        .tracking(-0.5)
+                        .mixTightened()
 
                     Text("Your music, everywhere.")
                         .font(.system(size: 13))
@@ -194,7 +194,7 @@ private struct MacSignInView: View {
                         }
                         .font(.system(size: 11))
                         .foregroundStyle(Color.mixTextTertiary)
-                        .buttonStyle(.plain)
+                        .buttonStyle(.plain).mixHandCursor()
                     }
                     .padding(.top, -4)
                 }
@@ -213,7 +213,7 @@ private struct MacSignInView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .sheet(isPresented: $showForgotPassword) {
-            MacForgotPasswordSheet(vm: vm)
+            ForgotPasswordSheet(vm: vm)
         }
     }
 }
@@ -226,26 +226,7 @@ private struct MacSocialButtons: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            Button {
-                Task { await vm.signInWithGoogle() }
-            } label: {
-                HStack(spacing: 9) {
-                    Image(systemName: "g.circle.fill")
-                        .font(.system(size: 15))
-                    Text("Continue with Google")
-                        .font(.system(size: 13, weight: .medium))
-                }
-                .frame(maxWidth: .infinity)
-                .frame(height: 40)
-                .foregroundStyle(Color.mixTextPrimary)
-                .background(Color.mixSurface)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .strokeBorder(Color.mixSeparator, lineWidth: 1)
-                )
-            }
-            .buttonStyle(.plain)
+            GoogleSignInButton { Task { await vm.signInWithGoogle() } }
             .disabled(vm.isSocialLoading)
             .opacity(vm.isSocialLoading ? 0.6 : 1)
         }
@@ -276,6 +257,11 @@ private struct MacCreateAccountView: View {
                 MixAuthDivider(label: "or sign up with email")
 
                 VStack(spacing: 12) {
+                    MixAuthField(
+                        label:        "Display name",
+                        placeholder:  "What should we call you?",
+                        text:         $vm.displayName
+                    )
                     MixAuthField(
                         label:        "Username",
                         placeholder:  "Choose a username",
@@ -377,11 +363,11 @@ private struct MacCheckEmailView: View {
                     Button {
                         Task {
                             await vm.resendConfirmationEmail()
-                            withAnimation { didResend = true }
+                            withMixAnimation { didResend = true }
                             // Reset after 8 s so they can resend again if needed
                             Task {
                                 try? await Task.sleep(for: .seconds(8))
-                                withAnimation { didResend = false }
+                                withMixAnimation { didResend = false }
                             }
                         }
                     } label: {
@@ -389,7 +375,7 @@ private struct MacCheckEmailView: View {
                             .font(.system(size: 12))
                             .foregroundStyle(Color.mixPrimary)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.plain).mixHandCursor()
                     .disabled(vm.isLoading)
                     .overlay {
                         if vm.isLoading { ProgressView().scaleEffect(0.6) }
@@ -406,7 +392,7 @@ private struct MacCheckEmailView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .animation(.easeInOut(duration: 0.2), value: didResend)
+        .mixAnimation(.easeInOut(duration: 0.2), value: didResend)
     }
 }
 
@@ -467,98 +453,10 @@ private struct MacSetNewPasswordView: View {
                     .font(.system(size: 12))
                     .foregroundStyle(Color.mixTextTertiary)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.plain).mixHandCursor()
         }
         .frame(maxWidth: 320)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
-// MARK: - Forgot Password Sheet
-
-private struct MacForgotPasswordSheet: View {
-
-    @ObservedObject var vm: AuthViewModel
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
-
-            HStack(alignment: .firstTextBaseline) {
-                Text(vm.resetEmailSent ? "Check your inbox" : "Reset password")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(Color.mixTextPrimary)
-                Spacer()
-                Button("Close") {
-                    vm.resetEmailSent = false
-                    dismiss()
-                }
-                .font(.system(size: 12))
-                .foregroundStyle(Color.mixTextTertiary)
-                .buttonStyle(.plain)
-            }
-
-            if vm.resetEmailSent {
-                HStack(spacing: 14) {
-                    Image(systemName: "envelope.badge.checkmark.fill")
-                        .font(.system(size: 26))
-                        .foregroundStyle(Color.mixPrimary)
-                    Text("A reset link was sent to **\(vm.resetEmail)**")
-                        .font(.system(size: 13))
-                        .foregroundStyle(Color.mixTextSecondary)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 4)
-
-                Button("Done") {
-                    vm.resetEmailSent = false
-                    dismiss()
-                }
-                .frame(maxWidth: .infinity)
-                .frame(height: 36)
-                .background(Color.mixPrimary)
-                .foregroundStyle(.white)
-                .clipShape(RoundedRectangle(cornerRadius: 7))
-                .font(.system(size: 13, weight: .medium))
-                .buttonStyle(.plain)
-
-            } else {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("Email address")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Color.mixTextTertiary)
-                    TextField("you@example.com", text: $vm.resetEmail)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.system(size: 13))
-                        .autocorrectionDisabled()
-                }
-
-                Button {
-                    Task { await vm.sendPasswordReset() }
-                } label: {
-                    Group {
-                        if vm.isResettingPassword {
-                            ProgressView().scaleEffect(0.7).tint(.white)
-                        } else {
-                            Text("Send Reset Link")
-                                .font(.system(size: 13, weight: .medium))
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 36)
-                    .background(vm.resetEmail.contains("@")
-                                ? Color.mixPrimary
-                                : Color.mixPrimary.opacity(0.3))
-                    .foregroundStyle(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 7))
-                }
-                .buttonStyle(.plain)
-                .disabled(!vm.resetEmail.contains("@") || vm.isResettingPassword)
-            }
-        }
-        .padding(28)
-        .frame(width: 340)
-        .background(Color.mixBackground)
     }
 }
 
@@ -576,7 +474,7 @@ private struct MixAuthBackButton: View {
             }
             .foregroundStyle(Color.mixTextTertiary)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.plain).mixHandCursor()
     }
 }
 
@@ -607,14 +505,14 @@ private struct MixAuthPrimaryButton: View {
             .frame(maxWidth: .infinity)
             .frame(height: 42)
             .background(isEnabled && !isLoading
-                        ? Color.mixPrimary
-                        : Color.mixPrimary.opacity(0.35))
-            .foregroundStyle(.white)
-            .clipShape(RoundedRectangle(cornerRadius: 9))
+                        ? Color.mixAccentFill
+                        : Color.mixAccentFill.opacity(0.35))
+            .foregroundStyle(Color.mixOnAccent)
+            .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.plain).mixHandCursor()
         .disabled(!isEnabled || isLoading)
-        .animation(.easeInOut(duration: 0.14), value: isEnabled)
+        .mixAnimation(.easeInOut(duration: 0.14), value: isEnabled)
     }
 }
 
@@ -636,13 +534,13 @@ private struct MixAuthSecondaryButton: View {
                 .frame(maxWidth: .infinity)
                 .frame(height: 42)
                 .background(Color.clear)
-                .clipShape(RoundedRectangle(cornerRadius: 9))
+                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 9)
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
                         .strokeBorder(Color.mixSeparator, lineWidth: 1)
                 )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.plain).mixHandCursor()
     }
 }
 
@@ -699,18 +597,18 @@ private struct MixAuthField: View {
                             .font(.system(size: 12))
                             .foregroundStyle(Color.mixTextTertiary)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.plain).mixHandCursor()
                 }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
             .background(Color.mixSurface)
-            .clipShape(RoundedRectangle(cornerRadius: 7))
+            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 7)
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
                     .strokeBorder(borderColor, lineWidth: 1)
             )
-            .animation(.easeInOut(duration: 0.12), value: hasFocus)
+            .mixAnimation(.easeInOut(duration: 0.12), value: hasFocus)
 
             if let err = errorMessage, !text.isEmpty {
                 Text(err)
@@ -719,7 +617,7 @@ private struct MixAuthField: View {
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .animation(.easeInOut(duration: 0.15), value: errorMessage != nil && !text.isEmpty)
+        .mixAnimation(.easeInOut(duration: 0.15), value: errorMessage != nil && !text.isEmpty)
     }
 
     private var borderColor: Color {
