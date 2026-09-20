@@ -128,8 +128,8 @@ Personal checklist for the full build. **2.0.0 (build 9)**, last verified agains
 - [x] Play history syncs — what makes weekly mixes match across devices
 - [x] Per-account store files; nothing holds a `ModelContext` across an account switch
 - [x] Remote wipes announce a reset instead of arriving silently
+- [x] Migration history in sync — all 37 migrations recorded remotely (repaired 2026-09-20)
   - ⚠️ Conflict resolution is last-write-wins on `updated_at`. Fine single-user; watch it with multiple devices editing offline.
-  - ⚠️ Remote migration history is out of sync with local (37 local migrations). Needs `supabase migration repair` — run from the repo root.
 
 ## Offline
 - [x] Offline mode — a flag, not an auth state; only explicit sign-out clears the cached user
@@ -142,7 +142,7 @@ Personal checklist for the full build. **2.0.0 (build 9)**, last verified agains
 ## Continuity (handoff)
 - [x] Hand playback between devices, with cover art
 - [x] Picking a song while mirroring sends it to the *current* player
-  - ⚠️ Needs migration `20260916000000` applied before it works on a fresh project.
+  - ⚠️ Depends on migration `20260916000000` (two policies on `realtime.messages`, no table). Applied to production; a fresh project needs it before continuity works.
 
 ## Listening stats
 - [x] Full stats page (top artists, tracks, totals)
@@ -186,6 +186,5 @@ Personal checklist for the full build. **2.0.0 (build 9)**, last verified agains
 - [ ] Monthly Wrapped recap — not started
 - [ ] Spotify extended-access application (kills the 403s)
 - [ ] Rename `MacQueuePopover.swift` and `SmartPlaylistsView.swift` — both filenames lie about their contents
-- [ ] Supabase migration repair, then push the 2 genuinely-unapplied migrations
 - [ ] Rewrite **main's public README** at 2.0 launch — it still describes the 1.0 Mac-only app (no iOS, Discover, Spotify, lyrics, sharing)
 - [ ] First-launch right-click→Open friction (un-notarized build) — revisit if/when notarized
