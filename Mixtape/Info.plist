@@ -2,6 +2,18 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- ProMotion. Without this iOS caps the app at 60 fps on a 120 Hz iPhone:
+	     the frame pacer assumes an app that has not opted in cannot sustain the
+	     higher rate, so every animation runs at half the display's ability. -->
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
+
+	<key>SUFeedURL</key>
+	<string>https://mikec-1.github.io/Mixtape/appcast.xml</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUPublicEDKey</key>
+	<string>Axi5/vurmFfaB2/44dTXduXerRGHiTniGjWsg9/Z/S4=</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -26,7 +38,27 @@
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
+		<!-- "fetch" is what lets a playlist invite reach the user before they next
+		     open the app. Mixtape has no APNs key, so nothing can push; the app
+		     instead asks iOS for occasional background time and posts a local
+		     banner if the inbox has grown. See Core/Services/InviteNotifier.swift. -->
+		<string>fetch</string>
 	</array>
+	<!-- Must list every BGTaskScheduler identifier the app submits, or submit()
+	     throws at runtime rather than failing at build time. -->
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.mikey.Mixtape.invite-refresh</string>
+	</array>
+	<!-- The share sheet lists WhatsApp and Telegram only when they're installed. -->
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>whatsapp</string>
+		<string>tg</string>
+	</array>
+	<!-- "Save Image" on a share card, from the system activity sheet. -->
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Mixtape saves share cards to your photo library.</string>
 	<key>UIFileSharingEnabled</key>
 	<true/>
 </dict>

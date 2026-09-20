@@ -94,6 +94,17 @@ cp -R "$ARCHIVE/Products/Applications/$APP_NAME.app" "$APP"
 echo "▸ Ad-hoc signing…"
 codesign --force --deep --sign - "$APP"
 
+# --deep re-signs the bundled deno too, dropping the entitlements Deno ships it
+# with. That is survivable only while the replacement signature has no hardened
+# runtime: add `-o runtime` (or move to Developer ID + notarization) without also
+# passing an allow-jit entitlement and deno dies on V8 startup — which shows up
+# not as a crash but as every download failing "Requested format is not
+# available", because yt-dlp then can't solve YouTube's n challenge. Cheaper to
+# catch here than in an appcast.
+echo "▸ Verifying bundled deno still runs…"
+"$APP/Contents/Resources/deno" eval 'Deno.exit(0)' 2>/dev/null \
+    || { echo "✗ Bundled deno won't run after signing — YouTube downloads would all fail."; exit 1; }
+
 # ── Build DMG ────────────────────────────────────────────────────────────────
 echo "▸ Building DMG…"
 STAGE="$BUILD_DIR/dmg-stage"

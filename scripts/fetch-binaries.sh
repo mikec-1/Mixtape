@@ -23,7 +23,7 @@ mkdir -p "$DEST"
 ARCH="$(uname -m)"   # arm64 or x86_64
 
 # Clear any stale (possibly read-only) payloads so curl can overwrite.
-rm -rf "$DEST/python" "$DEST/python.tar.gz" "$DEST/yt-dlp" "$DEST/yt-dlp.zip" "$DEST/ffmpeg"
+rm -rf "$DEST/python" "$DEST/python.tar.gz" "$DEST/yt-dlp" "$DEST/yt-dlp.zip" "$DEST/ffmpeg" "$DEST/deno"
 
 # --- Relocatable CPython (python-build-standalone) -------------------------
 # We bundle the `install_only` tarball AS A SINGLE FILE (python.tar.gz) and let
@@ -74,6 +74,25 @@ chmod +x "$DEST/ffmpeg"
 if otool -L "$DEST/ffmpeg" 2>/dev/null | grep -q "/opt/homebrew\|/usr/local/lib"; then
   echo "⚠️  WARNING: ffmpeg links non-system dylibs — it will NOT run when distributed."
 fi
+
+# --- Deno (JavaScript runtime for yt-dlp's n-challenge solver) --------------
+# YouTube signs media URLs with an `n` parameter that has to be run through a
+# JS challenge; without a runtime yt-dlp can only see the image formats and
+# every audio download fails ("Only images are available"). yt-dlp fetches the
+# solver scripts itself (--remote-components ejs:github) but needs a JS engine
+# to run them. Deno is the one yt-dlp recommends: single static binary, and it
+# sandboxes the untrusted script by default. Same fix as the hosted resolver
+# (see server/Dockerfile).
+case "$ARCH" in
+  arm64)  DENO_ARCH="aarch64-apple-darwin" ;;
+  x86_64) DENO_ARCH="x86_64-apple-darwin"  ;;
+esac
+echo "→ Downloading Deno ($DENO_ARCH)…"
+curl -L --fail -o "$DEST/deno.zip" \
+  "https://github.com/denoland/deno/releases/latest/download/deno-${DENO_ARCH}.zip"
+unzip -q -o "$DEST/deno.zip" -d "$DEST"
+rm -f "$DEST/deno.zip"
+chmod +x "$DEST/deno"
 
 echo "✓ Binaries in $DEST"
 ls -lh "$DEST"
