@@ -36,6 +36,7 @@ public final class LastFmScrobbler: ObservableObject {
         static let sessionKey = "lastfm.sessionKey"
         static let username    = "lastfm.username"
         static let isEnabled  = "lastfm.isEnabled"
+        static let owner      = "lastfm.ownerUserID"
     }
 
     private let endpoint = URL(string: "https://ws.audioscrobbler.com/2.0/")!
@@ -65,16 +66,71 @@ public final class LastFmScrobbler: ObservableObject {
     /// browser round-trip, so it never needs to be persisted.
     private var pendingToken: String?
 
+    /// The Mixtape account these credentials belong to, set at sign-in.
+    ///
+    /// Last.fm is connected by a person, not by a Mac, but the key, secret and
+    /// session all live in device-wide UserDefaults. Without an owner the next
+    /// account to sign in here arrived already scrobbling to somebody else's
+    /// profile. Nothing below is readable until `accountDidChange` claims it,
+    /// which leaves `isConfigured` false and every screen showing "Not
+    /// connected" — the same thing a genuinely unconnected account sees.
+    private var accountID: UUID?
+
     private init() {
+        // Starts unclaimed: `username` and the credentials wait for a signed-in
+        // account, so nothing of the last one is on screen before then.
         self.isEnabled = UserDefaults.standard.bool(forKey: Keys.isEnabled)
-        self.username  = nonEmpty(UserDefaults.standard.string(forKey: Keys.username))
+        self.username  = nil
     }
 
-    // MARK: - Credentials (read from UserDefaults)
+    // MARK: - Credentials (read from UserDefaults, once the account owns them)
 
-    private var apiKey:     String? { nonEmpty(UserDefaults.standard.string(forKey: Keys.apiKey)) }
-    private var apiSecret:  String? { nonEmpty(UserDefaults.standard.string(forKey: Keys.apiSecret)) }
-    private var sessionKey: String? { nonEmpty(UserDefaults.standard.string(forKey: Keys.sessionKey)) }
+    private var apiKey:     String? { claimed(Keys.apiKey) }
+    private var apiSecret:  String? { claimed(Keys.apiSecret) }
+    private var sessionKey: String? { claimed(Keys.sessionKey) }
+
+    private func claimed(_ key: String) -> String? {
+        guard accountID != nil else { return nil }
+        return nonEmpty(UserDefaults.standard.string(forKey: key))
+    }
+
+    // MARK: - Account binding
+
+    /// Claims, or wipes, the stored credentials for the account signing in.
+    ///
+    /// Called before the device's record of the last account is overwritten, so
+    /// `previous` still names whoever was signed in until now.
+    public func accountDidChange(to userID: UUID, previous: String?) {
+        // Supabase re-publishes a sign-in on every token refresh; only the first
+        // one has anything to decide.
+        guard accountID != userID else { return }
+        let defaults = UserDefaults.standard
+        let owner = defaults.string(forKey: Keys.owner)
+        guard CredentialOwner.belongs(owner: owner, to: userID, previous: previous) else {
+            // A different person. Unlike Spotify there is no account copy to
+            // restore from, so this does cost the previous user their pasted
+            // API key — which is the right trade: their session key is a live
+            // credential and this is no longer their device.
+            accountID = nil
+            forgetCredentials()
+            return
+        }
+        defaults.set(userID.uuidString, forKey: Keys.owner)
+        accountID = userID
+        username = nonEmpty(defaults.string(forKey: Keys.username))
+        isEnabled = defaults.bool(forKey: Keys.isEnabled)
+        objectWillChange.send()
+    }
+
+    /// Signing out hides the connection without ending it — the same person
+    /// signing back in shouldn't have to paste their API key again.
+    public func signedOut() {
+        accountID = nil
+        username = nil
+        pendingToken = nil
+        lastAuthError = nil
+        objectWillChange.send()
+    }
 
     /// True once an API key + shared secret have been saved (auth can begin).
     public var hasCredentials: Bool {
@@ -113,7 +169,8 @@ public final class LastFmScrobbler: ObservableObject {
     /// Forget everything: API key, secret, session, username, and disable scrobbling.
     public func forgetCredentials() {
         let defaults = UserDefaults.standard
-        [Keys.apiKey, Keys.apiSecret, Keys.sessionKey, Keys.username].forEach(defaults.removeObject)
+        [Keys.apiKey, Keys.apiSecret, Keys.sessionKey, Keys.username, Keys.owner]
+            .forEach(defaults.removeObject)
         username = nil
         pendingToken = nil
         lastAuthError = nil

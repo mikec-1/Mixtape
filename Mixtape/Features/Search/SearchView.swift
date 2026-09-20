@@ -2,15 +2,19 @@
 // Mixtape — Features/Search
 
 import SwiftUI
+import Combine
 
 public struct SearchView: View {
 
     @EnvironmentObject private var deps:   AppDependencies
     @EnvironmentObject private var engine: PlaybackEngine
+    #if os(iOS)
+    @EnvironmentObject private var coordinator: OnlinePlaybackCoordinator
+    @EnvironmentObject private var iosAppState: IOSAppState
+    #endif
 
     @State private var query: String = ""
     @FocusState private var isSearchFocused: Bool
-    @State private var scope: SearchScope = .all
 
     // Filtered + relevance-ranked results, computed off the hot render path and
     // stored here so the List reads cached arrays instead of re-filtering on
@@ -20,70 +24,208 @@ public struct SearchView: View {
     @State private var matchingArtists: [Artist] = []
     @State private var isFiltering = false
 
+    /// People come from the server, not the library snapshot above, so they run
+    /// on their own debounce and land in their own section rather than making
+    /// the local results wait on a network call.
+    @StateObject private var people = PeopleSearch()
+
+    #if os(iOS)
+    /// The catalogue half of this field. Shared with the Discover pages so one
+    /// search serves both, and observed here — not just inside
+    /// `SearchCatalogueResults` — because this view decides whether there are
+    /// any results at all, and it was deciding that from the library alone.
+    @ObservedObject private var catalogue = DiscoverSessionStore.shared
+    #endif
+
     // Recent searches persisted across launches (newline-delimited, newest first).
-    @AppStorage("search.recentQueries") private var recentQueriesRaw: String = ""
+
+    /// Past searches, shared with the Mac's dropdown. See `SearchSuggestionsStore`.
+    @ObservedObject private var history = SearchSuggestionsStore.shared
 
     private var isSearching: Bool { !query.trimmingCharacters(in: .whitespaces).isEmpty }
 
-    private var recentQueries: [String] {
-        recentQueriesRaw
-            .split(separator: "\n", omittingEmptySubsequences: true)
-            .map(String.init)
+    #if os(iOS)
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var resultFilter: IOSSearchFilter = .all
+
+    /// The field is in use: focused, or holding a query. Hides the page title
+    /// and swaps the landing's white field for a grey one with Cancel beside it.
+    private var isActive: Bool { isSearchFocused || isSearching }
+
+    /// Completions while typing. Losing focus (Return, a tapped term, a scroll)
+    /// shows the results; focusing again brings these back.
+    private var showsSuggestions: Bool {
+        isSearchFocused && !history.isDismissed && !history.suggestions.isEmpty
     }
+
+    /// Spotify's landing field is a white slab on the dark page.
+    private var fieldIsBright: Bool { !isActive && colorScheme == .dark }
+    #endif
+
+    /// One real cover per browse card, so the grid is made of this library
+    /// rather than six coloured rectangles that would look identical in
+    /// everybody's copy of the app.
+    ///
+    /// Held as state and filled by a `.task` rather than computed in `body`:
+    /// picking the covers means reaching into the library for each category,
+    /// and the browse screen is the one place in the app someone arrives at
+    /// with nothing loaded and nothing to wait for.
+    /// Collapse state of the library section, reset per query.
+    @State private var libraryExpanded = false
+
+    @State private var browseArtwork: [BrowseCategory: ArtworkRef?] = [:]
+
+    /// The pushed stack. Untyped `NavigationPath` rather than a typed array
+    /// because it carries library values (an album, an artist) and — on iOS —
+    /// catalogue destinations, which are different types entirely.
+    @State private var discoverPath = NavigationPath()
 
     // MARK: - Body
 
+    /// Bumped whenever the download manager publishes.
+    ///
+    /// This view reads download state (`status(for:)` and friends) straight off
+    /// the manager inside `body`, which is not observation — nothing here holds
+    /// the manager, so nothing here hears it change. `AppDependencies` used to
+    /// rebroadcast every service's publishes, which covered this by invalidating
+    /// all 81 views that hold `deps` on every status transition. The views that
+    /// actually draw download state say so themselves now.
+    @State private var downloadTick = 0
+
     public var body: some View {
-        NavigationStack {
+        bodyContent
+            .onReceive(deps.downloadManager.didChangeThrottled) { _ in
+                downloadTick &+= 1
+            }
+    }
+
+    private var bodyContent: some View {
+        NavigationStack(path: $discoverPath) {
             ZStack {
                 Color.mixBackground.ignoresSafeArea()
 
                 VStack(spacing: 0) {
+                    #if os(iOS)
+                    // Drawn here rather than as a large navigation title: that
+                    // title re-measures itself against the scroll view on every
+                    // keystroke and every keyboard frame, and it cost a whole
+                    // band of the screen above a field nobody scrolls past.
+                    // Gone while the field is in use, the way Spotify hands the
+                    // whole screen to recents and results.
+                    if !isActive {
+                        HStack(spacing: 10) {
+                            ProfileMenuButton(size: 32)
+                            Text("Search")
+                                .font(.mixHeadline)
+                                .foregroundStyle(Color.mixTextPrimary)
+                                .accessibilityAddTraits(.isHeader)
+                            Spacer()
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.top, 4)
+                        .padding(.bottom, 14)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+                    #endif
+
                     searchBar
                         .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
+                        .padding(.bottom, 10)
 
-                    if isSearching {
-                        scopePicker
-                            .padding(.horizontal, 16)
-                            .padding(.bottom, 10)
-                    }
-
+                    #if !os(iOS)
                     Divider().background(Color.mixSeparator)
+                    #endif
 
                     if isSearching {
+                        #if os(iOS)
+                        if showsSuggestions { suggestionsPanel } else { searchResults }
+                        #else
                         searchResults
+                        #endif
                     } else {
-                        browseSection
+                        // Focused with nothing typed: past searches, the way the
+                        // Mac's dropdown answers an empty field.
+                        //
+                        // Layered rather than branched. Tapping the field used to
+                        // tear down the whole browse tree — six artwork cards and
+                        // the catalogue shelves — on the same frame the keyboard
+                        // is animating in, which is what the lag was. Both stay
+                        // mounted and only their opacity changes, so focus costs
+                        // nothing.
+                        ZStack {
+                            SearchBrowseSection(artwork: browseArtwork,
+                                                onOpen: { discoverPath.append($0) })
+                                .opacity(isSearchFocused ? 0 : 1)
+                                .allowsHitTesting(!isSearchFocused)
+                                .accessibilityHidden(isSearchFocused)
+
+                            if isSearchFocused {
+                                historyPanel
+                                    .background(Color.mixBackground)
+                            }
+                        }
                     }
                 }
+                #if os(iOS)
+                .mixAnimation(.easeInOut(duration: 0.22), value: isActive)
+                #endif
             }
-            .navigationTitle("Search")
+            .miniPlayerSafeArea()
             #if os(iOS)
-            .navigationBarTitleDisplayMode(.large)
-            .toolbarColorScheme(.dark, for: .navigationBar)
+            .toolbar(.hidden, for: .navigationBar)
+            #else
+            .navigationTitle("Search")
             #endif
             .navigationDestination(for: Album.self)  { AlbumDetailView(album: $0).environmentObject(deps) }
             .navigationDestination(for: Artist.self) { ArtistDetailView(artist: $0).environmentObject(deps) }
             .navigationDestination(for: Playlist.self) {
                 PlaylistDetailView(playlist: $0).environmentObject(deps)
             }
+            .navigationDestination(for: UserProfile.self) { profile in
+                ProfilePageView(profile: profile)
+                    .environmentObject(deps)
+                    .miniPlayerSafeArea()
+            }
+            #if os(iOS)
+            .navigationDestination(for: DiscoverDestination.self) { dest in
+                discoverPage(dest)
+            }
+            #endif
             .navigationDestination(for: BrowseCategory.self) { category in
                 SearchCategoryListView(category: category)
                     .environmentObject(deps)
                     .environmentObject(engine)
+                    .miniPlayerSafeArea()
             }
         }
-        // Debounce the query and recompute results only when the (trimmed) query
-        // or active scope changes — not on unrelated @Published changes like
-        // engine.state.isPlaying.
+        // Debounce the query and recompute results only when it changes — not on
+        // unrelated @Published changes like engine.state.isPlaying.
+        .task(id: deps.libraryService.revision) { loadBrowseArtwork() }
         .task(id: queryTaskID) {
             await updateResults()
         }
+        #if os(iOS)
+        // Pressing the Search tab while Search is already up raises the field —
+        // the same gesture that focuses the bar on Spotify. See
+        // `IOSAppState.goToSearch()` for why a token and not the tab itself.
+        .onChange(of: iosAppState.searchTapToken) { _, _ in isSearchFocused = true }
+        // The field searches the catalogue too. Run from here rather than from
+        // the results view: that view is inside the branch that only draws when
+        // the *library* matched something, so a song you don't own could never
+        // put it on screen to start its own search.
+        .task(id: query) {
+            catalogue.search(query, using: deps.itunesClient)
+            history.update(query: query, using: deps.itunesClient, library: deps.libraryService)
+        }
+        #endif
+        .task(id: queryTaskID) {
+            // Last section on the page, so it can afford a few more than the
+            // four the old People tab left room for.
+            await people.search(query, using: deps.authService, limit: 8)
+        }
     }
 
-    // Combine query + scope so changing either re-runs the debounced filter.
-    private var queryTaskID: String { "\(scope.rawValue)\u{1}\(query)" }
+    private var queryTaskID: String { query }
 
     // MARK: - Filtering
 
@@ -108,89 +250,127 @@ public struct SearchView: View {
         if Task.isCancelled { return }
 
         // Snapshot the library on the main actor.
-        let tracks  = deps.libraryService.tracks
+        let tracks  = deps.libraryService.displayTracks
         let albums  = deps.libraryService.albums
         let artists = deps.libraryService.artists
 
-        let wantTracks  = scope == .all || scope == .songs
-        let wantAlbums  = scope == .all || scope == .albums
-        let wantArtists = scope == .all || scope == .artists
 
-        let rankedTracks: [Track] = wantTracks ? rank(tracks, cap: 60) {
-            SearchFuzzyMatch.bestScore(needle: needle, fields: [$0.title, $0.artistName, $0.albumTitle])
-        } : []
+        // Fuzzy-scoring a five-figure library is tens of milliseconds of string
+        // work, and it used to run right here — on the main actor, once per
+        // keystroke. That is exactly the budget a frame has, so typing stuttered
+        // in proportion to how much music you own.
+        //
+        // The models can't leave the actor (SwiftData classes aren't Sendable),
+        // so what crosses is their text and their position: plain strings out,
+        // ranked indices back, and the rows are looked up here afterwards
+        // against the same arrays we snapshotted a moment ago.
+        let trackFields  = tracks.map { [$0.title, $0.artistName, $0.albumTitle] }
+        let albumFields  = albums.map { [$0.title, $0.artistName] }
+        let artistNames  = artists.map(\.name)
 
-        let rankedAlbums: [Album] = wantAlbums ? rank(albums, cap: 40) {
-            SearchFuzzyMatch.bestScore(needle: needle, fields: [$0.title, $0.artistName])
-        } : []
-
-        let rankedArtists: [Artist] = wantArtists ? rank(artists, cap: 40) {
-            SearchFuzzyMatch.score(needle: needle, in: $0.name)
-        } : []
+        let ranked = await Task.detached(priority: .userInitiated) { () -> RankedIndices in
+            RankedIndices(
+                tracks:  Self.rankIndices(trackFields, cap: 60) {
+                    SearchFuzzyMatch.bestScore(needle: needle, fields: $0)
+                },
+                albums:  Self.rankIndices(albumFields, cap: 40) {
+                    SearchFuzzyMatch.bestScore(needle: needle, fields: $0)
+                },
+                artists: Self.rankIndices(artistNames, cap: 40) {
+                    SearchFuzzyMatch.score(needle: needle, in: $0)
+                }
+            )
+        }.value
 
         if Task.isCancelled { return }
-        matchingTracks  = rankedTracks
-        matchingAlbums  = rankedAlbums
-        matchingArtists = rankedArtists
+        matchingTracks  = ranked.tracks.map  { tracks[$0]  }
+        matchingAlbums  = ranked.albums.map  { albums[$0]  }
+        matchingArtists = ranked.artists.map { artists[$0] }
         isFiltering = false
     }
 
-    /// Score every element, drop misses, sort by descending relevance, cap.
-    private func rank<T>(_ items: [T], cap: Int, score: (T) -> Int?) -> [T] {
-        items
-            .compactMap { item -> (T, Int)? in score(item).map { (item, $0) } }
+    /// What the off-actor pass hands back: positions, not rows.
+    private struct RankedIndices: Sendable {
+        var tracks:  [Int]
+        var albums:  [Int]
+        var artists: [Int]
+    }
+
+    /// Score every element, drop misses, sort by descending relevance, cap —
+    /// and return where the survivors sat rather than the values themselves.
+    private nonisolated static func rankIndices<T>(_ items: [T], cap: Int,
+                                                   score: (T) -> Int?) -> [Int] {
+        items.enumerated()
+            .compactMap { pair -> (Int, Int)? in score(pair.element).map { (pair.offset, $0) } }
             .sorted { $0.1 > $1.1 }
             .prefix(cap)
-            .map { $0.0 }
+            .map(\.0)
     }
-
-    // MARK: - Recent searches
-
-    private func recordRecentSearch() {
-        let q = query.trimmingCharacters(in: .whitespaces)
-        guard q.count >= 2 else { return }
-        var list = recentQueries.filter { $0.caseInsensitiveCompare(q) != .orderedSame }
-        list.insert(q, at: 0)
-        recentQueriesRaw = list.prefix(8).joined(separator: "\n")
-    }
-
-    private func clearRecentSearches() { recentQueriesRaw = "" }
 
     // MARK: - Search Bar
 
     private var searchBar: some View {
-        HStack(spacing: 10) {
-            Image(systemName: MixtapeIcons.search)
-                .foregroundStyle(Color.mixTextTertiary)
-                .font(.system(size: 15))
+        HStack(spacing: 12) {
+            HStack(spacing: 10) {
+                Image(systemName: MixtapeIcons.search)
+                    .foregroundStyle(fieldIsBright ? Color.black : Color.mixTextSecondary)
+                    .font(.system(size: 17, weight: .semibold))
 
-            TextField("Songs, artists, albums…", text: $query)
-                .font(.mixBody)
-                .foregroundStyle(Color.mixTextPrimary)
-                .focused($isSearchFocused)
-                .autocorrectionDisabled()
-                .submitLabel(.search)
-                .onSubmit { recordRecentSearch() }
+                TextField("", text: $query,
+                          prompt: Text("What do you want to listen to?")
+                            .foregroundStyle(fieldIsBright ? Color.black.opacity(0.6) : Color.mixTextSecondary))
+                    .font(.mixBodyBold)
+                    .foregroundStyle(fieldIsBright ? Color.black : Color.mixTextPrimary)
+                    .focused($isSearchFocused)
+                    .autocorrectionDisabled()
+                    .submitLabel(.search)
+                    .onSubmit { history.rememberTerm(query) }
 
-            if !query.isEmpty {
-                Button { query = "" } label: {
-                    Image(systemName: MixtapeIcons.closeCircle)
-                        .foregroundStyle(Color.mixTextTertiary)
+                if !query.isEmpty {
+                    Button { query = "" } label: {
+                        Image(systemName: MixtapeIcons.closeCircle)
+                            .foregroundStyle(Color.mixTextTertiary)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.trailing, -10)
+                    .accessibilityLabel("Clear search")
                 }
             }
+            .padding(.horizontal, 12)
+            .frame(height: 46)
+            .background(fieldIsBright ? Color.white : Color.mixSurface2)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+            #if os(iOS)
+            if isActive {
+                Button("Cancel") {
+                    query = ""
+                    isSearchFocused = false
+                    history.clear()
+                }
+                .font(.mixBody)
+                .foregroundStyle(Color.mixTextPrimary)
+                .frame(minHeight: 44)
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
+            #endif
         }
-        .padding(12)
-        .background(Color.mixSurface)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
-    private var scopePicker: some View {
-        Picker("Filter", selection: $scope) {
-            ForEach(SearchScope.allCases) { s in
-                Text(s.title).tag(s)
-            }
-        }
-        .pickerStyle(.segmented)
+    #if !os(iOS)
+    private var fieldIsBright: Bool { false }
+    #endif
+
+    /// True when the catalogue has neither an answer nor a request in flight.
+    /// Always true off iOS, where this field searches the library alone.
+    private var catalogueIsQuiet: Bool {
+        #if os(iOS)
+        return catalogue.results.isEmpty && !catalogue.isSearching
+        #else
+        return true
+        #endif
     }
 
     // MARK: - Search Results
@@ -200,7 +380,16 @@ public struct SearchView: View {
         let tracks  = matchingTracks
         let albums  = matchingAlbums
         let artists = matchingArtists
-        let empty   = tracks.isEmpty && albums.isEmpty && artists.isEmpty
+        // People arrive after the library results and must count towards
+
+        // "is there anything here", or a username-only match reads as no results.
+        let local   = tracks.isEmpty && albums.isEmpty && artists.isEmpty
+                        && people.results.isEmpty && !people.isSearching
+        // "Nothing in your library" is not "no results". Deciding this from the
+        // library alone is what made the field look local-only: a query only the
+        // catalogue could answer fell straight through to the empty state, and
+        // the section that would have shown the answer never got to run.
+        let empty   = local && catalogueIsQuiet
 
         if isFiltering && empty {
             ScrollView {
@@ -220,6 +409,9 @@ public struct SearchView: View {
             )
             .frame(maxHeight: .infinity)
         } else {
+            #if os(iOS)
+            iosResults
+            #else
             List {
                 if !tracks.isEmpty {
                     Section(header: sectionHeader("Songs")) {
@@ -228,6 +420,7 @@ public struct SearchView: View {
                         }
                     }
                 }
+
 
                 if !albums.isEmpty {
                     Section(header: sectionHeader("Albums")) {
@@ -252,13 +445,165 @@ public struct SearchView: View {
                         }
                     }
                 }
+
+
+                peopleSection
             }
-            #if os(iOS)
-            .listStyle(.insetGrouped)
-            #else
             .listStyle(.inset)
-            #endif
             .scrollContentBackground(.hidden)
+            .mixPullToRefresh(deps)
+            #endif
+        }
+    }
+
+    #if os(iOS)
+    /// Spotify's order: the catalogue answer — the top result, its records, its
+    /// songs, its neighbours — under sticky filter pills. Your own copies and
+    /// people follow on All only; a filter is a question about the catalogue.
+    private var iosResults: some View {
+        VStack(spacing: 0) {
+            if !catalogue.results.isEmpty {
+                IOSFilterPills(filters: IOSSearchFilter.allCases, selection: $resultFilter)
+                    .contentMargins(.horizontal, 16, for: .scrollContent)
+                    .padding(.bottom, 4)
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 26) {
+                    IOSSearchResults(query: query, filter: $resultFilter) { dest in
+                        remember(dest)
+                        discoverPath.append(dest)
+                    }
+                    if resultFilter == .all {
+                        libraryMatches
+                        peopleRows
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 16)
+            }
+            .scrollDismissesKeyboard(.immediately)
+        }
+        .onChange(of: query) {
+            libraryExpanded = false
+            resultFilter = .all
+        }
+    }
+
+    /// A catalogue page the user opened, kept as a recent so tapping it again
+    /// goes straight back there instead of retyping the name.
+    private func remember(_ dest: DiscoverDestination) {
+        switch dest {
+        case .artist(let artist): history.remember(SearchSuggestion(artist: artist))
+        case .album(let album):   history.remember(SearchSuggestion(album: album))
+        default: break
+        }
+    }
+
+    /// Collapsed by default.
+    ///
+    /// What you own matches nearly every query, so expanded this section pushed
+    /// the catalogue results — the reason you searched instead of scrolling the
+    /// library — a screen and a half down. It stays one line until asked.
+    @ViewBuilder
+    private var libraryMatches: some View {
+        let count = matchingTracks.count + matchingAlbums.count + matchingArtists.count
+        if count > 0 {
+            VStack(alignment: .leading, spacing: 4) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) { libraryExpanded.toggle() }
+                } label: {
+                    HStack(spacing: 6) {
+                        discoverSectionHeader("In your library")
+                        Text("\(count)")
+                            .font(.mixCaption)
+                            .foregroundStyle(Color.mixTextTertiary)
+                        Spacer()
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Color.mixTextSecondary)
+                            .rotationEffect(.degrees(libraryExpanded ? 0 : -90))
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).mixHandCursor()
+
+                if libraryExpanded {
+                    if !matchingTracks.isEmpty {
+                        LocalMatchesSection(
+                            query: query,
+                            tracks: matchingTracks,
+                            onPlay: { track, context in
+                                Task { await engine.play(track: track, in: context, source: .named("Search results")) }
+                            },
+                            showsHeader: false
+                        )
+                    }
+
+                    if !matchingAlbums.isEmpty {
+                        ForEach(matchingAlbums.prefix(3)) { album in
+                            NavigationLink(value: album) { albumRow(album) }
+                                .buttonStyle(.plain).mixHandCursor()
+                        }
+                    }
+
+                    if !matchingArtists.isEmpty {
+                        ForEach(matchingArtists.prefix(3)) { artist in
+                            NavigationLink(value: artist) { artistRow(artist) }
+                                .buttonStyle(.plain).mixHandCursor()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Last, and short: searching here is searching your music almost every
+    /// time, and people shouldn't push songs off the screen to prove they exist.
+    @ViewBuilder
+    private var peopleRows: some View {
+        if !people.results.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                discoverSectionHeader("People")
+                ForEach(people.results) { profile in
+                    NavigationLink(value: profile) {
+                        PersonResultRow(profile: profile, showsChevron: false)
+                    }
+                    .buttonStyle(.plain).mixHandCursor()
+                }
+            }
+        }
+    }
+    #endif
+
+    // MARK: - People
+
+    /// Last section, and under "All" only the first few — searching here is
+    /// searching your music almost every time, and people shouldn't push songs
+    /// off the screen to prove they're available.
+    @ViewBuilder
+    private var peopleSection: some View {
+        if !people.results.isEmpty {
+            Section(header: sectionHeader("People")) {
+                ForEach(people.results) { profile in
+                    NavigationLink(value: profile) {
+                        PersonResultRow(profile: profile, showsChevron: false)
+                    }
+                    .listRowBackground(Color.mixBackground)
+                    .listRowSeparatorTint(Color.mixSeparator)
+                }
+
+            }
+        } else if people.isSearching {
+            Section(header: sectionHeader("People")) {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Searching…")
+                        .font(.mixSubtext)
+                        .foregroundStyle(Color.mixTextTertiary)
+                }
+                .listRowBackground(Color.mixBackground)
+            }
         }
     }
 
@@ -269,50 +614,52 @@ public struct SearchView: View {
             track:          track,
             isCurrent:      engine.queue.currentTrack?.id == track.id,
             isPlaying:      engine.state.isPlaying,
-            downloadStatus: deps.downloadManager.status(for: track.id)
+            availability: deps.downloadManager.status(for: track.id),
+            isResolving:    engine.routingTrackIDs.contains(track.id)
         )
         .listRowBackground(Color.mixBackground)
         .listRowSeparatorTint(Color.mixSeparator)
         .contentShape(Rectangle())
+        // The results, not the whole library: handing over every song meant the
+        // context lane never ran out, so the suggestion service never got to
+        // follow a searched-for song with anything like it — it just played the
+        // library in order from wherever that song happened to sit.
         .onTapGesture {
-            // Play in full library context so queue continues.
             Haptics.play(.light)
-            Task { await engine.play(track: track, in: deps.libraryService.tracks) }
+            Task { await engine.play(track: track, in: matchingTracks, source: .named("Search results")) }
         }
         .contextMenu {
             Button("Play Now") {
-                Task { await engine.play(track: track, in: deps.libraryService.tracks) }
+                Task { await engine.play(track: track, in: matchingTracks, source: .named("Search results")) }
             }
             Button("Play Next") { engine.queue.insertNext(track) }
             Button("Add to Queue") { engine.queue.append(track) }
             Divider()
             let favoured = deps.libraryService.isFavourited(trackID: track.id)
-            Button(favoured ? "Remove from Favourites" : "Add to Favourites", systemImage: favoured ? "heart.fill" : "heart") {
-                deps.libraryService.toggleFavourite(trackID: track.id)
+            Button(favoured ? "Remove from Liked Songs" : "Add to Liked Songs", systemImage: favoured ? "heart.fill" : "heart") {
+                deps.toggleFavourite(trackID: track.id)
             }
             let targetPlaylists = deps.libraryService.playlists.filter { !$0.isAllSongs && !$0.isDeleted && !$0.trackIDs.contains(track.id) }
             if !targetPlaylists.isEmpty {
                 Menu("Add to Playlist") {
                     ForEach(targetPlaylists) { pl in
                         Button(pl.name) {
-                            deps.libraryService.addTrack(id: track.id, toPlaylist: pl.id)
+                            deps.addTrack(id: track.id, toPlaylist: pl.id)
                         }
                     }
                 }
             }
-            if deps.downloadManager.status(for: track.id) != .notDownloaded {
-                Divider()
-                Button("Remove Download", systemImage: "xmark.circle") {
-                    deps.downloadManager.removeDownload(for: track.id)
-                }
-            }
+            Divider()
+            ShareMenuItems(.track(track))
+            Divider()
+            DownloadMenuItems(track: track, downloads: deps.downloadManager)
         }
     }
 
     private func albumRow(_ album: Album) -> some View {
         HStack(spacing: 12) {
             ArtworkThumbnail(
-                data: album.artworkData, size: 44,
+                data: album.artworkData, artworkRef: .album(album.id), size: 44,
                 cornerRadius: 6, placeholder: MixtapeIcons.album
             )
             VStack(alignment: .leading, spacing: 3) {
@@ -333,7 +680,7 @@ public struct SearchView: View {
     private func artistRow(_ artist: Artist) -> some View {
         HStack(spacing: 12) {
             ArtworkThumbnail(
-                data: artist.artworkData, size: 44,
+                data: artist.artworkData, artworkRef: .artist(artist.id), size: 44,
                 cornerRadius: 22, placeholder: MixtapeIcons.artist
             )
             VStack(alignment: .leading, spacing: 3) {
@@ -350,68 +697,332 @@ public struct SearchView: View {
         .padding(.vertical, 4)
     }
 
-    // MARK: - Browse (no active search)
+    // MARK: - History (focused, nothing typed)
 
-    private var browseSection: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-
-                if !recentQueries.isEmpty {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            Text("Recent searches")
-                                .font(.mixTitle2)
-                                .foregroundStyle(Color.mixTextPrimary)
-                            Spacer()
-                            Button("Clear") { clearRecentSearches() }
-                                .font(.mixLabel)
-                                .foregroundStyle(Color.mixPrimary)
-                        }
-                        ForEach(recentQueries, id: \.self) { term in
-                            Button {
-                                query = term
-                            } label: {
-                                HStack(spacing: 12) {
-                                    Image(systemName: MixtapeIcons.clock)
-                                        .font(.system(size: 14))
-                                        .foregroundStyle(Color.mixTextTertiary)
-                                    Text(term)
-                                        .font(.mixBody)
-                                        .foregroundStyle(Color.mixTextPrimary)
-                                    Spacer()
-                                    Image(systemName: "arrow.up.left")
-                                        .font(.system(size: 12))
-                                        .foregroundStyle(Color.mixTextTertiary)
-                                }
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                }
-
-                Text("Browse")
-                    .font(.mixTitle2)
-                    .foregroundStyle(Color.mixTextPrimary)
-                    .padding(.horizontal, 16)
-
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                    ForEach(BrowseCategory.allCases) { category in
-                        NavigationLink(value: category) {
-                            BrowseCategoryCard(category: category)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal, 16)
+    /// Past searches, drawn like the Mac's dropdown: real artwork, the full
+    /// title, and what the row actually is underneath it. A recent is only kept
+    /// for things that can show all three — a catalogue artist, album or song,
+    /// or a term you typed — so the list never fills with grey squares.
+    @ViewBuilder
+    private var historyPanel: some View {
+        if history.recents.isEmpty {
+            VStack(spacing: 10) {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.system(size: 30))
+                    .foregroundStyle(Color.mixTextTertiary)
+                Text("Your recent searches show up here.")
+                    .font(.mixSubtext)
+                    .foregroundStyle(Color.mixTextTertiary)
             }
-            .padding(.top, 8)
-            .padding(.bottom, 120)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    Text("Recent searches")
+                        .font(.mixTitle2.bold())
+                        .foregroundStyle(Color.mixTextPrimary)
+                        .accessibilityAddTraits(.isHeader)
+                        .padding(.horizontal, 16)
+                        .padding(.top, 12)
+                        .padding(.bottom, 8)
+
+                    ForEach(history.recents) { row in
+                        historyRow(row)
+                    }
+
+                    Button { history.clearRecents() } label: {
+                        Text("Clear recent searches")
+                            .font(.mixButtonSmall)
+                            .foregroundStyle(Color.mixTextPrimary)
+                            .padding(.horizontal, 20)
+                            .frame(height: 34)
+                            .overlay(Capsule().stroke(Color.mixTextTertiary, lineWidth: 1))
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).mixHandCursor()
+                    .padding(.top, 16)
+                }
+                .padding(.bottom, 24)
+            }
+            .scrollDismissesKeyboard(.interactively)
         }
     }
 
+    #if os(iOS)
+    /// Completions while typing: terms first, the way the catalogue ranks them,
+    /// then the artists, albums and songs they point at.
+    private var suggestionsPanel: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 2) {
+                ForEach(history.suggestions) { row in
+                    if case .term = row.kind {
+                        termRow(row)
+                    } else {
+                        historyRow(row, removable: false)
+                    }
+                }
+            }
+            .padding(.vertical, 8)
+        }
+        .scrollDismissesKeyboard(.interactively)
+        .background(Color.mixBackground)
+    }
+
+    /// A completion: tap to search it, ↖ to put it in the field and keep typing.
+    private func termRow(_ row: SearchSuggestion) -> some View {
+        HStack(spacing: 4) {
+            Button {
+                query = row.title
+                history.rememberTerm(row.title)
+                isSearchFocused = false
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundStyle(Color.mixTextSecondary)
+                        .frame(width: 56, height: 48)
+                    Text(typedHighlight(row.title))
+                        .font(.mixBodyBold)
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Button { query = row.title } label: {
+                Image(systemName: "arrow.up.left")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Color.mixTextSecondary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Fill in \(row.title)")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 4)
+    }
+
+    /// What you already typed, dimmed, so the eye lands on the completion.
+    private func typedHighlight(_ title: String) -> AttributedString {
+        var text = AttributedString(title)
+        text.foregroundColor = .mixTextPrimary
+        let typed = query.trimmingCharacters(in: .whitespaces)
+        if !typed.isEmpty, let range = text.range(of: typed, options: [.caseInsensitive, .anchored]) {
+            text[range].foregroundColor = .mixTextSecondary
+        }
+        return text
+    }
+    #endif
+
+    private func historyRow(_ row: SearchSuggestion, removable: Bool = true) -> some View {
+        HStack(spacing: 12) {
+            Button {
+                activate(row)
+            } label: {
+                HStack(spacing: 12) {
+                    thumb(row)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text(row.title)
+                                .font(.mixBodyBold)
+                                .foregroundStyle(Color.mixTextPrimary)
+                                .lineLimit(1)
+
+                            if row.isExplicit {
+                                Text("E")
+                                    .font(.mixMicro)
+                                    .foregroundStyle(Color.mixTextSecondary)
+                                    .frame(width: 15, height: 15)
+                                    .background(Color.mixSurface2,
+                                                in: RoundedRectangle(cornerRadius: 3, style: .continuous))
+                            }
+                        }
+
+                        Text(row.subtitle?.isEmpty == false ? row.subtitle! : "Search")
+                            .font(.mixCaption)
+                            .foregroundStyle(Color.mixTextSecondary)
+                            .lineLimit(1)
+                    }
+
+                    Spacer(minLength: 8)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).mixHandCursor()
+
+            // No hover on a phone, so the cross lives here permanently.
+            if removable {
+                Button { history.hide(row) } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color.mixTextSecondary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).mixHandCursor()
+                .accessibilityLabel("Remove \(row.title) from recent searches")
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 4)
+    }
+
+    /// What tapping a recent does. Anything with a catalogue id behind it opens
+    /// its page — that is where the user was last time — and a plain term goes
+    /// back in the field and re-runs the search.
+    private func activate(_ row: SearchSuggestion) {
+        history.remember(row)          // back to the top of the list
+        #if os(iOS)
+        if let artist = row.onlineArtist {
+            isSearchFocused = false
+            discoverPath.append(DiscoverDestination.artist(artist))
+            return
+        }
+        if let album = row.onlineAlbum {
+            isSearchFocused = false
+            discoverPath.append(DiscoverDestination.album(album))
+            return
+        }
+        if let track = row.onlineTrack {
+            isSearchFocused = false
+            Task { await playOnline(track, context: [track]) }
+            return
+        }
+        #endif
+        query = row.title
+    }
+
+    /// 56pt: big enough that a cover is recognisable at a glance, which is the
+    /// whole reason the row carries one.
+    @ViewBuilder
+    private func thumb(_ row: SearchSuggestion) -> some View {
+        let size: CGFloat = 56
+        if case .term = row.kind {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.mixSurface2)
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(Color.mixTextSecondary)
+            }
+            .frame(width: size, height: size)
+        } else {
+            CachedRemoteImage(url: row.imageURL) { image in
+                image.resizable().scaledToFill()
+            } placeholder: {
+                ZStack {
+                    Color.mixSurface2
+                    Image(systemName: row.placeholderIcon)
+                        .font(.system(size: 15))
+                        .foregroundStyle(Color.mixTextTertiary)
+                }
+            }
+            .frame(width: size, height: size)
+            .clipShape(RoundedRectangle(cornerRadius: row.isCircular ? size / 2 : 6,
+                                        style: .continuous))
+        }
+    }
+
+
+
+    #if os(iOS)
+    /// One pushed catalogue page. Mirrors the Discover tab's destination
+    /// switch — the pages are shared, only the stack they push onto differs.
+    @ViewBuilder
+    private func discoverPage(_ dest: DiscoverDestination) -> some View {
+        switch dest {
+        case .album(let album):
+            IOSDiscoverAlbumPage(
+                album: album,
+                onPlay: { track, ctx in Task { await playOnline(track, context: ctx) } },
+                onOpenArtist: { discoverPath.append(DiscoverDestination.artist($0)) }
+            )
+            .miniPlayerSafeArea()
+        case .artist(let artist):
+            IOSDiscoverArtistPage(
+                artist: artist,
+                onOpenAlbum: { discoverPath.append(DiscoverDestination.album($0)) },
+                onOpenArtist: { discoverPath.append(DiscoverDestination.artist($0)) },
+                onOpenLiked: { discoverPath.append(DiscoverDestination.likedSongs(artist)) },
+                onPlay: { track, ctx in Task { await playOnline(track, context: ctx) } },
+                onOpenMix: { discoverPath.append(DiscoverDestination.mix($0)) }
+            )
+            .miniPlayerSafeArea()
+        case .mix(let mix):
+            MixDetailPage(
+                mix: mix,
+                onPlay: { track, ctx in Task { await playOnline(track, context: ctx) } },
+                onShuffle: {
+                    let shuffled = mix.tracks.shuffled()
+                    guard let first = shuffled.first else { return }
+                    Task { await playOnline(first, context: shuffled) }
+                },
+                resolvingID: coordinator.resolvingID,
+                onOpenArtist: { name in
+                    Task {
+                        if let artist = await deps.itunesClient.resolveArtist(name: name, trackID: nil) {
+                            await MainActor.run { discoverPath.append(DiscoverDestination.artist(artist)) }
+                        }
+                    }
+                }
+            )
+            .navigationTitle(mix.title)
+            .navigationBarTitleDisplayMode(.inline)
+            .miniPlayerSafeArea()
+        case .likedSongs(let artist):
+            DiscoverLikedSongsPage(artist: artist).miniPlayerSafeArea()
+        case .genre(let genre):
+            IOSDiscoverGenrePage(genre: genre) { discoverPath.append(DiscoverDestination.artist($0)) }
+                .miniPlayerSafeArea()
+        default:
+            // Profiles are only reachable from the Discover tab; a
+            // stack that cannot produce them needs no page for them.
+            EmptyView()
+        }
+    }
+
+    /// Fetch the cover before starting, so the mini player has something to show
+    /// the moment audio begins rather than a grey square that fills in later.
+    private func playOnline(_ track: OnlineTrack, context: [OnlineTrack]) async {
+        var artworkData: Data? = nil
+        if let url = track.artworkURL {
+            artworkData = try? await URLSession.shared.data(from: url).0
+        }
+        await coordinator.play(track, context: context, artworkData: artworkData)
+    }
+    #endif
+
     // MARK: - Helpers
+
+    /// Picks the cover each browse card wears.
+    ///
+    /// Deliberately the *newest* thing in each bucket rather than the first:
+    /// the grid then changes as the library does, which is the whole reason to
+    /// use real artwork instead of a flat colour.
+    private func loadBrowseArtwork() {
+        let library = deps.libraryService
+        var picked: [BrowseCategory: ArtworkRef?] = [:]
+
+        let newestTrack = library.tracks.max { $0.dateImported < $1.dateImported }
+        picked[.songs]  = newestTrack.map { ArtworkRef.track($0.id) }
+        picked[.albums] = library.albums.first.map  { ArtworkRef.album($0.id)  }
+        // An artist without a photo would draw the card's fallback glyph, which
+        // is worse than the next artist along who has one.
+        picked[.artists] = library.artists.first { $0.artworkData != nil }
+            .map { ArtworkRef.artist($0.id) }
+        picked[.playlists] = library.playlists
+            .first { !$0.isDeleted && !$0.isAllSongs }
+            .map { ArtworkRef.playlist($0.id) }
+        picked[.favorites] = library.tracks.first { library.isFavourited(trackID: $0.id) }
+            .map { ArtworkRef.track($0.id) }
+        picked[.recent] = engine.recentlyPlayed.first.map { ArtworkRef.track($0.id) }
+
+        browseArtwork = picked
+    }
 
     private func sectionHeader(_ title: String) -> some View {
         Text(title)
@@ -424,7 +1035,9 @@ public struct SearchView: View {
 // MARK: - Search Scope
 
 enum SearchScope: String, CaseIterable, Identifiable {
-    case all, songs, artists, albums
+    // `.online` is iOS-only in practice — the Mac has the Discover window for
+    // this — but the case exists on both so the scope type stays one type.
+    case all, songs, artists, albums, online, people
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -432,6 +1045,54 @@ enum SearchScope: String, CaseIterable, Identifiable {
         case .songs:   return "Songs"
         case .artists: return "Artists"
         case .albums:  return "Albums"
+        case .online:  return "Mixtape"
+        case .people:  return "People"
+        }
+    }
+}
+
+// MARK: - Browse (no active search)
+
+/// The landing, as its own view.
+///
+/// Split out for one reason: focusing the field used to re-run `SearchView`'s
+/// body, and this tree — six artwork cards plus the catalogue shelves — was
+/// re-diffed on every keystroke and every keyboard frame. Its inputs don't
+/// change while you type, so SwiftUI now skips it entirely.
+private struct SearchBrowseSection: View {
+
+    let artwork: [BrowseCategory: ArtworkRef?]
+    let onOpen: (DiscoverDestination) -> Void
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+
+                Text("Your library")
+                    .font(.mixTitle.bold())
+                    .foregroundStyle(Color.mixTextPrimary)
+                    .accessibilityAddTraits(.isHeader)
+                    .padding(.horizontal, 16)
+
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 12),
+                                    GridItem(.flexible(), spacing: 12)], spacing: 12) {
+                    ForEach(BrowseCategory.allCases) { category in
+                        NavigationLink(value: category) {
+                            BrowseCategoryCard(category: category,
+                                               artwork: artwork[category] ?? nil)
+                        }
+                        .buttonStyle(.plain).mixHandCursor()
+                    }
+                }
+                .padding(.horizontal, 16)
+
+                #if os(iOS)
+                SearchDiscoverBrowse(onOpen: onOpen)
+                    .padding(.top, 18)
+                #endif
+            }
+            .padding(.top, 8)
+            .padding(.bottom, 24)
         }
     }
 }
@@ -471,27 +1132,75 @@ enum BrowseCategory: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
+/// A browse tile: the category's name on its colour, with a real cover from
+/// the library tilted into the corner.
+///
+/// The tilt and the overhang are doing a specific job — a square sitting flat
+/// in the corner reads as a thumbnail attached to a label, where one rotated
+/// and pushed past the edge reads as a stack of records the card is a lid on.
+/// It also means the card survives a cover that is missing, badly cropped or
+/// nearly the same colour as the tile: it is decoration over a solid ground,
+/// never the thing carrying the meaning.
 private struct BrowseCategoryCard: View {
+
     let category: BrowseCategory
+    /// The cover to tilt into the corner, or nil for the glyph — a library with
+    /// no playlists in it has nothing honest to put on the Playlists card.
+    var artwork: ArtworkRef?
+
+    private var height: CGFloat { 104 }
 
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            RoundedRectangle(cornerRadius: 12)
-                .fill(category.color.opacity(0.25))
-                .frame(height: 90)
+        ZStack(alignment: .topLeading) {
+            category.color
 
-            HStack {
-                Text(category.rawValue)
-                    .font(.mixBodyBold)
-                    .foregroundStyle(Color.mixTextPrimary)
-                Spacer()
-                Image(systemName: category.icon)
-                    .font(.system(size: 28))
-                    .foregroundStyle(category.color)
-                    .rotationEffect(.degrees(8))
-                    .offset(x: 8, y: -8)
+            corner
+                .frame(width: 68, height: 68)
+                .rotationEffect(.degrees(22))
+                .mixShadow(color: .black.opacity(0.35), radius: 8, x: -2, y: 4)
+                // Past the card's own edge on two sides, so the clip below cuts
+                // it and it reads as coming from underneath.
+                .offset(x: 16, y: 22)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+
+            Text(category.rawValue)
+                .font(.mixBodyBold)
+                .foregroundStyle(.white)
+                .lineLimit(2)
+                .minimumScaleFactor(0.8)
+                .multilineTextAlignment(.leading)
+                .padding(12)
+                // Never let a long name run under the cover.
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.trailing, 40)
+        }
+        .frame(height: height)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(category.rawValue)
+        .accessibilityAddTraits(.isButton)
+    }
+
+    @ViewBuilder
+    private var corner: some View {
+        if let artwork {
+            AsyncArtworkImage(source: .row(artwork), size: 68) {
+                glyph
             }
-            .padding(12)
+        } else {
+            glyph
+        }
+    }
+
+    /// The card still has to look like something when the library can't fill
+    /// it, so the old icon stays as the empty state rather than a grey square.
+    private var glyph: some View {
+        ZStack {
+            Color.black.opacity(0.22)
+            Image(systemName: category.icon)
+                .font(.system(size: 26, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.9))
         }
     }
 }
@@ -505,7 +1214,24 @@ struct SearchCategoryListView: View {
     @EnvironmentObject private var deps:   AppDependencies
     @EnvironmentObject private var engine: PlaybackEngine
 
+    /// Bumped whenever the download manager publishes.
+    ///
+    /// This view reads download state (`status(for:)` and friends) straight off
+    /// the manager inside `body`, which is not observation — nothing here holds
+    /// the manager, so nothing here hears it change. `AppDependencies` used to
+    /// rebroadcast every service's publishes, which covered this by invalidating
+    /// all 81 views that hold `deps` on every status transition. The views that
+    /// actually draw download state say so themselves now.
+    @State private var downloadTick = 0
+
     var body: some View {
+        bodyContent
+            .onReceive(deps.downloadManager.didChangeThrottled) { _ in
+                downloadTick &+= 1
+            }
+    }
+
+    private var bodyContent: some View {
         ZStack {
             Color.mixBackground.ignoresSafeArea()
             content
@@ -520,7 +1246,7 @@ struct SearchCategoryListView: View {
     @ViewBuilder
     private var content: some View {
         switch category {
-        case .songs:     trackList(deps.libraryService.tracks)
+        case .songs:     trackList(deps.libraryService.displayTracks)
         case .favorites: trackList(favoriteTracks)
         case .recent:    trackList(engine.recentlyPlayed)
         case .albums:    albumList(deps.libraryService.albums)
@@ -547,14 +1273,15 @@ struct SearchCategoryListView: View {
                         track:          track,
                         isCurrent:      engine.queue.currentTrack?.id == track.id,
                         isPlaying:      engine.state.isPlaying,
-                        downloadStatus: deps.downloadManager.status(for: track.id)
+                        availability: deps.downloadManager.status(for: track.id),
+                        isResolving:    engine.routingTrackIDs.contains(track.id)
                     )
                     .listRowBackground(Color.mixBackground)
                     .listRowSeparatorTint(Color.mixSeparator)
                     .contentShape(Rectangle())
                     .onTapGesture {
                         Haptics.play(.light)
-                        Task { await engine.play(track: track, in: tracks) }
+                        Task { await engine.play(track: track, in: tracks, source: .named("Search results")) }
                     }
                 }
             }
@@ -571,7 +1298,7 @@ struct SearchCategoryListView: View {
                 ForEach(albums) { album in
                     NavigationLink(value: album) {
                         HStack(spacing: 12) {
-                            ArtworkThumbnail(data: album.artworkData, size: 44, cornerRadius: 6, placeholder: MixtapeIcons.album)
+                            ArtworkThumbnail(data: album.artworkData, artworkRef: .album(album.id), size: 44, cornerRadius: 6, placeholder: MixtapeIcons.album)
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(album.title).font(.mixBodyBold).foregroundStyle(Color.mixTextPrimary).lineLimit(1)
                                 Text(album.artistName).font(.mixLabel).foregroundStyle(Color.mixTextSecondary).lineLimit(1)
@@ -597,7 +1324,7 @@ struct SearchCategoryListView: View {
                 ForEach(artists) { artist in
                     NavigationLink(value: artist) {
                         HStack(spacing: 12) {
-                            ArtworkThumbnail(data: artist.artworkData, size: 44, cornerRadius: 22, placeholder: MixtapeIcons.artist)
+                            ArtworkThumbnail(data: artist.artworkData, artworkRef: .artist(artist.id), size: 44, cornerRadius: 22, placeholder: MixtapeIcons.artist)
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(artist.name).font(.mixBodyBold).foregroundStyle(Color.mixTextPrimary).lineLimit(1)
                                 Text("\(artist.trackCount) songs").font(.mixLabel).foregroundStyle(Color.mixTextSecondary)
@@ -623,7 +1350,7 @@ struct SearchCategoryListView: View {
                 ForEach(playlists) { playlist in
                     NavigationLink(value: playlist) {
                         HStack(spacing: 12) {
-                            ArtworkThumbnail(data: playlist.artworkData, size: 44, cornerRadius: 6, placeholder: MixtapeIcons.playlist)
+                            PlaylistArtwork(playlist: playlist, size: 44)
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(playlist.name).font(.mixBodyBold).foregroundStyle(Color.mixTextPrimary).lineLimit(1)
                                 Text("\(playlist.trackIDs.count) songs").font(.mixLabel).foregroundStyle(Color.mixTextSecondary)

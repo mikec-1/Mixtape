@@ -3,6 +3,16 @@
 //
 // Username discovery: search public profiles by handle (prefix match) and open
 // a read-only profile for any result. Presented as a sheet from Settings.
+//
+// The window is small on purpose. It used to open at 460×520 with a full-bleed
+// empty state — a 40pt icon and two lines of instruction floating in the middle
+// of a void, under a search box that had 16pt of padding on every side. All of
+// that shouted, and the loudest thing on screen was the filled orange Done
+// button, which is the one control nobody opens this window to press.
+//
+// So: the field is the view, the prompt under it is quiet, and Done is plain
+// text in the title bar. The window is sized to fit a handful of results rather
+// than to fit the largest thing it might ever show.
 
 import SwiftUI
 
@@ -11,6 +21,10 @@ public struct FindPeopleView: View {
     @Environment(\.dismiss) private var dismiss
 
     private let authService: any AuthServiceProtocol
+    /// Where a chosen person should open. When nil the profile is pushed inside
+    /// this window; macOS passes a closure instead, because a 420pt sheet is the
+    /// wrong frame for a page built to be looked at.
+    private let onSelect: ((UserProfile) -> Void)?
 
     @State private var query: String = ""
     @State private var results: [UserProfile] = []
@@ -18,32 +32,37 @@ public struct FindPeopleView: View {
     @State private var didSearch = false
     @State private var errorMessage: String?
 
-    public init(authService: any AuthServiceProtocol) {
+    public init(authService: any AuthServiceProtocol,
+                onSelect: ((UserProfile) -> Void)? = nil) {
         self.authService = authService
+        self.onSelect = onSelect
     }
 
     public var body: some View {
+        // Only iOS pushes: both macOS call sites hand in `onSelect` so the
+        // chosen profile opens as a page in the main window. A navigation stack
+        // that never navigates was most of what made this look like a phone
+        // screen in a Mac window, so on the Mac there isn't one.
+        #if os(macOS)
+        sheet
+        #else
         NavigationStack {
-            content
-                .background(Color.mixBackground.ignoresSafeArea())
-                .navigationTitle("Find People")
-                #if os(iOS)
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbarColorScheme(.dark, for: .navigationBar)
-                #endif
-                .toolbar {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { dismiss() }
-                            .foregroundStyle(Color.mixPrimary)
-                    }
-                }
+            sheet
+                .toolbar(.hidden, for: .navigationBar)
                 .navigationDestination(for: UserProfile.self) { profile in
-                    UserProfileView(profile: profile)
+                    ProfilePageView(profile: profile)
                 }
         }
-        #if os(macOS)
-        .frame(minWidth: 460, minHeight: 520)
         #endif
+    }
+
+    private var sheet: some View {
+        MixSheet(title: "Find People",
+                 subtitle: "Search public profiles by username.",
+                 size: .large,
+                 scroll: false) {
+            content
+        }
         // Debounced search: re-runs whenever the query settles.
         .task(id: query) {
             await runSearch()
@@ -52,100 +71,117 @@ public struct FindPeopleView: View {
 
     // MARK: - Content
 
-    @ViewBuilder
+    // `scroll: false` above — the results own their scroll view, and the
+    // search field has to stay pinned above it rather than scrolling away.
     private var content: some View {
         VStack(spacing: 0) {
-            searchField
-            Divider().background(Color.mixSeparator)
-            resultsList
-        }
-    }
+            MixSearchField(text: $query,
+                           placeholder: "Search by username",
+                           isBusy: isSearching,
+                           isProminent: true,
+                           autoFocus: true)
+                .padding(.horizontal, MixSheetMetrics.margin)
+                .padding(.bottom, 12)
 
-    private var searchField: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(Color.mixTextSecondary)
-            TextField("Search by username", text: $query)
-                .textFieldStyle(.plain)
-                .font(.mixBody)
-                .foregroundStyle(Color.mixTextPrimary)
-                .autocorrectionDisabled(true)
-                #if os(iOS)
-                .textInputAutocapitalization(.never)
-                #endif
-            if !query.isEmpty {
-                Button {
-                    query = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(Color.mixTextTertiary)
-                }
-                .buttonStyle(.plain)
-            }
+            resultsArea
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        .padding(12)
-        .background(Color.mixSurface)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .padding(16)
     }
 
     @ViewBuilder
-    private var resultsList: some View {
+    private var resultsArea: some View {
         if let errorMessage {
-            messageState(icon: "wifi.exclamationmark", title: "Couldn't search", subtitle: errorMessage)
-        } else if isSearching && results.isEmpty {
-            ProgressView()
-                .controlSize(.regular)
-                .tint(Color.mixPrimary)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if results.isEmpty && didSearch && !trimmedQuery.isEmpty {
-            messageState(icon: "person.fill.questionmark",
-                         title: "No users found",
-                         subtitle: "No one matches “\(trimmedQuery)”.")
-        } else if trimmedQuery.isEmpty {
-            messageState(icon: "person.2",
-                         title: "Discover listeners",
-                         subtitle: "Search for someone by their username to view their profile.")
+            prompt(icon: "wifi.exclamationmark",
+                   title: "Couldn't search",
+                   subtitle: errorMessage,
+                   tint: .mixDestructive)
+        } else if results.isEmpty && didSearch && !trimmedQuery.isEmpty && !isSearching {
+            prompt(icon: "person.fill.questionmark",
+                   title: "No one found",
+                   subtitle: "No account matches “\(trimmedQuery)”.")
+        } else if results.isEmpty {
+            prompt(icon: "at",
+                   title: "Search by username",
+                   subtitle: "Handles are exact — try the start of one.")
         } else {
-            List {
-                ForEach(results) { profile in
-                    NavigationLink(value: profile) {
-                        row(for: profile)
+            resultList
+        }
+    }
+
+    private var resultList: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 7) {
+                Text(results.count == 1 ? "1 RESULT" : "\(results.count) RESULTS")
+                    .font(.mixCaptionBold)
+                    .tracking(0.6)
+                    .foregroundStyle(Color.mixTextSecondary)
+                    .padding(.leading, 4)
+
+                VStack(spacing: 0) {
+                    ForEach(Array(results.enumerated()), id: \.element.id) { index, profile in
+                        if let onSelect {
+                            Button {
+                                onSelect(profile)
+                                dismiss()
+                            } label: {
+                                PersonRow(profile: profile)
+                            }
+                            .buttonStyle(.plain).mixHandCursor()
+                        } else {
+                            NavigationLink(value: profile) {
+                                PersonRow(profile: profile)
+                            }
+                            .buttonStyle(.plain).mixHandCursor()
+                        }
+
+                        if index < results.count - 1 {
+                            Rectangle()
+                                .fill(Color.mixSeparator)
+                                .frame(height: 0.5)
+                                .padding(.leading, 62)
+                        }
                     }
-                    .listRowBackground(Color.mixSurface)
                 }
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.mixSurface)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Color.mixSeparator, lineWidth: 0.5)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
-            .scrollContentBackground(.hidden)
+            .padding(.horizontal, MixSheetMetrics.margin)
+            .padding(.bottom, 20)
         }
+        .scrollBounceBehavior(.basedOnSize)
     }
 
-    private func row(for profile: UserProfile) -> some View {
-        HStack(spacing: 12) {
-            AvatarView(url: profile.avatarURL, fallbackText: profile.username, size: 44)
-            Text("@\(profile.username)")
-                .font(.mixBodyBold)
-                .foregroundStyle(Color.mixTextPrimary)
-                .lineLimit(1)
-            Spacer(minLength: 0)
-        }
-        .padding(.vertical, 4)
-    }
-
-    private func messageState(icon: String, title: String, subtitle: String) -> some View {
-        VStack(spacing: 12) {
+    /// The quiet version of an empty state: it sits near the field it's talking
+    /// about instead of being centred in whatever space is left over, and it's
+    /// sized like a hint rather than a headline.
+    private func prompt(icon: String,
+                        title: String,
+                        subtitle: String,
+                        tint: Color = .mixTextTertiary) -> some View {
+        VStack(spacing: 7) {
             Image(systemName: icon)
-                .font(.system(size: 40, weight: .regular))
-                .foregroundStyle(Color.mixTextTertiary)
+                .font(.system(size: 24, weight: .light))
+                .foregroundStyle(tint)
+                .padding(.bottom, 2)
             Text(title)
-                .font(.mixTitle2)
-                .foregroundStyle(Color.mixTextPrimary)
-            Text(subtitle)
-                .font(.mixBody)
+                .font(.mixBodyBold)
                 .foregroundStyle(Color.mixTextSecondary)
+            Text(subtitle)
+                .font(.mixSubtext)
+                .foregroundStyle(Color.mixTextTertiary)
                 .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(32)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 32)
+        .padding(.top, 48)
     }
 
     // MARK: - Search
@@ -187,5 +223,46 @@ public struct FindPeopleView: View {
             errorMessage = error.localizedDescription
             didSearch = true
         }
+    }
+}
+
+// MARK: - Row
+
+/// One search hit. The join date isn't decoration — a list of bare handles gives
+/// you nothing to tell two similar names apart by.
+private struct PersonRow: View {
+
+    let profile: UserProfile
+
+    @State private var isHovering = false
+
+    var body: some View {
+        HStack(spacing: 12) {
+            AvatarView(url: profile.avatarURL, fallbackText: profile.username, size: 38)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(profile.name)
+                    .font(.mixBody)
+                    .foregroundStyle(Color.mixTextPrimary)
+                    .lineLimit(1)
+                Text("@\(profile.username)" + (profile.createdAt.map {
+                    " · Joined \($0.formatted(.dateTime.month(.abbreviated).year()))"
+                } ?? ""))
+                    .font(.mixCaption)
+                    .foregroundStyle(Color.mixTextTertiary)
+            }
+
+            Spacer(minLength: 10)
+
+            Image(systemName: "chevron.right")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.mixTextTertiary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .frame(minHeight: 52)
+        .background(isHovering ? Color.mixSurface2 : Color.clear)
+        .contentShape(Rectangle())
+        .onHover { isHovering = $0 }
     }
 }
