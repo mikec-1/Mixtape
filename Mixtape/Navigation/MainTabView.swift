@@ -86,6 +86,18 @@ public struct MainTabView: View {
                 // Clear, so pulling the player down shows the app under it.
                 .presentationBackground(.clear)
         }
+        // Get Info, for whichever row asked. Hosted here for the same reason the
+        // player is: the menu it was picked from no longer exists by the time
+        // the sheet would appear.
+        .sheet(item: $iosAppState.infoTrack) { track in
+            GetInfoSheet(track: track,
+                         isOnline: deps.onlineCoordinator.hasActiveOnlineSession,
+                         followsPlayback: false)
+                .environmentObject(engine)
+                .environmentObject(deps)
+                .environmentObject(deps.queueService)
+                .environmentObject(iosAppState)
+        }
         // Present metadata review sheet whenever the queue is non-empty.
         .sheet(item: Binding(
             get: { iosAppState.pendingReview },

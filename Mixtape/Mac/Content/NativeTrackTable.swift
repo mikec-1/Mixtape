@@ -53,6 +53,9 @@ struct NativeTrackTable: NSViewRepresentable {
     var onGoToArtist:         ((String) -> Void)?
     /// "Go to Album" — passed the track whose album should be opened.
     var onGoToAlbum:          ((Track)  -> Void)?
+    /// "Go to Song Radio" — passed the track to build the station from. Nil
+    /// hides the item, the same as the two above.
+    var onSongRadio:          ((Track)  -> Void)? = nil
     /// Clicking a name in the Artist column. Passed the single credited artist
     /// that was clicked, never the whole "A, B feat. C" credit — the column
     /// renders one click target per name. Nil leaves the column as plain text.
@@ -836,7 +839,8 @@ extension NativeTrackTable {
             // from a song to the artist or album it belongs to. Only ever about
             // one song, so a multi-row selection doesn't offer it.
             let credits = many ? [] : ImportService.creditedArtists(from: track.artistName)
-            if !many, parent.onGoToArtist != nil || parent.onGoToAlbum != nil {
+            if !many, parent.onGoToArtist != nil || parent.onGoToAlbum != nil
+                       || parent.onSongRadio != nil {
                 menu.addItem(.separator())
             }
             if parent.onGoToArtist != nil, !credits.isEmpty {
@@ -870,6 +874,13 @@ extension NativeTrackTable {
                 item.image = NSImage(systemSymbolName: "square.stack", accessibilityDescription: nil)
                 menu.addItem(item)
             }
+            if !many, parent.onSongRadio != nil {
+                let item = menuItem("Go to Song Radio",
+                                    action: #selector(menuSongRadio(_:)), track: track)
+                item.image = NSImage(systemSymbolName: "dot.radiowaves.left.and.right",
+                                     accessibilityDescription: nil)
+                menu.addItem(item)
+            }
 
             if !many {
                 menu.addItem(.separator())
@@ -887,6 +898,18 @@ extension NativeTrackTable {
             if !many {
                 let item = menuItem("Get Info", action: #selector(menuGetInfo(_:)), track: track)
                 item.image = NSImage(systemSymbolName: "info.circle", accessibilityDescription: nil)
+                menu.addItem(item)
+            }
+
+            // Show in Finder — only when there is a file to show. No dead row for
+            // a stream-only song; the SwiftUI menus draw the same item from
+            // `DownloadMenuItems`.
+            if !many, let url = AudioPaths.resolve(localPath: track.file.localPath) {
+                let item = NSMenuItem(title: "Show in Finder",
+                                      action: #selector(menuShowInFinder(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = url
+                item.image = NSImage(systemSymbolName: "folder", accessibilityDescription: nil)
                 menu.addItem(item)
             }
 
@@ -1030,6 +1053,11 @@ extension NativeTrackTable {
             parent.onPlay(tracks[row], tracks)
         }
 
+        @objc func menuShowInFinder(_ item: NSMenuItem) {
+            guard let url = item.representedObject as? URL else { return }
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        }
+
         @objc func menuPlayNow(_ item: NSMenuItem) {
             guard let targets = item.representedObject as? [Track], let first = targets.first else { return }
             // One song plays in the context of the whole table, as it always
@@ -1104,6 +1132,11 @@ extension NativeTrackTable {
         @objc func menuGoToAlbum(_ item: NSMenuItem) {
             guard let t = item.representedObject as? Track else { return }
             parent.onGoToAlbum?(t)
+        }
+
+        @objc func menuSongRadio(_ item: NSMenuItem) {
+            guard let t = item.representedObject as? Track else { return }
+            parent.onSongRadio?(t)
         }
 
         @objc func menuMoveToArtistFolder(_ item: NSMenuItem) {

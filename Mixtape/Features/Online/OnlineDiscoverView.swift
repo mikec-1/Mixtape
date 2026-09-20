@@ -173,6 +173,19 @@ struct OnlineDiscoverView: View {
                 } else {
                     fallBackToSearch("\(title) \(artistName)".trimmingCharacters(in: .whitespaces))
                 }
+            case let .songRadio(title, artistName):
+                let station = await StationBuilder.songRadio(title: title,
+                                                             artistName: artistName,
+                                                             using: deps.itunesClient)
+                defer { appState.resolvingDiscoverLink = nil }
+                if let station {
+                    appState.searchText = ""
+                    path = [.mix(station)]
+                } else {
+                    // Nothing came back — the artist isn't in the catalogue, or
+                    // the network is gone. The search at least shows the song.
+                    fallBackToSearch("\(title) \(artistName)".trimmingCharacters(in: .whitespaces))
+                }
             }
         }
     }

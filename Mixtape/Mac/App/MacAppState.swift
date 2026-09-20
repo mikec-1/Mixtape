@@ -1197,6 +1197,8 @@ final class MacAppState: ObservableObject {
     enum DiscoverDeepLink: Equatable {
         case artist(name: String, trackID: Int?)
         case album(title: String, artistName: String, trackID: Int?)
+        /// A station built from one song — "Go to Song Radio" on a track row.
+        case songRadio(title: String, artistName: String)
     }
     @Published var pendingDiscover: DiscoverDeepLink? = nil
 
@@ -1254,6 +1256,17 @@ final class MacAppState: ObservableObject {
         dismissContentOverlays()
         pendingDiscover       = .album(title: title, artistName: artistName, trackID: trackID)
         resolvingDiscoverLink = title
+        openLinkedDiscover()
+    }
+
+    /// Open the station seeded by one song, as a page of its own.
+    func showSongRadio(title: String, artistName: String) {
+        guard !title.isEmpty, !artistName.isEmpty else { return }
+        leaveFullscreenLyricsForNavigation()
+        clearSearch()
+        dismissContentOverlays()
+        pendingDiscover       = .songRadio(title: title, artistName: artistName)
+        resolvingDiscoverLink = "\(title) Radio"
         openLinkedDiscover()
     }
 
@@ -1329,6 +1342,12 @@ final class MacAppState: ObservableObject {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
         showOnlineArtist(name: trimmed, trackID: nil)
+    }
+
+    /// "Go to Song Radio" in a song's menu. The printed song, not the stored
+    /// one — a station titled with the feature credit still on it reads wrong.
+    func openSongRadio(for track: Track) {
+        showSongRadio(title: track.displayTitle, artistName: track.displayArtistName)
     }
 
     /// Clicking the album name in a song row, or "Go to Album" in its menu.

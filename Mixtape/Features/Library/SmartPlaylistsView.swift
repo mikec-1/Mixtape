@@ -58,9 +58,7 @@ public struct SmartPlaylistsSection: View {
                                     onOpen: { appState.showSmartPlaylist(smart) })
                         .environmentObject(deps.downloadManager)
                         .contextMenu {
-                            Button("Delete Smart Playlist", role: .destructive) {
-                                service.delete(id: smart.id)
-                            }
+                            SmartPlaylistActionsMenu(playlist: smart, service: service)
                         }
                 }
             }
@@ -90,6 +88,9 @@ public struct SmartPlaylistsSection: View {
                     } label: {
                         Label("Delete", systemImage: "trash")
                     }
+                }
+                .contextMenu {
+                    SmartPlaylistActionsMenu(playlist: smart, service: service)
                 }
             }
         }

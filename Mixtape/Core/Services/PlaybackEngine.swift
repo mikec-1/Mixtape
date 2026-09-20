@@ -898,6 +898,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             await handler()
             return
         }
+        if beginSkipCrossfade() { return }
         // Walk past anything already known to be unfindable. Stopping on a song
         // no resolver has ever produced is the "queue died in the middle" case:
         // the row is badged in the queue for exactly this reason, and reaching
@@ -2169,6 +2170,24 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         case .gapless:   return 0.4          // short equal-power fade to hide the load gap
         case .crossfade: return crossfadeDuration
         }
+    }
+
+    /// A manual Next, overlapped instead of hard-cut. Same machinery as the
+    /// end-of-track fade, so `.off` still means off and the single-player path
+    /// is untouched; returns false when it can't, leaving the normal advance to
+    /// run.
+    ///
+    /// The overlap is capped at a second regardless of the setting: a six-second
+    /// tail argues with the user who just pressed skip.
+    private func beginSkipCrossfade() -> Bool {
+        guard crossfadeMode != .off, !isTransitioning, state == .playing else { return false }
+        guard let next = queue.peekNext() else { return false }
+        // Leave the unfindable ones to the walk below — that's where the badge
+        // and the line of explanation live.
+        if UnavailableTracks.shared.contains(next), !canPlayLocally(next) { return false }
+        guard let url = fileStorage.localURL(for: next) else { return false }
+        beginCrossfade(to: next, url: url, fade: min(effectiveFade, 1))
+        return true
     }
 
     /// Called from the progress timer. When the active track is within the fade

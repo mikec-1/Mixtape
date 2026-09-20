@@ -39,6 +39,8 @@ struct MixtapeApp: App {
     }
 
     #if os(macOS)
+    /// Only for the Dock tile menu, which SwiftUI can't declare.
+    @NSApplicationDelegateAdaptor(MacDockMenu.self) private var dockMenu
     @StateObject private var updater = MixtapeApp.makeUpdater()
 
     private static func makeUpdater() -> UpdaterController {
@@ -58,6 +60,9 @@ struct MixtapeApp: App {
         WindowGroup {
             let _ = LaunchTimeline.markOnce("app/scene-body")
             RootView()
+                #if os(macOS)
+                .task { MacDockMenu.engine = dependencies.playbackEngine }
+                #endif
                 .environmentObject(dependencies)
                 .environmentObject(dependencies.playbackEngine)
                 .environmentObject(dependencies.queueService)

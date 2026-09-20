@@ -177,6 +177,18 @@ struct IOSDiscoverView: View {
                 }
             }
         }
+        // A station seeded by one song — "Go to Song Radio" on a track row.
+        .onChange(of: iosAppState.pendingSongRadio) { _, seed in
+            guard let seed else { return }
+            iosAppState.pendingSongRadio = nil
+            Task {
+                let station = await StationBuilder.songRadio(title: seed.title,
+                                                             artistName: seed.artistName,
+                                                             using: deps.itunesClient)
+                guard let station else { return }
+                await MainActor.run { path.append(DiscoverDestination.mix(station)) }
+            }
+        }
         // Mixtape's profile, asked for from another tab — the byline on a saved
         // mix in the library.
         .onChange(of: iosAppState.pendingMixtapeProfile) { _, wanted in

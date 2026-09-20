@@ -14,13 +14,34 @@
 // Five states, one list, everywhere.
 
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 
 struct DownloadMenuItems: View {
 
     let track: Track
     @ObservedObject var downloads: DownloadManager
 
+    @ViewBuilder
     var body: some View {
+        statusItems
+        #if os(macOS)
+        // Whether there's a file to show is a question about the disk, not about
+        // how the file got there — an imported song, a downloaded one and a
+        // cached Discover play all answer yes. `resolve` stats the disk, which is
+        // why it's asked here (once, when the menu opens) and not per row.
+        if let url = AudioPaths.resolve(localPath: track.file.localPath) {
+            Divider()
+            Button("Show in Finder", systemImage: "folder") {
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+            }
+        }
+        #endif
+    }
+
+    @ViewBuilder
+    private var statusItems: some View {
         switch downloads.status(for: track.id) {
 
         case .streamOnly:

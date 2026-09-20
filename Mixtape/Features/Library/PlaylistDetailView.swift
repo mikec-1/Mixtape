@@ -763,6 +763,8 @@ public struct PlaylistDetailView: View {
             onDragTracksChanged: { appState.isDraggingTracks = $0 },
             onGoToArtist:        { openArtist(named: $0) },
             onGoToAlbum:         { openAlbum(for: $0) },
+            onSongRadio:         deps.downloadManager.isConnected
+                                 ? { appState.openSongRadio(for: $0) } : nil,
             onOpenArtistLink:    { appState.openDiscoverArtist(named: $0) },
             onOpenAlbumLink:     { appState.openDiscoverAlbum(for: $0) },
             // Only offered on All Songs, and the table has already asked — it
@@ -2211,6 +2213,13 @@ public struct PlaylistDetailView: View {
             Divider()
             goToItems(for: track)
             ShareMenuItems(.track(track))
+            Button("Get Info", systemImage: "info.circle") {
+                #if os(macOS)
+                appState.showInspector(for: track)
+                #else
+                iosAppState.showInfo(for: track)
+                #endif
+            }
         }
         if !playable.isEmpty {
             Divider()
@@ -2303,6 +2312,7 @@ public struct PlaylistDetailView: View {
         if !track.albumTitle.isEmpty {
             Button("Go to Album", systemImage: "square.stack") { openAlbum(for: track) }
         }
+        SongRadioMenuItem(track: track)
     }
 
     private func openArtist(named name: String) {

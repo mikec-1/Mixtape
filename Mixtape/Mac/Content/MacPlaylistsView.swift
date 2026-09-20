@@ -138,21 +138,19 @@ struct MacPlaylistsView: View {
                                     kind: "Album • \(album.artistName)",
                                     onOpen: { appState.selectedAlbum = album })
                         .environmentObject(deps.downloadManager)
-                        .contextMenu {
-                            Button("Remove from Library") {
-                                saved.setSaved(false, title: album.title, artistName: album.artistName)
-                            }
-                        }
+                        .contextMenu { AlbumActionsMenu(album: album) }
                 
     }
 
     @ViewBuilder
     private func smartRow(_ smart: SmartPlaylist) -> some View {
-                        PlaylistRowItem(playlist: smart.asPlaylist(trackIDs: deps.smartTrackIDs(smart)),
-                                        kind: "Smart Playlist",
-                                        onOpen: { appState.showSmartPlaylist(smart) })
-                            .environmentObject(deps.downloadManager)
-                    
+        PlaylistRowItem(playlist: smart.asPlaylist(trackIDs: deps.smartTrackIDs(smart)),
+                        kind: "Smart Playlist",
+                        onOpen: { appState.showSmartPlaylist(smart) })
+            .environmentObject(deps.downloadManager)
+            .contextMenu {
+                SmartPlaylistActionsMenu(playlist: smart, service: smartService)
+            }
     }
 
     @ViewBuilder

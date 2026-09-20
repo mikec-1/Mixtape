@@ -1547,10 +1547,17 @@ private struct NPButton: View {
 /// stays correct across auto-advance instead of freezing on the song it was
 /// opened with) and mirrors the macOS inspector's richer content: artwork,
 /// individually tappable artists, and file details.
-private struct GetInfoSheet: View {
+struct GetInfoSheet: View {
     /// Track the sheet was opened with — only a fallback when playback stops.
     let track: Track
     let isOnline: Bool
+    /// Whether the sheet re-points itself at whatever is playing now.
+    ///
+    /// True from the player, where "this song" means the one you are listening
+    /// to and an auto-advance should carry the sheet with it. False from a row,
+    /// where "this song" is the row you asked about — following playback there
+    /// would answer a question about a different song than the one tapped.
+    var followsPlayback: Bool = true
     @EnvironmentObject private var engine: PlaybackEngine
     @EnvironmentObject private var deps:   AppDependencies
     /// `engine.queue` is a plain `let` on the engine, so its changes don't
@@ -1564,7 +1571,9 @@ private struct GetInfoSheet: View {
 
     /// Always reflect the currently playing track; fall back to the opening
     /// track when playback has stopped.
-    private var currentTrack: Track { queueService.currentTrack ?? track }
+    private var currentTrack: Track {
+        followsPlayback ? (queueService.currentTrack ?? track) : track
+    }
 
     var body: some View {
         let track = currentTrack

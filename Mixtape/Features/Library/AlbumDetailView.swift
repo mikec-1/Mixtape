@@ -123,6 +123,22 @@ public struct AlbumDetailView: View {
             AlbumSaveButton(title: album.title, artistName: album.artistName)
             AlbumDownloadButton(ids: album.trackIDs, downloads: deps.downloadManager, library: deps.libraryService)
             ShareHeroButton(.album(album))
+
+            // The overflow, matching the playlist page's: an album page with no
+            // "…" was the only detail page you couldn't queue or leave for its
+            // artist from.
+            Menu { AlbumActionsMenu(album: album) } label: {
+                HeroCircleLabel(systemImage: "ellipsis")
+            }
+            #if os(macOS)
+            // Left alone a Menu draws itself as a bordered pop-up button with a
+            // chevron — the wrong shape entirely next to a circle.
+            .menuStyle(.button)
+            .buttonStyle(.plain).mixHandCursor()
+            .menuIndicator(.hidden)
+            #endif
+            .frame(width: 40, height: 40)
+            .help("More actions for \u{201C}\(album.title)\u{201D}")
         }
     }
 

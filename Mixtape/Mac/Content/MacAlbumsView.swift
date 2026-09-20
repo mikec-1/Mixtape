@@ -108,15 +108,7 @@ private struct MacAlbumCard: View {
             case .ended:     isHovered = false
             }
         }
-        .contextMenu {
-            Button("Play Album") {
-                guard let first = albumTracks.first else { return }
-                Task { await engine.play(track: first, in: albumTracks, source: .named(album.title)) }
-            }
-            Button("Add to Queue") {
-                albumTracks.forEach { engine.queue.append($0) }
-            }
-        }
+        .contextMenu { AlbumActionsMenu(album: album) }
     }
 
     private var artworkArea: some View {
@@ -273,6 +265,8 @@ struct MacAlbumDetailView: View {
 
             // No "Go to Album" here — this *is* the album page.
             onGoToArtist:       { appState.openDiscoverArtist(named: $0) },
+            onSongRadio:        deps.downloadManager.isConnected
+                                ? { appState.openSongRadio(for: $0) } : nil,
             onOpenArtistLink:   { appState.openDiscoverArtist(named: $0) },
             onOpenAlbumLink:    { appState.openDiscoverAlbum(for: $0) },
             onRemove:           { selection in

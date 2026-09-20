@@ -36,6 +36,8 @@ struct OnlineSongMenu: View {
     @EnvironmentObject private var coordinator: OnlinePlaybackCoordinator
     #if os(macOS)
     @EnvironmentObject private var appState:    MacAppState
+    #else
+    @EnvironmentObject private var iosAppState: IOSAppState
     #endif
 
     var body: some View {
@@ -103,6 +105,7 @@ struct OnlineSongMenu: View {
             if let onOpenAlbum, !song.albumTitle.isEmpty {
                 Button("Go to Album", systemImage: "square.stack", action: onOpenAlbum)
             }
+            SongRadioMenuItem(song: song)
         }
 
         if onWrongVersion != nil || saved != nil {
@@ -112,9 +115,13 @@ struct OnlineSongMenu: View {
                        systemImage: "arrow.triangle.2.circlepath", action: onWrongVersion)
             }
             if let track = saved {
-                #if os(macOS)
-                Button("Get Info", systemImage: "info.circle") { appState.showInspector(for: track) }
-                #endif
+                Button("Get Info", systemImage: "info.circle") {
+                    #if os(macOS)
+                    appState.showInspector(for: track)
+                    #else
+                    iosAppState.showInfo(for: track)
+                    #endif
+                }
                 DownloadMenuItems(track: track, downloads: deps.downloadManager)
             }
         }

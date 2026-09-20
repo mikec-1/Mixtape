@@ -470,6 +470,8 @@ private struct MacArtistDetailPanel: View {
                 // *other* credited artist, which is the whole point.
                 onGoToArtist:       { appState.openDiscoverArtist(named: $0) },
                 onGoToAlbum:        { appState.openDiscoverAlbum(for: $0) },
+                onSongRadio:        deps.downloadManager.isConnected
+                                    ? { appState.openSongRadio(for: $0) } : nil,
                 onOpenArtistLink:   { appState.openDiscoverArtist(named: $0) },
                 onOpenAlbumLink:    { appState.openDiscoverAlbum(for: $0) },
                 onRemove:           { selection in

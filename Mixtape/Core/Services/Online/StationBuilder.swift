@@ -411,6 +411,51 @@ enum StationBuilder {
         return out
     }
 
+    // MARK: - Song radio
+
+    /// "Go to Song Radio" — the station one song seeds.
+    ///
+    /// Deezer has no per-track radio endpoint, so the seed is the song's
+    /// credits: every artist on it gets their own radio and the lists are
+    /// interleaved, so a featured artist's corner is actually in the mix rather
+    /// than forming a tail nobody scrolls to.
+    ///
+    /// ponytail: seeded at artist level, not track level — a real track-radio
+    /// endpoint (or an audio-features nearest-neighbour) would replace the body
+    /// of this function and nothing else.
+    static func songRadio(title: String,
+                          artistName: String,
+                          using catalog: ITunesSearchClient) async -> PersonalMix? {
+        // `names`, not `credits` — the helper below is called `credits` too, and
+        // a local of that name would shadow it.
+        let names = Array(ImportService.creditedArtists(from: artistName).prefix(3))
+        guard let seed = names.first, !title.isEmpty else { return nil }
+
+        let lists: [[OnlineTrack]] = await withTaskGroup(of: (Int, [OnlineTrack]).self) { group in
+            for (index, name) in names.enumerated() {
+                group.addTask { (index, await catalog.deepRadioTracks(forArtist: name, limit: 40)) }
+            }
+            var slots: [Int: [OnlineTrack]] = [:]
+            for await (index, list) in group { slots[index] = list }
+            return (0..<names.count).map { slots[$0] ?? [] }
+        }
+
+        var pooled: [OnlineTrack] = []
+        var depth  = 0
+        while lists.contains(where: { $0.count > depth }) {
+            for list in lists where list.count > depth { pooled.append(list[depth]) }
+            depth += 1
+        }
+
+        return mix(id: "station:song:\(hashKey([title, seed]))",
+                   title: "\(title) Radio",
+                   subtitleText: "Songs like \u{201C}\(title)\u{201D} — "
+                               + credits(of: pooled, excluding: seed, limit: 2),
+                   seedArtist: seed,
+                   tracks: pooled,
+                   cap: 50)
+    }
+
     // MARK: - Artist page stations
 
     /// The two stations an artist page carries.

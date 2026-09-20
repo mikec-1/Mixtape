@@ -447,6 +447,9 @@ private struct PlaylistsListView: View {
                           SavedAlbumsService.shared.setSaved(false, title: album.title, artistName: album.artistName)
                       } label: { Label("Remove", systemImage: "minus.circle") }
                   }
+                  // Long-press gets the album's whole menu, not a shortened
+                  // copy of it — the same rule the playlist rows follow.
+                  .contextMenu { AlbumActionsMenu(album: album) }
                   .moveDisabled(true)
               
     }
@@ -463,6 +466,9 @@ private struct PlaylistsListView: View {
                   }
                   .listRowBackground(Color.mixBackground)
                   .listRowSeparatorTint(Color.mixSeparator)
+                  .contextMenu {
+                      SmartPlaylistActionsMenu(playlist: item, service: deps.smartPlaylistService)
+                  }
                   .moveDisabled(true)
               
     }

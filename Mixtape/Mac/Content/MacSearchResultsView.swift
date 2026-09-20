@@ -300,11 +300,23 @@ struct MacSearchResultsView: View {
                 appState.openDiscoverAlbum(for: track)
             }
         }
+        SongRadioMenuItem(track: track)
         ShareMenuItems(.track(track))
         Divider()
-        let favoured = library.isFavourited(trackID: track.id)
-        Button(favoured ? "Remove from Liked Songs" : "Add to Liked Songs") {
-            deps.toggleFavourite(trackID: track.id)
+        // A saved album's song has a row but isn't in the library — the album is
+        // what's saved, not it. Same rule and same word as every other surface
+        // that can save a song (see `OnlineSongMenu.saved`): liking it is what
+        // promotes it out of the album, so this is one item, not two.
+        if SavedAlbumsService.shared.albumOnlyIDs.contains(track.id) {
+            Button("Add to Library", systemImage: "plus.circle") {
+                deps.toggleFavourite(trackID: track.id)
+            }
+        } else {
+            let favoured = library.isFavourited(trackID: track.id)
+            Button(favoured ? "Remove from Liked Songs" : "Add to Liked Songs",
+                   systemImage: favoured ? "heart.slash" : "heart") {
+                deps.toggleFavourite(trackID: track.id)
+            }
         }
         let targets = library.playlists.filter { !$0.isAllSongs && !$0.isDeleted }
         if !targets.isEmpty {

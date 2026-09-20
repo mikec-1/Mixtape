@@ -366,6 +366,9 @@ struct MacSidebarView: View {
                     appState.showSmartPlaylist(smart)
                 }
                 .environmentObject(deps.downloadManager)
+                .contextMenu {
+                    SmartPlaylistActionsMenu(playlist: smart, service: smartService)
+                }
             }
         }
     }

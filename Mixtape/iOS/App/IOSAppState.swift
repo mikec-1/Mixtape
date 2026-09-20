@@ -101,10 +101,29 @@ final class IOSAppState: ObservableObject {
     /// mix on Mixtape's profile.
     @Published var pendingLibraryPlaylist: Playlist? = nil
 
+    /// A song to build a station from, pushed on the Discover tab's stack.
+    /// Mirrors macOS `MacAppState.showSongRadio`.
+    struct SongRadioSeed: Equatable {
+        let title: String
+        let artistName: String
+    }
+    @Published var pendingSongRadio: SongRadioSeed? = nil
+
     /// Mixtape's own profile, to push on the Discover tab's stack. A flag rather
     /// than a payload: the page builds itself from the session store, so there
     /// is nothing to carry across.
     @Published var pendingMixtapeProfile = false
+
+    /// The song whose info sheet is open, presented once at the tab root.
+    ///
+    /// Mirrors macOS `MacAppState.showInspector(for:)`: every menu that offers
+    /// Get Info sets this rather than hosting a sheet of its own, because a
+    /// `.contextMenu`'s content is torn down the moment it closes and a sheet
+    /// presented from inside one goes with it.
+    @Published var infoTrack: Track? = nil
+
+    /// Show the metadata sheet for one song.
+    func showInfo(for track: Track) { infoTrack = track }
 
     /// Open a library playlist from another tab.
     func openLibraryPlaylist(_ playlist: Playlist) {
@@ -129,6 +148,13 @@ final class IOSAppState: ObservableObject {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
         pendingDiscoverArtistName = trimmed
+        selectedTab = .discover
+    }
+
+    /// Open the station seeded by one song.
+    func openSongRadio(title: String, artistName: String) {
+        guard !title.isEmpty, !artistName.isEmpty else { return }
+        pendingSongRadio = SongRadioSeed(title: title, artistName: artistName)
         selectedTab = .discover
     }
 
