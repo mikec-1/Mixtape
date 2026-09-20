@@ -7,6 +7,7 @@
 
 #if os(macOS)
 import SwiftUI
+import Combine
 
 struct MacSongsView: View {
 
@@ -24,18 +25,58 @@ struct MacSongsView: View {
 
     // MARK: - Derived Data
 
-    private var filteredTracks: [Track] {
-        guard !searchText.isEmpty else { return library.tracks }
-        return library.tracks.filter { track in
-            track.title.localizedCaseInsensitiveContains(searchText)      ||
-            track.artistName.localizedCaseInsensitiveContains(searchText) ||
-            track.albumTitle.localizedCaseInsensitiveContains(searchText)
+    /// The rows on screen, filtered once per real change.
+    ///
+    /// Read twice in `body` — once to decide whether to show the no-results
+    /// view, once to hand to the table — and `body` runs for reasons that have
+    /// nothing to do with either input.
+    @State private var searchMemo = SearchMemo()
+
+    private final class SearchMemo {
+        private var revision: UInt64 = .max
+        private var query = "\u{0}"
+        private(set) var results: [Track] = []
+
+        func update(revision: UInt64, query: String, tracks: [Track]) {
+            guard revision != self.revision || query != self.query else { return }
+            self.revision = revision
+            self.query = query
+            guard !query.isEmpty else { results = tracks; return }
+            results = tracks.filter { track in
+                track.title.localizedCaseInsensitiveContains(query)      ||
+                track.artistName.localizedCaseInsensitiveContains(query) ||
+                track.albumTitle.localizedCaseInsensitiveContains(query)
+            }
         }
+    }
+
+    private var filteredTracks: [Track] {
+        searchMemo.update(revision: library.revision,
+                          query:    searchText,
+                          tracks:   library.displayTracks)
+        return searchMemo.results
     }
 
     // MARK: - Body
 
+    /// Bumped whenever the download manager publishes.
+    ///
+    /// This view reads download state (`status(for:)` and friends) straight off
+    /// the manager inside `body`, which is not observation — nothing here holds
+    /// the manager, so nothing here hears it change. `AppDependencies` used to
+    /// rebroadcast every service's publishes, which covered this by invalidating
+    /// all 81 views that hold `deps` on every status transition. The views that
+    /// actually draw download state say so themselves now.
+    @State private var downloadTick = 0
+
     var body: some View {
+        bodyContent
+            .onReceive(deps.downloadManager.didChangeThrottled) { _ in
+                downloadTick &+= 1
+            }
+    }
+
+    private var bodyContent: some View {
         Group {
             if library.tracks.isEmpty {
                 MacEmptyLibraryView(context: .songs)
@@ -50,17 +91,22 @@ struct MacSongsView: View {
                         get: { appState.selectedTrackIDs },
                         set: { appState.selectedTrackIDs = $0 }
                     ),
-                    onPlay:              { track, ctx in Task { await engine.play(track: track, in: ctx) } },
+                    onPlay:              { track, ctx in Task { await engine.play(track: track, in: ctx, source: .playlist(id: Playlist.allSongsID, name: "All Songs")) } },
                     onPlayNext:          { engine.queue.insertNext($0) },
                     onAddToQueue:        { engine.queue.append($0) },
                     onGetInfo:           { appState.showInspector(for: $0) },
-                    onRemove:            { track in
-                        engine.stopIfPlaying(trackID: track.id)
-                        deps.libraryService.deleteTrack(id: track.id)
+                    onDragTracksChanged: { appState.isDraggingTracks = $0 },
+                    onGoToArtist:        { appState.openDiscoverArtist(named: $0) },
+                    onGoToAlbum:         { appState.openDiscoverAlbum(for: $0) },
+                    onOpenArtistLink:    { appState.openDiscoverArtist(named: $0) },
+                    onOpenAlbumLink:     { appState.openDiscoverAlbum(for: $0) },
+                    onRemove:            { selection in
+                        for track in selection { engine.stopIfPlaying(trackID: track.id) }
+                        deps.libraryService.deleteTracks(ids: selection.map(\.id))
                     },
-                    onToggleFavourite:   { deps.libraryService.toggleFavourite(trackID: $0.id) },
-                    onAddToPlaylist:     { track, playlistID in
-                        deps.libraryService.addTrack(id: track.id, toPlaylist: playlistID)
+                    onToggleFavourite:   { deps.toggleFavourite(trackID: $0.id) },
+                    onAddToPlaylist:     { selection, playlistID in
+                        deps.addTracks(ids: selection.map(\.id), toPlaylist: playlistID)
                     },
                     onMoveToArtistFolder: { track in
                         moveArtistNewName = ImportService.primaryArtistName(from: track.artistName)
@@ -68,10 +114,14 @@ struct MacSongsView: View {
                     },
                     isFavourited:        { deps.libraryService.isFavourited(trackID: $0) },
                     playlists:           deps.libraryService.playlists,
-                    downloadStatus:      { deps.downloadManager.status(for: $0) },
+                    availability:      { deps.downloadManager.status(for: $0) },
+                    onDownload:          { deps.downloadManager.download($0) },
                     onRemoveDownload:    { deps.downloadManager.removeDownload(for: $0) },
-                    onSaveToDisk:        { macSaveToDisk(track: $0, deps: deps) },
-                    scale:               appState.uiScale
+                    onSaveToDisk:        { macSaveToDisk(tracks: $0, deps: deps) },
+                    onLinkCopied:        { deps.showToast(ShareSheet.copiedMessage) },
+                    canDownload:         { deps.downloadManager.downloadUnavailableReason(for: $0) == nil },
+                    scale:               appState.uiScale,
+                    resolvingIDs:        engine.routingTrackIDs
                 )
                 .background(Color.mixBackground)
             }
@@ -144,161 +194,140 @@ private struct MoveToArtistSheet: View {
     }
 
     var body: some View {
+        // Was a hand-built 420×500 panel: its own title block, its own three
+        // Dividers, and its own grey button bar with `.bordered` /
+        // `.borderedProminent` system buttons that match nothing else here.
+        MixSheet(title: "Move to Artist Folder",
+                 subtitle: "\(track.title) \u{2014} \(track.artistName)",
+                 size: .large,
+                 scroll: false) {
+            content
+        } footer: {
+            actions
+        }
+        .onAppear { selectedArtistName = currentPrimary }
+    }
+
+    private var content: some View {
         VStack(spacing: 0) {
-            // Header
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Move to Artist Folder")
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(Color.mixTextPrimary)
-                
-                HStack(spacing: 4) {
-                    Text(track.title)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Color.mixTextSecondary)
-                    Text("·")
-                        .foregroundStyle(Color.mixTextTertiary)
-                    Text(track.artistName)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Color.mixTextTertiary)
-                }
-                .lineLimit(1)
+            VStack(spacing: 12) {
+                currentLocationCard
+                searchField
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 24)
-            .padding(.top, 20)
-            .padding(.bottom, 16)
-
-            Divider()
-
-            // Current location status card
-            HStack(spacing: 12) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color.mixPrimary.opacity(0.12))
-                        .frame(width: 36, height: 36)
-                    Image(systemName: "folder.fill")
-                        .font(.system(size: 15))
-                        .foregroundStyle(Color.mixPrimary)
-                }
-                
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Current Location")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(Color.mixTextTertiary)
-                        .tracking(0.5)
-                        .textCase(.uppercase)
-                    
-                    Text(currentPrimary)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(Color.mixTextPrimary)
-                }
-                
-                Spacer()
-                
-                Text("Assigned")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(Color.mixPrimary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(Color.mixPrimary.opacity(0.1), in: Capsule())
-            }
-            .padding(14)
-            .background(Color.mixSurface)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .padding(.horizontal, 24)
-            .padding(.vertical, 16)
-
-            // Search bar input
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Color.mixTextTertiary)
-                
-                TextField("Search or type new artist...", text: $searchText)
-                    .font(.system(size: 13))
-                    .textFieldStyle(.plain)
-                    .foregroundStyle(Color.mixTextPrimary)
-                
-                if !searchText.isEmpty {
-                    Button {
-                        searchText = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 12))
-                            .foregroundStyle(Color.mixTextTertiary)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(10)
-            .background(Color.mixSurface2, in: RoundedRectangle(cornerRadius: 8))
-            .padding(.horizontal, 24)
+            .padding(.horizontal, MixSheetMetrics.margin)
+            .padding(.top, MixSheetMetrics.contentVertical)
             .padding(.bottom, 12)
 
-            Divider()
+            MixSheetHairline(visible: true)
 
-            // Scrollable list of artists
+            // The list is the sheet's real body, so it scrolls on its own and
+            // runs to both edges rather than sitting inside the margins.
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    // New artist creation row
                     if showCreateOption {
                         let newName = searchText.trimmingCharacters(in: .whitespaces)
-                        artistRow(name: newName, trackCount: 0, isNew: true, isSelected: selectedArtistName == newName) {
+                        artistRow(name: newName,
+                                  trackCount: 0,
+                                  isNew: true,
+                                  isSelected: selectedArtistName == newName) {
                             selectedArtistName = newName
                         }
-                        Divider().padding(.horizontal, 24)
                     }
-                    
+
                     ForEach(filteredArtists) { artist in
                         artistRow(
                             name: artist.name,
                             trackCount: artist.trackCount,
                             isNew: false,
                             isSelected: selectedArtistName == artist.name,
-                            artworkData: artist.artworkData
+                            artworkData: artist.displayArtwork
                         ) {
                             selectedArtistName = artist.name
                         }
-                        
-                        if artist.id != filteredArtists.last?.id {
-                            Divider().padding(.horizontal, 24)
-                        }
                     }
                 }
+                .padding(.vertical, 4)
             }
-            .background(Color.mixBackground)
-            
-            Divider()
-            
-            // Footer action buttons
-            HStack(spacing: 12) {
-                Spacer()
-                
-                Button("Cancel", action: onCancel)
-                    .buttonStyle(.bordered)
-                    .keyboardShortcut(.escape, modifiers: [])
-                    .controlSize(.regular)
-                
+        }
+    }
+
+    private var currentLocationCard: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "folder.fill")
+                .font(.system(size: 15))
+                .foregroundStyle(Color.mixPrimary)
+                .frame(width: 32, height: 32)
+                .background(Color.mixPrimary.opacity(0.12),
+                            in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("CURRENT FOLDER")
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .foregroundStyle(Color.mixTextTertiary)
+                    .tracking(0.6)
+                Text(currentPrimary)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Color.mixTextPrimary)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(Color.mixSurface,
+                    in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 12))
+                .foregroundStyle(Color.mixTextTertiary)
+
+            TextField("Search, or type a new artist", text: $searchText)
+                .font(.system(size: 13))
+                .textFieldStyle(.plain)
+                .foregroundStyle(Color.mixTextPrimary)
+
+            if !searchText.isEmpty {
                 Button {
-                    onConfirm(selectedArtistName)
+                    searchText = ""
                 } label: {
-                    Text("Move Track")
-                        .font(.system(size: 12, weight: .semibold))
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.mixTextTertiary)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(Color.mixPrimary)
-                .controlSize(.regular)
-                .disabled(selectedArtistName.trimmingCharacters(in: .whitespaces).isEmpty || selectedArtistName == currentPrimary)
+                .buttonStyle(.plain).mixHandCursor()
             }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 16)
-            .background(Color.mixSurface)
         }
-        .frame(width: 420, height: 500)
-        .background(Color.mixBackground)
-        .onAppear {
-            selectedArtistName = currentPrimary
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(Color.mixSurface2,
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    /// Cancel is the caller's, not the environment's — this sheet is driven by
+    /// an `item:` binding the parent clears.
+    private var actions: some View {
+        HStack(spacing: 12) {
+            Spacer(minLength: 0)
+            Button("Cancel", action: onCancel)
+                .buttonStyle(.plain).mixHandCursor()
+                .foregroundStyle(Color.mixTextSecondary)
+                .keyboardShortcut(.cancelAction)
+
+            MixSheetPrimaryButton(
+                action: MixSheetAction("Move Song", isEnabled: canMove) {
+                    onConfirm(selectedArtistName)
+                },
+                fullWidth: false
+            )
+            .keyboardShortcut(.defaultAction)
         }
+    }
+
+    private var canMove: Bool {
+        let trimmed = selectedArtistName.trimmingCharacters(in: .whitespaces)
+        return !trimmed.isEmpty && trimmed != currentPrimary
     }
 
     private func artistRow(
@@ -354,11 +383,11 @@ private struct MoveToArtistSheet: View {
                     .foregroundStyle(isSelected ? Color.mixPrimary : Color.mixTextTertiary)
             }
             .contentShape(Rectangle())
-            .padding(.vertical, 10)
-            .padding(.horizontal, 24)
-            .background(isSelected ? Color.mixPrimary.opacity(0.08) : Color.clear)
+            .padding(.vertical, 9)
+            .padding(.horizontal, MixSheetMetrics.margin)
+            .background(isSelected ? Color.mixPrimary.opacity(0.10) : Color.clear)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.plain).mixHandCursor()
     }
 }
 

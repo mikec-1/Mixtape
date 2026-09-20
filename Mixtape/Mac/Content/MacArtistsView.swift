@@ -17,6 +17,7 @@
 
 #if os(macOS)
 import SwiftUI
+import Combine
 
 // MARK: - MacArtistsView
 
@@ -48,29 +49,27 @@ struct MacArtistsView: View {
         Group {
             if library.artists.isEmpty {
                 MacEmptyLibraryView(context: .artists)
-            } else {
-                HStack(spacing: 0) {
-                    artistSidebar
-                    Divider()
-                    rightPanel
+            } else if let artist = selectedArtist {
+                MacArtistDetailPanel(artist: artist) {
+                    selectedArtistID = nil
+                    // Belt and braces: a deep-link that hasn't been consumed
+                    // yet would otherwise re-select the artist we're leaving.
+                    appState.pendingArtistID = nil
                 }
+            } else {
+                artistGrid
             }
         }
         .navigationTitle(selectedArtist?.name ?? "Artists")
         .navigationSubtitle(navSubtitle)
         .onAppear {
             // Honour a pending drill-in request (e.g. from the inspector).
+            // Nothing is auto-selected otherwise: the grid *is* the landing
+            // page, so every artist is visible instead of one being picked at
+            // random and the rest hidden behind a scroll.
             if let pending = appState.pendingArtistID {
                 selectedArtistID = pending
                 appState.pendingArtistID = nil
-            } else if selectedArtistID == nil {
-                // Pre-select the first artist so the right panel isn't blank on launch.
-                selectedArtistID = filteredArtists.first?.id
-            }
-        }
-        .onChange(of: library.artists) { _, artists in
-            if selectedArtistID == nil {
-                selectedArtistID = artists.first?.id
             }
         }
         .onChange(of: appState.pendingArtistID) { _, pending in
@@ -79,65 +78,43 @@ struct MacArtistsView: View {
                 appState.pendingArtistID = nil
             }
         }
-    }
-
-    // MARK: - Sidebar
-
-    private var artistSidebar: some View {
-        VStack(spacing: 0) {
-            if filteredArtists.isEmpty {
-                // Empty search results
-                VStack(spacing: 10) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 22))
-                        .foregroundStyle(Color.mixTextTertiary)
-                    Text("No artists found")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Color.mixTextSecondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(filteredArtists) { artist in
-                            MacArtistSidebarRow(
-                                artist:     artist,
-                                isSelected: selectedArtistID == artist.id
-                            ) {
-                                selectedArtistID = artist.id
-                            }
-                        }
-                    }
-                    .padding(.vertical, 4)
-                }
-            }
+        // Typing in the toolbar search means the user wants to find someone
+        // else, so drop back out to the grid.
+        .onChange(of: searchText) { _, text in
+            if !text.isEmpty { selectedArtistID = nil }
         }
-        .background(Color.mixBackground)
-        .frame(width: 220)
     }
 
-
-    // MARK: - Right Panel
+    // MARK: - Grid
 
     @ViewBuilder
-    private var rightPanel: some View {
-        if let artist = selectedArtist {
-            MacArtistDetailPanel(artist: artist)
-        } else {
-            VStack(spacing: 14) {
-                Image(systemName: "person.2.fill")
-                    .font(.system(size: 40))
+    private var artistGrid: some View {
+        if filteredArtists.isEmpty {
+            VStack(spacing: 10) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 26))
                     .foregroundStyle(Color.mixTextTertiary)
-                Text("Select an artist")
-                    .font(.system(size: 15, weight: .medium))
+                Text("No artists found")
+                    .font(.mixBodyBold)
                     .foregroundStyle(Color.mixTextSecondary)
-                Text("Choose an artist from the sidebar to see their albums and songs.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Color.mixTextTertiary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 260)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.mixBackground)
+        } else {
+            ScrollView {
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: 130, maximum: 180), spacing: 20)],
+                    spacing: 24
+                ) {
+                    ForEach(filteredArtists) { artist in
+                        MacArtistCard(artist: artist) {
+                            selectedArtistID = artist.id
+                        }
+                    }
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 20)
+            }
             .background(Color.mixBackground)
         }
     }
@@ -156,52 +133,86 @@ struct MacArtistsView: View {
     }
 }
 
-// MARK: - Sidebar Row
+// MARK: - Artist Card
 
-private struct MacArtistSidebarRow: View {
-    let artist:     Artist
-    let isSelected: Bool
-    let onTap:      () -> Void
+/// Grid tile: circular photo, name, song count, and a play button that fades
+/// in on hover — the same interaction as the album grid, so both browse
+/// surfaces behave identically.
+private struct MacArtistCard: View {
+    let artist: Artist
+    let onSelect: () -> Void
+
+    @EnvironmentObject private var library: LibraryService
+    @EnvironmentObject private var engine:  PlaybackEngine
+
+    @State private var isHovered = false
+
+    private var artistTracks: [Track] { library.tracks(by: artist) }
 
     var body: some View {
-        Button(action: onTap) {
-            HStack(spacing: 10) {
-                // Circular avatar — artwork photo or initial letter
-                Group {
-                    if let data = artist.artworkData, let img = NSImage(data: data) {
-                        Image(nsImage: img).resizable().scaledToFill()
-                    } else {
-                        Text(String(artist.name.prefix(1)).uppercased())
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(isSelected ? Color.mixPrimary : Color.mixTextTertiary)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .background(
-                                isSelected
-                                    ? Color.mixPrimary.opacity(0.20)
-                                    : Color.mixSurface
-                            )
-                    }
-                }
-                .frame(width: 28, height: 28)
-                .clipShape(Circle())
+        VStack(spacing: 10) {
+            ZStack(alignment: .bottomTrailing) {
+                avatar
 
+                if isHovered {
+                    Button {
+                        guard let first = artistTracks.first else { return }
+                        Task { await engine.play(track: first, in: artistTracks, source: .named(artist.name)) }
+                    } label: {
+                        Image(systemName: "play.circle.fill")
+                            .font(.system(size: 32))
+                            .foregroundStyle(Color.mixPrimary)
+                            .background(Color.black.opacity(0.4), in: Circle())
+                    }
+                    .buttonStyle(.plain).mixHandCursor()
+                    .padding(8)
+                    .transition(.opacity.combined(with: .scale(scale: 0.8)))
+                }
+            }
+
+            VStack(spacing: 2) {
                 Text(artist.name)
-                    .font(.system(size: 12, weight: isSelected ? .semibold : .medium))
-                    .foregroundStyle(isSelected ? Color.mixPrimary : Color.mixTextPrimary)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.mixTextPrimary)
                     .lineLimit(1)
 
-                Spacer()
+                Text("\(artistTracks.count) song\(artistTracks.count == 1 ? "" : "s")")
+                    .font(.mixCaption)
+                    .foregroundStyle(Color.mixTextSecondary)
             }
-            .padding(.vertical, 5)
-            .padding(.horizontal, 10)
-            .background(
-                isSelected ? Color.mixPrimary.opacity(0.12) : Color.clear,
-                in: RoundedRectangle(cornerRadius: 7)
-            )
-            .padding(.horizontal, 6)
-            .contentShape(Rectangle())   // full-row hit target
+            .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.plain)
+        .contentShape(Rectangle())
+        .onTapGesture { onSelect() }
+        .onHover { hovering in
+            withMixAnimation(.easeOut(duration: 0.12)) { isHovered = hovering }
+        }
+        .contextMenu {
+            Button("Play Artist") {
+                guard let first = artistTracks.first else { return }
+                Task { await engine.play(track: first, in: artistTracks, source: .named(artist.name)) }
+            }
+            Button("Add to Queue") {
+                artistTracks.forEach { engine.queue.append($0) }
+            }
+        }
+    }
+
+    private var avatar: some View {
+        Group {
+            if let data = artist.displayArtwork, let img = NSImage(data: data) {
+                Image(nsImage: img).resizable().scaledToFill()
+            } else {
+                Text(String(artist.name.prefix(1)).uppercased())
+                    .font(.system(size: 34, weight: .bold))
+                    .foregroundStyle(Color.mixTextTertiary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.mixSurface)
+            }
+        }
+        .aspectRatio(1, contentMode: .fit)
+        .clipShape(Circle())
+        .mixShadow(color: .black.opacity(0.3), radius: 8, y: 4)
     }
 }
 
@@ -210,15 +221,16 @@ private struct MacArtistSidebarRow: View {
 private struct MacArtistDetailPanel: View {
 
     let artist: Artist
+    let onBack: () -> Void
 
     @EnvironmentObject private var library:  LibraryService
     @EnvironmentObject private var engine:   PlaybackEngine
     @EnvironmentObject private var appState: MacAppState
     @EnvironmentObject private var deps:     AppDependencies
 
+    @Environment(\.mixChrome) private var chrome
+
     @State private var selectedIDs: Set<Track.ID> = []
-    @State private var isHoveringAvatar = false
-    @State private var isRefreshingImage = false
 
     private var artistTracks: [Track] {
         library.tracks(by: artist)
@@ -234,19 +246,51 @@ private struct MacArtistDetailPanel: View {
 
     // MARK: - Body
 
+    // One scroll view owns the whole page. It used to be a fixed VStack whose
+    // songs table scrolled inside itself, which meant a short window had to
+    // find the height for hero + albums + a table from a budget that didn't
+    // have it — the table kept its minimum, the stack overflowed its slot, and
+    // the songs went off the bottom with no way to reach them. Now the hero
+    // scrolls away like everything else and the table is sized to its content.
+    /// Bumped whenever the download manager publishes.
+    ///
+    /// This view reads download state (`status(for:)` and friends) straight off
+    /// the manager inside `body`, which is not observation — nothing here holds
+    /// the manager, so nothing here hears it change. `AppDependencies` used to
+    /// rebroadcast every service's publishes, which covered this by invalidating
+    /// all 81 views that hold `deps` on every status transition. The views that
+    /// actually draw download state say so themselves now.
+    @State private var downloadTick = 0
+
     var body: some View {
-        VStack(spacing: 0) {
-            heroSection
-            if !artistAlbums.isEmpty { albumsSection }
-            Divider()
-            if artistTracks.isEmpty {
-                emptyTracksView
-            } else {
-                songsSection
+        bodyContent
+            .onReceive(deps.downloadManager.didChangeThrottled) { _ in
+                downloadTick &+= 1
+            }
+    }
+
+    private var bodyContent: some View {
+        ScrollView {
+            VStack(spacing: 0) {
+                heroSection
+                if !artistAlbums.isEmpty { albumsSection }
+                Divider()
+                if artistTracks.isEmpty {
+                    emptyTracksView
+                } else {
+                    songsSection
+                }
             }
         }
+        .scrollContentBackground(.hidden)
         .background(Color.mixBackground)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Warm the first few songs while the user reads the page, so the tap
+        // that follows doesn't pay for the resolve.
+        .task(id: artist.id) {
+            deps.onlineCoordinator.prefetchResolvable(artistTracks)
+        }
+        .pageBack("All artists", action: onBack)
     }
 
     // MARK: - Hero Banner
@@ -275,7 +319,9 @@ private struct MacArtistDetailPanel: View {
                     Text(artist.name)
                         .font(.system(size: 26, weight: .bold))
                         .foregroundStyle(Color.mixTextPrimary)
-                        .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
+                        // Halo in the opposite tone of the text (dark behind
+                        // light text, light behind dark text) for legibility.
+                        .shadow(color: Color.mixBackground.opacity(0.7), radius: 4, y: 2)
 
                     let albums = artistAlbums.count
                     let songs  = artistTracks.count
@@ -288,27 +334,28 @@ private struct MacArtistDetailPanel: View {
                     HStack(spacing: 10) {
                         Button {
                             guard let first = artistTracks.first else { return }
-                            Task { await engine.play(track: first, in: artistTracks) }
+                            Task { await engine.play(track: first, in: artistTracks, source: .named(artist.name)) }
                         } label: {
                             Label("Play All", systemImage: "play.fill")
                                 .font(.system(size: 12, weight: .semibold))
                         }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.borderedProminent).mixHandCursor()
                         .tint(Color.mixPrimary)
                         .controlSize(.regular)
                         .disabled(artistTracks.isEmpty)
 
                         Button {
                             guard let first = artistTracks.randomElement() else { return }
-                            if !engine.queue.shuffleEnabled { engine.queue.toggleShuffle() }
-                            Task { await engine.play(track: first, in: artistTracks) }
+                            engine.queue.setShuffle(true)
+                            Task { await engine.play(track: first, in: artistTracks, source: .named(artist.name)) }
                         } label: {
                             Label("Shuffle", systemImage: "shuffle")
                                 .font(.system(size: 12, weight: .semibold))
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.bordered).mixHandCursor()
                         .controlSize(.regular)
                         .disabled(artistTracks.isEmpty)
+
                     }
                     .padding(.top, 6)
                     .padding(.bottom, 20)
@@ -322,13 +369,22 @@ private struct MacArtistDetailPanel: View {
 
     private var heroBackground: some View {
         Group {
-            if let data = artist.artworkData, let img = NSImage(data: data) {
-                Image(nsImage: img)
+            // `mixImage` rather than a bare `NSImage(data:)`: this decodes a
+            // full banner-sized cover, and it sat in a `body` that re-ran on
+            // every hover in the grid below it.
+            if let data = artist.displayArtwork, let img = mixImage(from: data) {
+                img
                     .resizable()
                     .scaledToFill()
-                    .blur(radius: 28)
+                    // A 28pt gaussian over a banner is the most expensive single
+                    // thing the artist page draws, and it is pure decoration —
+                    // the scrim below it is what makes the text readable.
+                    .blur(radius: chrome.showsMaterials ? 28 : 0)
                     .scaleEffect(1.08)               // hide white blur-edge fringe
-                    .overlay(Color.black.opacity(0.5))
+                    // Adaptive scrim: lightens the banner in light mode and
+                    // darkens it in dark mode, so the hero text stays readable
+                    // in both (a fixed black scrim left light mode muddy).
+                    .overlay(Color.mixBackground.opacity(0.5))
             } else {
                 // No artwork — use a branded gradient
                 LinearGradient(
@@ -340,72 +396,29 @@ private struct MacArtistDetailPanel: View {
         }
     }
 
-    private func refreshImage() async {
-        isRefreshingImage = true
-        defer { isRefreshingImage = false }
-        do {
-            try await library.refreshArtistImage(artistID: artist.id)
-            deps.showToast("Refreshed profile photo for \(artist.name)")
-        } catch {
-            deps.showToast("Failed to refresh photo: \(error.localizedDescription)")
-        }
-    }
-
+    /// Just the photo. It used to be a button that re-fetched the artist's
+    /// picture — with a hover spinner over it — from back when import left new
+    /// artists wearing an album cover and you had to fix each one by hand.
+    /// `LibraryService.scheduleArtistImageBackfill()` does that automatically
+    /// now, so the control was a reload for its own sake sitting on top of the
+    /// artwork it kept replacing.
     private var artistAvatar: some View {
-        Button {
-            Task { await refreshImage() }
-        } label: {
-            ZStack {
-                Group {
-                    if let data = artist.artworkData, let img = NSImage(data: data) {
-                        Image(nsImage: img).resizable().scaledToFill()
-                    } else {
-                        ZStack {
-                            Color.mixPrimary.opacity(0.20)
-                            Image(systemName: "person.fill")
-                                .font(.system(size: 32))
-                                .foregroundStyle(Color.mixPrimary)
-                        }
-                    }
-                }
-                .frame(width: 90, height: 90)
-                .clipShape(Circle())
-                
-                if isRefreshingImage {
-                    Circle()
-                        .fill(Color.black.opacity(0.5))
-                        .overlay {
-                            ProgressView().scaleEffect(0.8)
-                        }
-                } else if isHoveringAvatar {
-                    Circle()
-                        .fill(Color.black.opacity(0.4))
-                        .overlay {
-                            Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 20, weight: .semibold))
-                                .foregroundStyle(.white)
-                        }
-                        .transition(.opacity)
-                }
-            }
-            .frame(width: 90, height: 90)
-            .clipShape(Circle())
-            .overlay(Circle().strokeBorder(Color.white.opacity(0.14), lineWidth: 1.5))
-            .shadow(color: .black.opacity(0.65), radius: 12, y: 4)
-            .onHover { hovering in
-                withAnimation(.easeInOut(duration: 0.12)) {
-                    isHoveringAvatar = hovering
+        Group {
+            if let data = artist.displayArtwork, let img = NSImage(data: data) {
+                Image(nsImage: img).resizable().scaledToFill()
+            } else {
+                ZStack {
+                    Color.mixPrimary.opacity(0.20)
+                    Image(systemName: "person.fill")
+                        .font(.system(size: 32))
+                        .foregroundStyle(Color.mixPrimary)
                 }
             }
         }
-        .buttonStyle(.plain)
-        .disabled(isRefreshingImage)
-        .help("Click to refresh artist profile image from Deezer")
-        .contextMenu {
-            Button("Refresh Profile Photo") {
-                Task { await refreshImage() }
-            }
-        }
+        .frame(width: 90, height: 90)
+        .clipShape(Circle())
+        .overlay(Circle().strokeBorder(Color.white.opacity(0.14), lineWidth: 1.5))
+        .mixShadow(color: .black.opacity(0.65), radius: 12, y: 4)
     }
 
     // MARK: - Albums Section
@@ -448,27 +461,41 @@ private struct MacArtistDetailPanel: View {
                 currentTrackID:     engine.queue.currentTrack?.id,
                 isPlaying:          engine.state.isPlaying,
                 selectedIDs:        $selectedIDs,
-                onPlay:             { track, ctx in Task { await engine.play(track: track, in: ctx) } },
+                onPlay:             { track, ctx in Task { await engine.play(track: track, in: ctx, source: .named(artist.name)) } },
                 onPlayNext:         { engine.queue.insertNext($0) },
                 onAddToQueue:       { engine.queue.append($0) },
                 onGetInfo:          { appState.showInspector(for: $0) },
-                onRemove:           { track in
-                    engine.stopIfPlaying(trackID: track.id)
-                    deps.libraryService.deleteTrack(id: track.id)
+                onDragTracksChanged: { appState.isDraggingTracks = $0 },
+                // Artist is still offered: on a featured track it opens the
+                // *other* credited artist, which is the whole point.
+                onGoToArtist:       { appState.openDiscoverArtist(named: $0) },
+                onGoToAlbum:        { appState.openDiscoverAlbum(for: $0) },
+                onOpenArtistLink:   { appState.openDiscoverArtist(named: $0) },
+                onOpenAlbumLink:    { appState.openDiscoverAlbum(for: $0) },
+                onRemove:           { selection in
+                    for track in selection { engine.stopIfPlaying(trackID: track.id) }
+                    deps.libraryService.deleteTracks(ids: selection.map(\.id))
                 },
-                onToggleFavourite:  { deps.libraryService.toggleFavourite(trackID: $0.id) },
-                onAddToPlaylist:    { track, playlistID in
-                    deps.libraryService.addTrack(id: track.id, toPlaylist: playlistID)
+                onToggleFavourite:  { deps.toggleFavourite(trackID: $0.id) },
+                onAddToPlaylist:    { selection, playlistID in
+                    deps.addTracks(ids: selection.map(\.id), toPlaylist: playlistID)
                 },
                 isFavourited:       { deps.libraryService.isFavourited(trackID: $0) },
                 playlists:          deps.libraryService.playlists,
-                downloadStatus:     { deps.downloadManager.status(for: $0) },
+                availability:     { deps.downloadManager.status(for: $0) },
+                onDownload:         { deps.downloadManager.download($0) },
                 onRemoveDownload:   { deps.downloadManager.removeDownload(for: $0) },
-                onSaveToDisk:       { macSaveToDisk(track: $0, deps: deps) },
-                scale:              appState.uiScale
+                onSaveToDisk:       { macSaveToDisk(tracks: $0, deps: deps) },
+                onLinkCopied:       { deps.showToast(ShareSheet.copiedMessage) },
+                canDownload:         { deps.downloadManager.downloadUnavailableReason(for: $0) == nil },
+                scale:              appState.uiScale,
+                // Sized to its rows and scrolled by the page, not by itself —
+                // a scroll view inside a scroll view would trap the wheel over
+                // the song list.
+                fitsContent:        true,
+                resolvingIDs:       engine.routingTrackIDs
             )
         }
-        .frame(maxHeight: .infinity)
     }
 
     private var emptyTracksView: some View {
@@ -480,7 +507,8 @@ private struct MacArtistDetailPanel: View {
                 .font(.system(size: 13))
                 .foregroundStyle(Color.mixTextSecondary)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 56)
     }
 }
 
@@ -498,20 +526,20 @@ private struct MacArtistAlbumCard: View {
         Button(action: onTap) {
             VStack(alignment: .leading, spacing: 6) {
                 ZStack {
-                    MacArtworkView(data: album.artworkData, size: cardSize, cornerRadius: 8)
-                        .shadow(color: .black.opacity(0.35), radius: 6, y: 3)
+                    MacArtworkView(data: album.artworkData, artworkRef: .album(album.id), size: cardSize, cornerRadius: 8)
+                        .mixShadow(color: .black.opacity(0.35), radius: 6, y: 3)
 
                     if isHovered {
-                        RoundedRectangle(cornerRadius: 8)
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
                             .fill(Color.black.opacity(0.35))
                             .frame(width: cardSize, height: cardSize)
                         Image(systemName: "play.fill")
                             .font(.system(size: 22))
                             .foregroundStyle(.white)
-                            .shadow(color: .black.opacity(0.3), radius: 3, y: 1)
+                            .mixShadow(color: .black.opacity(0.3), radius: 3, y: 1)
                     }
                 }
-                .animation(.easeInOut(duration: 0.13), value: isHovered)
+                .mixAnimation(.easeInOut(duration: 0.13), value: isHovered)
 
                 Text(album.title)
                     .font(.system(size: 11, weight: .medium))
@@ -526,7 +554,7 @@ private struct MacArtistAlbumCard: View {
                 }
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.plain).mixHandCursor()
         .onHover { isHovered = $0 }
     }
 }

@@ -7,6 +7,7 @@
 
 #if os(macOS)
 import SwiftUI
+import Combine
 
 struct MacAlbumsView: View {
 
@@ -16,13 +17,22 @@ struct MacAlbumsView: View {
 
     let searchText: String
 
+    @ObservedObject private var saved = SavedAlbumsService.shared
+    @EnvironmentObject private var deps: AppDependencies
+
+    /// Only albums the user added. See `SavedAlbumsService`.
+    private var albums: [Album] {
+        library.albums.filter { saved.isSaved($0) && (!library.downloadedOnly || deps.downloadManager.isFullyDownloaded($0.trackIDs)) }
+            .sorted { (saved.savedAt($0) ?? .distantPast) > (saved.savedAt($1) ?? .distantPast) }
+    }
+
     private let cardMinWidth: CGFloat = 150
     private let cardMaxWidth: CGFloat = 200
     private let gridSpacing:  CGFloat = 16
 
     private var filteredAlbums: [Album] {
-        guard !searchText.isEmpty else { return library.albums }
-        return library.albums.filter {
+        guard !searchText.isEmpty else { return albums }
+        return albums.filter {
             $0.title.localizedCaseInsensitiveContains(searchText)      ||
             $0.artistName.localizedCaseInsensitiveContains(searchText)
         }
@@ -30,7 +40,7 @@ struct MacAlbumsView: View {
 
     var body: some View {
         Group {
-            if library.albums.isEmpty {
+            if albums.isEmpty {
                 MacEmptyLibraryView(context: .albums)
             } else if filteredAlbums.isEmpty {
                 MacNoResultsView(query: searchText, context: "albums")
@@ -65,8 +75,8 @@ struct MacAlbumsView: View {
 
     private var subtitle: String {
         searchText.isEmpty
-            ? "\(library.albums.count) albums"
-            : "\(filteredAlbums.count) of \(library.albums.count) albums"
+            ? "\(albums.count) albums"
+            : "\(filteredAlbums.count) of \(albums.count) albums"
     }
 }
 
@@ -101,7 +111,7 @@ private struct MacAlbumCard: View {
         .contextMenu {
             Button("Play Album") {
                 guard let first = albumTracks.first else { return }
-                Task { await engine.play(track: first, in: albumTracks) }
+                Task { await engine.play(track: first, in: albumTracks, source: .named(album.title)) }
             }
             Button("Add to Queue") {
                 albumTracks.forEach { engine.queue.append($0) }
@@ -111,27 +121,27 @@ private struct MacAlbumCard: View {
 
     private var artworkArea: some View {
         ZStack(alignment: .bottomTrailing) {
-            MacArtworkView(data: album.artworkData, size: nil, cornerRadius: 8)
+            MacArtworkView(data: album.artworkData, artworkRef: .album(album.id), size: nil, cornerRadius: 8)
                 .aspectRatio(1, contentMode: .fit)
-                .shadow(color: .black.opacity(0.3), radius: 8, y: 4)
+                .mixShadow(color: .black.opacity(0.3), radius: 8, y: 4)
 
             // Instant-play overlay — fires play, NOT the detail navigation
             if isHovered {
                 Button {
                     guard let first = albumTracks.first else { return }
-                    Task { await engine.play(track: first, in: albumTracks) }
+                    Task { await engine.play(track: first, in: albumTracks, source: .named(album.title)) }
                 } label: {
                     Image(systemName: "play.circle.fill")
                         .font(.system(size: 32))
                         .foregroundStyle(Color.mixPrimary)
                         .background(Color.black.opacity(0.4), in: Circle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.plain).mixHandCursor()
                 .padding(8)
                 .transition(.opacity.combined(with: .scale(scale: 0.8)))
             }
         }
-        .animation(.easeOut(duration: 0.15), value: isHovered)
+        .mixAnimation(.easeOut(duration: 0.15), value: isHovered)
         .clipped()
     }
 
@@ -177,89 +187,74 @@ struct MacAlbumDetailView: View {
         library.tracks(in: album)
     }
 
-    var body: some View {
-        VStack(spacing: 0) {
-            // Back bar — since album detail is rendered flat (no NavigationStack),
-            // there is no system back button; we provide our own.
-            HStack {
-                Button {
-                    appState.selectedAlbum = nil
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 12, weight: .semibold))
-                        Text("Back")
-                            .font(.system(size: 13))
-                    }
-                    .foregroundStyle(Color.mixPrimary)
-                }
-                .buttonStyle(.plain)
-                Spacer()
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(Color.mixBackground)
+    /// Bumped whenever the download manager publishes.
+    ///
+    /// This view reads download state (`status(for:)` and friends) straight off
+    /// the manager inside `body`, which is not observation — nothing here holds
+    /// the manager, so nothing here hears it change. `AppDependencies` used to
+    /// rebroadcast every service's publishes, which covered this by invalidating
+    /// all 81 views that hold `deps` on every status transition. The views that
+    /// actually draw download state say so themselves now.
+    @State private var downloadTick = 0
 
+    var body: some View {
+        bodyContent
+            .onReceive(deps.downloadManager.didChangeThrottled) { _ in
+                downloadTick &+= 1
+            }
+    }
+
+    private var bodyContent: some View {
+        VStack(spacing: 0) {
             albumHeader
-            Divider()
             trackList
         }
         .background(Color.mixBackground)
+        .artworkWash(source: album.artworkData, intensity: 0.72)
+        // Warm the top of the album while the user is still looking at it — an
+        // album is played top-down far more often than not.
+        .task(id: album.id) {
+            deps.onlineCoordinator.prefetchResolvable(tracks)
+        }
+        // Album detail is rendered flat (no NavigationStack), so there is no
+        // system back button; the page carries its own.
+        .pageBack { appState.selectedAlbum = nil }
     }
 
     // MARK: - Header
 
+    /// Same hero as a playlist page — Spotify's album layout.
     private var albumHeader: some View {
-        HStack(alignment: .top, spacing: 20) {
-
-            MacArtworkView(data: album.artworkData, size: 120, cornerRadius: 10)
-                .shadow(color: .black.opacity(0.35), radius: 12, y: 6)
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text(album.title)
-                    .font(.system(size: 22, weight: .bold))
-                    .foregroundStyle(Color.mixTextPrimary)
-                    .lineLimit(2)
-
-                Text(album.artistName)
-                    .font(.system(size: 14))
-                    .foregroundStyle(Color.mixPrimary)
-
-                Text(metaLine)
-                    .font(.system(size: 12))
-                    .foregroundStyle(Color.mixTextSecondary)
-                    .padding(.top, 2)
-
-                HStack(spacing: 10) {
-                    Button {
-                        guard let first = tracks.first else { return }
-                        Task { await engine.play(track: first, in: tracks) }
-                    } label: {
-                        Label("Play", systemImage: "play.fill")
-                            .font(.system(size: 12, weight: .semibold))
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color.mixPrimary)
-                    .controlSize(.regular)
-
-                    Button {
-                        engine.queue.toggleShuffle()
-                        guard let first = tracks.randomElement() else { return }
-                        Task { await engine.play(track: first, in: tracks) }
-                    } label: {
-                        Label("Shuffle", systemImage: "shuffle")
-                            .font(.system(size: 12, weight: .semibold))
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.regular)
-                }
-                .padding(.top, 4)
+        let playingHere = tracks.contains { $0.id == engine.queue.currentTrack?.id }
+        return DetailHero(eyebrow: "Album",
+                          title: album.title,
+                          subtitle: album.artistName,
+                          subtitleIsProminent: true,
+                          metadata: metaLine) { size in
+            MacArtworkView(data: album.artworkData,
+                           artworkRef: album.trackIDs.first.map { .track($0) } ?? .album(album.id),
+                           size: size, cornerRadius: 8)
+        } actions: {
+            HeroActionBar(isPlaying: playingHere && engine.state.isPlaying,
+                          isShuffling: engine.queue.shuffleEnabled,
+                          isEmpty: tracks.isEmpty,
+                          onPlay: {
+                              if playingHere && engine.state.isPlaying { engine.pause() }
+                              else if playingHere { engine.resume() }
+                              else if let first = engine.queue.shuffleEnabled ? tracks.randomElement() : tracks.first {
+                                  Task { await engine.play(track: first, in: tracks, source: .named(album.title)) }
+                              }
+                          },
+                          onShuffle: { engine.queue.setShuffle(!engine.queue.shuffleEnabled) }) {
+                AlbumSaveButton(title: album.title, artistName: album.artistName)
+                AlbumDownloadButton(ids: album.trackIDs, downloads: deps.downloadManager, library: library)
             }
-
-            Spacer()
         }
-        .padding(20)
-        .background(Color.mixBackground)
+        .padding(.horizontal, 24)
+        .padding(.bottom, 20)
+        // Clears the floating back control, which sits over this header rather
+        // than in a bar above it.
+        .padding(.top, 52)
     }
 
     // MARK: - Track list
@@ -270,24 +265,34 @@ struct MacAlbumDetailView: View {
             currentTrackID:     engine.queue.currentTrack?.id,
             isPlaying:          engine.state.isPlaying,
             selectedIDs:        $selectedIDs,
-            onPlay:             { track, ctx in Task { await engine.play(track: track, in: ctx) } },
+            onPlay:             { track, ctx in Task { await engine.play(track: track, in: ctx, source: .named(album.title)) } },
             onPlayNext:         { engine.queue.insertNext($0) },
             onAddToQueue:       { engine.queue.append($0) },
             onGetInfo:          { appState.showInspector(for: $0) },
-            onRemove:           { track in
-                engine.stopIfPlaying(trackID: track.id)
-                deps.libraryService.deleteTrack(id: track.id)
+            onDragTracksChanged: { appState.isDraggingTracks = $0 },
+
+            // No "Go to Album" here — this *is* the album page.
+            onGoToArtist:       { appState.openDiscoverArtist(named: $0) },
+            onOpenArtistLink:   { appState.openDiscoverArtist(named: $0) },
+            onOpenAlbumLink:    { appState.openDiscoverAlbum(for: $0) },
+            onRemove:           { selection in
+                for track in selection { engine.stopIfPlaying(trackID: track.id) }
+                deps.libraryService.deleteTracks(ids: selection.map(\.id))
             },
-            onToggleFavourite:  { deps.libraryService.toggleFavourite(trackID: $0.id) },
-            onAddToPlaylist:    { track, playlistID in
-                deps.libraryService.addTrack(id: track.id, toPlaylist: playlistID)
+            onToggleFavourite:  { deps.toggleFavourite(trackID: $0.id) },
+            onAddToPlaylist:    { selection, playlistID in
+                deps.addTracks(ids: selection.map(\.id), toPlaylist: playlistID)
             },
             isFavourited:       { deps.libraryService.isFavourited(trackID: $0) },
             playlists:          deps.libraryService.playlists,
-            downloadStatus:     { deps.downloadManager.status(for: $0) },
+            availability:     { deps.downloadManager.status(for: $0) },
+            onDownload:         { deps.downloadManager.download($0) },
             onRemoveDownload:   { deps.downloadManager.removeDownload(for: $0) },
-            onSaveToDisk:       { macSaveToDisk(track: $0, deps: deps) },
-            scale:              appState.uiScale
+            onSaveToDisk:       { macSaveToDisk(tracks: $0, deps: deps) },
+            onLinkCopied:       { deps.showToast(ShareSheet.copiedMessage) },
+            canDownload:         { deps.downloadManager.downloadUnavailableReason(for: $0) == nil },
+            scale:              appState.uiScale,
+            resolvingIDs:       engine.routingTrackIDs
         )
         .background(Color.mixBackground)
     }

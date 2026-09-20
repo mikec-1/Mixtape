@@ -69,7 +69,7 @@ struct MacEmptyLibraryView: View {
                 Button("Import Music…") {
                     isImporting = true
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.borderedProminent).mixHandCursor()
                 .tint(Color.mixPrimary)
                 .controlSize(.large)
                 .fileImporter(
@@ -81,8 +81,8 @@ struct MacEmptyLibraryView: View {
                     Task { @MainActor in
                         for url in urls {
                             let r = await deps.importService.importTrack(from: url)
-                            if case .imported(let track, let candidate) = r {
-                                appState.enqueueReview(MetadataReviewItem(track: track, candidate: candidate))
+                            if case .imported(_, let review) = r {
+                                appState.enqueueReview(review)
                             }
                         }
                     }
@@ -99,22 +99,32 @@ struct MacEmptyLibraryView: View {
 /// Reusable artwork thumbnail — shows a music-note placeholder when artworkData is nil.
 struct MacArtworkView: View {
     let data:         Data?
+    /// The row this cover belongs to, for rows whose blob the bulk fetch
+    /// skipped. Consulted only when `data` is nil — see `ArtworkProvider`.
+    var artworkRef:   ArtworkRef? = nil
+
     let size:         CGFloat?   // nil = fills available space
     let cornerRadius: CGFloat
 
     var body: some View {
         Group {
-            if let data, let img = platformImage(from: data) {
+            // Bytes in hand draw now; a row identity is resolved and decoded
+            // off the render path — see `AsyncArtworkImage`.
+            if let data, !data.isEmpty, let img = mixImage(from: data, displaySize: size) {
                 img
                     .resizable()
                     .scaledToFill()
+            } else if let artworkRef {
+                AsyncArtworkImage(source: .row(artworkRef), size: size) {
+                    artworkPlaceholder
+                }
             } else {
                 artworkPlaceholder
             }
         }
         .frame(width: size, height: size)
-        .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
-        .background(Color.mixSurface, in: RoundedRectangle(cornerRadius: cornerRadius))
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .background(Color.mixSurface, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     }
 
     private var artworkPlaceholder: some View {
@@ -124,17 +134,6 @@ struct MacArtworkView: View {
                 .font(.system(size: max(10, (size ?? 40) * 0.35)))
                 .foregroundStyle(Color.mixTextTertiary)
         }
-    }
-
-    // SwiftUI Image from raw Data (macOS uses NSImage)
-    private func platformImage(from data: Data) -> Image? {
-        #if os(macOS)
-        guard let nsImg = NSImage(data: data) else { return nil }
-        return Image(nsImage: nsImg)
-        #else
-        guard let uiImg = UIImage(data: data) else { return nil }
-        return Image(uiImage: uiImg)
-        #endif
     }
 }
 
