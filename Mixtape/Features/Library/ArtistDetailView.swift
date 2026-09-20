@@ -199,31 +199,11 @@ public struct ArtistDetailView: View {
                 .onTapGesture {
                     Task { await engine.play(track: track, in: tracks, source: .named(artist.name)) }
                 }
+                // No "Go to Artist" — this is that artist's page.
                 .contextMenu {
-                    Button("Play Now") {
+                    LibrarySongMenu(targets: [track], onPlay: {
                         Task { await engine.play(track: track, in: tracks, source: .named(artist.name)) }
-                    }
-                    Button("Play Next") { engine.queue.insertNext(track) }
-                    Button("Add to Queue") { engine.queue.append(track) }
-                    Divider()
-                    let favoured = deps.libraryService.isFavourited(trackID: track.id)
-                    Button(favoured ? "Remove from Liked Songs" : "Add to Liked Songs", systemImage: favoured ? "heart.fill" : "heart") {
-                        deps.toggleFavourite(trackID: track.id)
-                    }
-                    let targetPlaylists = deps.libraryService.playlists.filter { !$0.isAllSongs && !$0.isDeleted && !$0.trackIDs.contains(track.id) }
-                    if !targetPlaylists.isEmpty {
-                        Menu("Add to Playlist") {
-                            ForEach(targetPlaylists) { pl in
-                                Button(pl.name) {
-                                    deps.addTrack(id: track.id, toPlaylist: pl.id)
-                                }
-                            }
-                        }
-                    }
-                    Divider()
-                    ShareMenuItems(.track(track))
-                    Divider()
-                    DownloadMenuItems(track: track, downloads: deps.downloadManager)
+                    }, showsGoToArtist: false)
                 }
 
                 Divider()

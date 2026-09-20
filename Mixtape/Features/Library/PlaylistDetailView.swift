@@ -2124,196 +2124,38 @@ public struct PlaylistDetailView: View {
         }
     }
 
-    @ViewBuilder
+    /// The shared song menu, told what Play and Remove mean on this page.
+    ///
+    /// A read-only playlist loses exactly one item: everything else acts on the
+    /// song — play it, like it, download it, put it in a playlist of your own —
+    /// and none of that is editing someone else's playlist. Only removing from
+    /// *this* playlist is, so only that disappears.
     private func trackContextMenu(for track: Track) -> some View {
-        // Every item below acts on `targets`: the row that was right-clicked, or
-        // the whole selection when that row is inside it. One song reads exactly
-        // as it always did; several are counted, so nothing ever acts on more
-        // rows than the wording admits to.
-        let targets  = menuTargets(for: track)
-        let playable = targets.filter(\.canResolveAudio)
-
-        // A collaborator's own file, which this device can't get hold of. Play is
-        // still offered — the engine sends anything with no local audio to the
-        // online resolver, and a song someone ripped is often a song that also
-        // exists online — but queueing it isn't, because a queue that stops dead
-        // partway through reads as a broken player rather than a missing song.
-        // Favourite, download and file-copy have nothing to act on at all.
-        Button(label("Play Now", targets, plural: "Play \(targets.count) Songs"),
-               systemImage: MixtapeIcons.play) {
-            playAndMark(track, within: targets.count > 1 ? targets : nil)
-        }
-        if targets.count == 1, !track.canResolveAudio {
-            Button("Find in Discover", systemImage: "sparkle.magnifyingglass") {
-                findInDiscover(track)
-            }
-        } else if !playable.isEmpty {
-            Button(label("Play Next", playable, plural: "Play \(playable.count) Next")) {
-                // Reversed: each insert goes directly after the current song, so
-                // pushing them in back-to-front is what leaves the selection in
-                // the queue in the order it appears on screen.
-                for song in playable.reversed() { engine.queue.insertNext(song) }
-            }
-            Button(label("Add to Queue", playable, plural: "Add \(playable.count) to Queue")) {
-                for song in playable { engine.queue.append(song) }
-            }
-        }
-        Divider()
-
-        if !playable.isEmpty {
-            // "Remove" only when every one of them is already a favourite —
-            // otherwise the item fills the gaps, which is the wish behind
-            // favouriting a mixed selection.
-            let favoured = playable.allSatisfy { deps.libraryService.isFavourited(trackID: $0.id) }
-            let verb     = favoured ? "Remove from Liked Songs" : "Add to Liked Songs"
-            Button(label(verb, playable,
-                         plural: favoured ? "Remove \(playable.count) from Liked Songs"
-                                          : "Add \(playable.count) to Liked Songs")) {
-                // Straight through the service, then one card: routing a
-                // selection through `deps.toggleFavourite` would stack twenty
-                // identical cards for one menu tap.
-                let changed = playable.filter {
-                    deps.libraryService.isFavourited(trackID: $0.id) == favoured
-                }
-                for song in changed { deps.libraryService.toggleFavourite(trackID: song.id) }
-                if !favoured, !changed.isEmpty {
-                    deps.showSavedToast(.favourites, count: changed.count)
-                }
-            }
-        }
-
-        // Mixes and saved playlists are excluded as *targets* as well: they're in
-        // the list like any other playlist, and an "Add to Playlist" that quietly
-        // did nothing would be the worst version of read-only. A playlist already
-        // holding every selected song drops out for the same reason.
-        let targetIDs = Set(targets.map(\.id))
-        let targetPlaylists = deps.libraryService.playlists.filter { pl in
-            !pl.isAllSongs && !pl.isDeleted && pl.isEditable
-                && !targetIDs.isSubset(of: Set(pl.trackIDs))
-        }
-        if !targetPlaylists.isEmpty {
-            Menu {
-                ForEach(targetPlaylists) { pl in
-                    Button(pl.name) {
-                        deps.addTracks(ids: targets.map(\.id), toPlaylist: pl.id)
-                    }
-                }
-                Divider()
-                // The full sheet, which is the only way to reach a playlist that
-                // doesn't exist yet — and on a selection, the only place that
-                // shows which playlists already hold part of it.
-                Button("Choose Playlist\u{2026}") { tracksForAddToPlaylist = targets }
-            } label: {
-                Label("Add to Playlist", systemImage: "text.badge.plus")
-            }
-        }
-        // Navigation and Get Info answer a question about one song, so they only
-        // appear when there is one song to ask about.
-        if targets.count == 1 {
-            Divider()
-            goToItems(for: track)
-            ShareMenuItems(.track(track))
-            Button("Get Info", systemImage: "info.circle") {
-                #if os(macOS)
-                appState.showInspector(for: track)
-                #else
-                iosAppState.showInfo(for: track)
-                #endif
-            }
-        }
-        if !playable.isEmpty {
-            Divider()
-            // Two separate wishes, two separate items: "Download" keeps the song
-            // playable with no network, "file copy" puts a real file in the export
-            // folder. Neither implies the other.
-            downloadItems(for: playable)
-        }
-        // A read-only playlist loses exactly one item here. Everything above acts
-        // on the song — play it, favourite it, download it, put it in a playlist
-        // of your own — and none of that is editing someone else's playlist. Only
-        // removing from *this* playlist is, so only that disappears (along with
-        // its divider, so the menu doesn't end on a rule).
-        if playlist.isAllSongs {
-            // Asks first. This is the same permanent, syncing delete that ⌘⌫
-            // and the table's right-click menu both confirm — it shouldn't be
-            // the one path where a mis-click loses the song silently.
-            Divider()
-            Button(label("Remove from Library", targets,
-                         plural: "Remove \(targets.count) Songs from Library"),
-                   role: .destructive) {
-                tracksPendingDeletion = targets
-            }
-        } else if !isReadOnly {
-            Divider()
-            Button(label("Remove from Playlist", targets,
-                         plural: "Remove \(targets.count) Songs from Playlist"),
-                   role: .destructive) {
-                deps.libraryService.removeTracks(ids: targets.map(\.id),
+        let targets    = menuTargets(for: track)
+        let removeFrom = playlist.isAllSongs ? "Library" : (isReadOnly ? nil : "Playlist")
+        return LibrarySongMenu(
+            targets: targets,
+            onPlay:  { playAndMark(track, within: targets.count > 1 ? targets : nil) },
+            onChoosePlaylist: { tracksForAddToPlaylist = $0 },
+            removeFrom: removeFrom,
+            onRemove: removeFrom == nil ? nil : { rows in
+                // All Songs asks first. This is the same permanent, syncing
+                // delete that ⌘⌫ and the table's right-click menu both
+                // confirm — it shouldn't be the one path where a mis-click
+                // loses the song silently.
+                guard !playlist.isAllSongs else { tracksPendingDeletion = rows; return }
+                deps.libraryService.removeTracks(ids: rows.map(\.id),
                                                  fromPlaylist: playlist.id)
                 #if os(macOS)
                 appState.clearTrackSelection()
                 #endif
-            }
-        }
-    }
-
-    /// Picks the singular or counted wording for a menu item.
-    private func label(_ singular: String, _ targets: [Track], plural: String) -> String {
-        targets.count > 1 ? plural : singular
-    }
-
-    // MARK: - Download / file copy
-
-    /// The offline and file-copy items for one track.
-    ///
-    /// Kept apart deliberately. "Download" means the song plays with the network
-    /// off; a file copy means there's an audio file sitting in the user's export
-    /// folder. Conflating the two is what made the old Download button write a
-    /// folder full of files nobody asked for.
-    @ViewBuilder
-    private func downloadItems(for targets: [Track]) -> some View {
-        if targets.count == 1, let track = targets.first {
-            DownloadMenuItems(track: track, downloads: deps.downloadManager)
-
-            if deps.downloadManager.isExported(track.id) {
-                Button("Delete File Copy", systemImage: "trash") {
-                    deps.downloadManager.deleteFileCopy(for: track.id)
-                }
-            } else {
-                Button("Save a File Copy\u{2026}", systemImage: "square.and.arrow.down") {
-                    saveToDisk(track)
-                }
-            }
-        } else {
-            BulkDownloadMenuItems(tracks: targets, downloads: deps.downloadManager)
-            Button("Save \(targets.count) File Copies\u{2026}",
-                   systemImage: "square.and.arrow.down") {
-                saveToDisk(targets)
-            }
-        }
+            },
+            onSaveToDisk: { saveToDisk($0) },
+            onOpenAlbum:  { openAlbum(for: track) }
+        )
     }
 
     // MARK: - Go to Artist / Go to Album
-
-    /// The two navigation items every track row offers. Features are split, so a
-    /// track credited to "A feat. B" offers both artists rather than guessing.
-    @ViewBuilder
-    private func goToItems(for track: Track) -> some View {
-        let credits = ImportService.creditedArtists(from: track.artistName)
-        if credits.count > 1 {
-            Menu("Go to Artist") {
-                ForEach(credits, id: \.self) { name in
-                    Button(name) { openArtist(named: name) }
-                }
-            }
-        } else if let name = credits.first, !name.isEmpty {
-            Button("Go to Artist", systemImage: "music.mic") { openArtist(named: name) }
-        }
-        if !track.albumTitle.isEmpty {
-            Button("Go to Album", systemImage: "square.stack") { openAlbum(for: track) }
-        }
-        SongRadioMenuItem(track: track)
-    }
 
     private func openArtist(named name: String) {
         #if os(macOS)

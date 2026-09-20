@@ -1058,11 +1058,12 @@ struct OnlineDiscoverView: View {
             refreshRecommended: { store.rollRecommended() },
             playNext:     { song in Task { await coordinator.playNext(song) } },
             addToQueue:   { song in Task { await coordinator.addToQueue(song) } },
-            addToLibrary: { song in Task { await coordinator.addToLibrary(song) } },
             // Awaited, not fired into a Task: the hero's play button spins for
             // exactly as long as this runs.
             playAlbum:    { album in await playAlbum(album) },
-            generateMix:  { showGenerateMix = true }
+            generateMix:  { showGenerateMix = true },
+            openArtistNamed: { name, song in openArtist(named: name, from: song) },
+            openAlbumFor:    { openAlbum(for: $0) }
         )
     }
 

@@ -393,29 +393,13 @@ private struct QueuePanelRow: View {
         .onHover { isHovered = $0 }
         .mixAnimation(.easeOut(duration: 0.12), value: isHovered)
         .onTapGesture(count: 2) { playRow() }
+        // Liking is the point of this menu: the queue is the one place you're
+        // guaranteed to be looking at a song you're enjoying.
         .contextMenu {
-            Button("Play Now") { playRow() }
-            Button("Play Next")    { engine.queue.insertNext(track) }
-            Button("Add to Queue") { engine.queue.append(track) }
-            // A queue row is often a Discover song the library doesn't hold —
-            // the offer any menu makes for one of those.
-            if deps.libraryService.track(id: track.id) == nil {
-                Divider()
-                Button("Add to Library", systemImage: "plus") {
-                    Task {
-                        await coordinator.addToLibrary(unsaved: track)
-                        deps.showSavedToast(.library)
-                    }
-                }
-            }
-            if let onRemove {
-                Divider()
-                Button("Remove from Queue", action: onRemove)
-            }
-            Divider()
-            ShareMenuItems(.track(track))
-            Divider()
-            DownloadMenuItems(track: track, downloads: deps.downloadManager)
+            LibrarySongMenu(targets: [track],
+                            onPlay: { playRow() },
+                            removeFrom: onRemove == nil ? nil : "Queue",
+                            onRemove:   onRemove.map { remove in { _ in remove() } })
         }
     }
 

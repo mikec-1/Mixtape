@@ -975,52 +975,8 @@ public struct HomeSections: View {
     // same song as the row on that one — right-clicking one and getting nothing
     // is what made Home feel like a poster rather than part of the app.
 
-    @ViewBuilder
     private func trackMenu(_ track: Track, context: [Track], origin: String) -> some View {
-        Button("Play Now", systemImage: MixtapeIcons.play) { onPlay(track, context, origin) }
-        Button("Play Next") { engine.queue.insertNext(track) }
-        Button("Add to Queue") { engine.queue.append(track) }
-
-        Divider()
-
-        // History and "jump back in" carry Discover songs that were played but
-        // never saved. Favouriting one does nothing (a favourite is a flag on a
-        // library row), so the offer for those is to save it.
-        if library.track(id: track.id) == nil {
-            Button("Add to Library", systemImage: "plus") {
-                Task {
-                    await deps.onlineCoordinator.addToLibrary(unsaved: track)
-                    deps.showSavedToast(.library)
-                }
-            }
-        } else {
-            let favoured = library.isFavourited(trackID: track.id)
-            Button(favoured ? "Remove from Liked Songs" : "Add to Liked Songs",
-                   systemImage: favoured ? "heart.slash" : "heart") {
-                deps.toggleFavourite(trackID: track.id)
-            }
-        }
-
-        let targets = library.playlists.filter {
-            !$0.isAllSongs && !$0.isDeleted && !$0.trackIDs.contains(track.id)
-        }
-        if !targets.isEmpty {
-            Menu("Add to Playlist") {
-                ForEach(targets) { playlist in
-                    Button(playlist.name) {
-                        deps.addTrack(id: track.id, toPlaylist: playlist.id)
-                    }
-                }
-            }
-        }
-
-        Divider()
-
-        Button("Go to Artist", systemImage: MixtapeIcons.artist) { onArtist(track.artistName) }
-
-        Divider()
-
-        ShareMenuItems(.track(track))
+        LibrarySongMenu(targets: [track], onPlay: { onPlay(track, context, origin) })
     }
 
     @ViewBuilder

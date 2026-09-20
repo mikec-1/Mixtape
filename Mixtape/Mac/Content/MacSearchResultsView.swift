@@ -284,52 +284,8 @@ struct MacSearchResultsView: View {
         .contextMenu { trackMenu(track) }
     }
 
-    @ViewBuilder
     private func trackMenu(_ track: Track) -> some View {
-        Button("Play", systemImage: "play.fill")     { play(track) }
-        Button("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") {
-            engine.queue.insertNext(track)
-        }
-        Button("Add to Queue", systemImage: "text.append") { engine.queue.append(track) }
-        Divider()
-        Button("Go to Artist", systemImage: "music.mic") {
-            appState.openDiscoverArtist(named: track.artistName)
-        }
-        if !track.albumTitle.isEmpty {
-            Button("Go to Album", systemImage: "square.stack") {
-                appState.openDiscoverAlbum(for: track)
-            }
-        }
-        SongRadioMenuItem(track: track)
-        ShareMenuItems(.track(track))
-        Divider()
-        // A saved album's song has a row but isn't in the library — the album is
-        // what's saved, not it. Same rule and same word as every other surface
-        // that can save a song (see `OnlineSongMenu.saved`): liking it is what
-        // promotes it out of the album, so this is one item, not two.
-        if SavedAlbumsService.shared.albumOnlyIDs.contains(track.id) {
-            Button("Add to Library", systemImage: "plus.circle") {
-                deps.toggleFavourite(trackID: track.id)
-            }
-        } else {
-            let favoured = library.isFavourited(trackID: track.id)
-            Button(favoured ? "Remove from Liked Songs" : "Add to Liked Songs",
-                   systemImage: favoured ? "heart.slash" : "heart") {
-                deps.toggleFavourite(trackID: track.id)
-            }
-        }
-        let targets = library.playlists.filter { !$0.isAllSongs && !$0.isDeleted }
-        if !targets.isEmpty {
-            Menu("Add to Playlist") {
-                ForEach(targets) { pl in
-                    Button(pl.name) { deps.addTrack(id: track.id, toPlaylist: pl.id) }
-                }
-            }
-        }
-        Divider()
-        DownloadMenuItems(track: track, downloads: deps.downloadManager)
-        Divider()
-        Button("Get Info") { appState.showInspector(for: track) }
+        LibrarySongMenu(targets: [track], onPlay: { play(track) })
     }
 
     // MARK: - Actions

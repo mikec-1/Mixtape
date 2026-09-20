@@ -39,7 +39,6 @@ struct DiscoverLandingActions {
     /// in a card.
     var playNext:     ((OnlineTrack) -> Void)? = nil
     var addToQueue:   ((OnlineTrack) -> Void)? = nil
-    var addToLibrary: ((OnlineTrack) -> Void)? = nil
 
     /// Play a whole record. Optional like the verbs above, and for the same
     /// reason plus one more: it needs the album's track list, which is a fetch
@@ -57,6 +56,12 @@ struct DiscoverLandingActions {
     /// Open "Generate a Mix". Optional: a host without an entry point for it
     /// simply doesn't get the tile at the end of "Your mixes".
     var generateMix:  (() -> Void)? = nil
+
+    /// Discover's artist and album pages, reached from a song's own menu. By
+    /// name and by song, because a card only carries credits — turning those
+    /// into a page is a fetch no card should be doing.
+    var openArtistNamed: ((String, OnlineTrack) -> Void)? = nil
+    var openAlbumFor:    ((OnlineTrack) -> Void)?         = nil
 }
 
 // MARK: - Sections
@@ -480,25 +485,18 @@ struct PersonalLandingSections: View {
         }
     }
 
-    /// The song verbs, in the order they read: what happens now, what happens
-    /// next, what happens eventually, then keeping it. Same shape as the
-    /// library's own track menu, so right-clicking a recommendation offers what
-    /// right-clicking anything else does.
-    @ViewBuilder
+    /// The same menu a Discover row gets anywhere else — right-clicking a
+    /// recommendation used to offer five items where a search result offered
+    /// fifteen, which made the landing read as a poster rather than a page.
     private func songMenu(_ song: OnlineTrack, context: [OnlineTrack]) -> some View {
-        Button("Play", systemImage: "play.fill") { actions.playTrack(song, context) }
-        if let playNext = actions.playNext {
-            Button("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") { playNext(song) }
-        }
-        if let addToQueue = actions.addToQueue {
-            Button("Add to Queue", systemImage: "text.append") { addToQueue(song) }
-        }
-        if let addToLibrary = actions.addToLibrary {
-            Divider()
-            Button("Add to Library", systemImage: "plus") { addToLibrary(song) }
-        }
-        Divider()
-        ShareMenuItems(.track(song))
+        OnlineSongMenu(
+            song:         song,
+            onPlay:       { actions.playTrack(song, context) },
+            onPlayNext:   actions.playNext.map   { next in { next(song) } },
+            onAddToQueue: actions.addToQueue.map { add  in { add(song)  } },
+            onOpenAlbum:  actions.openAlbumFor.map { open in { open(song) } },
+            onOpenArtist: actions.openArtistNamed.map { open in { open($0, song) } }
+        )
     }
 
     // MARK: Chrome

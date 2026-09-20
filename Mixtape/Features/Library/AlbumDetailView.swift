@@ -158,6 +158,14 @@ public struct AlbumDetailView: View {
                 .onTapGesture {
                     Task { await engine.play(track: track, in: tracks, source: .named(album.title)) }
                 }
+                // No "Go to Album" — this is that album's page. The rows had no
+                // menu at all before, which made an album the one place a song
+                // couldn't be liked, queued or downloaded.
+                .contextMenu {
+                    LibrarySongMenu(targets: [track], onPlay: {
+                        Task { await engine.play(track: track, in: tracks, source: .named(album.title)) }
+                    }, showsGoToAlbum: false)
+                }
 
                 Divider()
                     .background(Color.mixSeparator)

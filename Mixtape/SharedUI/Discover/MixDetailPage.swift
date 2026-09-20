@@ -283,7 +283,7 @@ struct MixDetailPage: View {
                     .listRowSeparator(.hidden)
             } else {
                 ForEach(Array(shown.enumerated()), id: \.offset) { index, row in
-                    trackRow(row, index: index + 1, in: shown, savedIDs: listing.savedIDs)
+                    trackRow(row, index: index + 1, in: shown)
                 }
             }
         }
@@ -303,8 +303,7 @@ struct MixDetailPage: View {
 
     private var columns: TrackColumns { TrackColumns(width: listWidth) }
 
-    private func trackRow(_ row: MixRow, index: Int,
-                          in shown: [MixRow], savedIDs: Set<UUID>) -> some View {
+    private func trackRow(_ row: MixRow, index: Int, in shown: [MixRow]) -> some View {
         PlaylistTrackRow(
             track:             row.track,
             index:             index,
@@ -325,7 +324,7 @@ struct MixDetailPage: View {
         .listRowInsets(TrackColumns.rowInsets)
         .listRowBackground(Color.clear)
         .listRowSeparator(.hidden)
-        .contextMenu { trackMenu(row, in: shown, savedIDs: savedIDs) }
+        .contextMenu { trackMenu(row, in: shown) }
     }
     #endif
 
@@ -597,29 +596,21 @@ struct MixDetailPage: View {
     }
 
     #if os(iOS)
-    /// The same list of actions the Mac table builds in AppKit, in SwiftUI.
-    @ViewBuilder
-    private func trackMenu(_ row: MixRow, in shown: [MixRow], savedIDs: Set<UUID>) -> some View {
-        Button("Play Now", systemImage: MixtapeIcons.play) { play(row.track, in: shown) }
-        Button("Play Next")   { withOnline(row.track) { await coordinator.playNext($0) } }
-        Button("Add to Queue") { withOnline(row.track) { await coordinator.addToQueue($0) } }
-        Divider()
-        if !savedIDs.contains(row.track.id) {
-            Button("Add to Library", systemImage: MixtapeIcons.add) {
-                addToLibrary([row.track])
-            }
-        }
-        Button(deps.libraryService.isFavourited(trackID: row.track.id)
-               ? "Remove from Liked Songs" : "Add to Liked Songs",
-               systemImage: deps.libraryService.isFavourited(trackID: row.track.id)
-               ? "heart.slash" : "heart") {
-            toggleFavourite(row.track)
-        }
-        Button("Add to Playlist\u{2026}", systemImage: "text.badge.plus") {
-            chooseAPlaylist([row.track])
-        }
-        Divider()
-        ShareMenuItems(.track(row.online))
+    /// The same menu the Mac table builds in AppKit. A mix row is a display
+    /// mirror of a catalogue song, so every item that has to save it first is
+    /// handed back here, where the resolved online copy is in hand.
+    private func trackMenu(_ row: MixRow, in shown: [MixRow]) -> some View {
+        LibrarySongMenu(
+            targets: [row.track],
+            onPlay:         { play(row.track, in: shown) },
+            onPlayNext:     { withOnline($0) { await coordinator.playNext($0) } },
+            onAddToQueue:   { withOnline($0) { await coordinator.addToQueue($0) } },
+            onChoosePlaylist: { chooseAPlaylist($0) },
+            onAddToLibrary:  { addToLibrary($0) },
+            onToggleLike:    { toggleFavourite($0) },
+            onAddToPlaylist: { addToPlaylist($0, $1) },
+            shareItem:       .track(row.online)
+        )
     }
     #endif
 

@@ -169,18 +169,14 @@ struct DiscoverLikedSongsPage: View {
                 .onTapGesture {
                     Task { await engine.play(track: track, in: shown, source: .named("Liked Songs")) }
                 }
+                // Every row here is liked, so the shared menu's own
+                // Add/Remove item is the "Remove from Liked Songs" this page
+                // used to hand-write — and the twelve it was missing come with
+                // it.
                 .contextMenu {
-                    Button("Play Now") {
+                    LibrarySongMenu(targets: [track], onPlay: {
                         Task { await engine.play(track: track, in: shown, source: .named("Liked Songs")) }
-                    }
-                    Button("Play Next")   { engine.queue.insertNext(track) }
-                    Button("Add to Queue") { engine.queue.append(track) }
-                    Divider()
-                    Button("Remove from Liked Songs", systemImage: "heart.slash") {
-                        deps.toggleFavourite(trackID: track.id)
-                    }
-                    Divider()
-                    ShareMenuItems(.track(track))
+                    })
                 }
 
                 Divider()
