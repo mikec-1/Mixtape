@@ -18,6 +18,8 @@ import SwiftUI
 struct AlbumActionsMenu: View {
 
     let album: Album
+    /// Off in a page's "…", which sits beside that page's own Share button.
+    var showsShare = true
 
     @EnvironmentObject private var deps:   AppDependencies
     @EnvironmentObject private var engine: PlaybackEngine
@@ -77,7 +79,7 @@ struct AlbumActionsMenu: View {
         Divider()
 
         goToArtist
-        ShareMenuItems(.album(album))
+        if showsShare { ShareMenuItems(.album(album)) }
     }
 
     // MARK: - Artist

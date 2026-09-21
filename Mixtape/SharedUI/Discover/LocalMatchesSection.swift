@@ -182,6 +182,8 @@ struct LibrarySongRow: View {
         )
         .contentShape(Rectangle())
         .mixTapAction(onPlay)
+        // The same menu the song has on every other library surface.
+        .contextMenu { LibrarySongMenu(targets: [track], onPlay: onPlay) }
         .mixHoverCursor { isHovered = $0 }
         .mixAnimation(.easeOut(duration: 0.12), value: isHovered)
     }

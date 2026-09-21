@@ -621,7 +621,7 @@ struct IOSDiscoverArtistPage: View {
             }
             ShareHeroButton(.artist(artist))
             // The card's long-press menu, for anyone who's already on the page.
-            Menu { OnlineCollectionMenu(.artist(artist)) } label: {
+            Menu { OnlineCollectionMenu(.artist(artist), showsShare: false) } label: {
                 HeroCircleLabel(systemImage: "ellipsis")
             }
         }
@@ -776,8 +776,15 @@ struct IOSDiscoverAlbumPage: View {
                             .foregroundStyle(Color.mixTextSecondary)
                         Text(album.title).font(.system(size: MixFontScale.size(24), weight: .bold))
                             .foregroundStyle(Color.mixTextPrimary).lineLimit(3)
-                        Text(album.artistName).font(.system(size: MixFontScale.size(14)))
-                            .foregroundStyle(Color.mixTextSecondary)
+                        TappableArtistRow(targets: ImportService.creditedArtists(from: album.artistName).map { name in
+                            (name, {
+                                Task {
+                                    if let a = await deps.itunesClient.resolveArtist(name: name, trackID: nil) {
+                                        onOpenArtist(a)
+                                    }
+                                }
+                            })
+                        }, font: .system(size: MixFontScale.size(14)))
                         HStack(spacing: 10) {
                             AlbumSaveButton(title: album.title, artistName: album.artistName,
                                             onSave: { Task { await coordinator.addAlbumToLibrary(tracks) } })
@@ -789,7 +796,7 @@ struct IOSDiscoverAlbumPage: View {
                             .disabled(tracks.isEmpty)
                             ShareHeroButton(.album(album))
                             // The card's long-press menu, for anyone who's already on the page.
-                            Menu { OnlineCollectionMenu(.album(album)) } label: {
+                            Menu { OnlineCollectionMenu(.album(album), showsShare: false) } label: {
                                 HeroCircleLabel(systemImage: "ellipsis")
                             }
                         }

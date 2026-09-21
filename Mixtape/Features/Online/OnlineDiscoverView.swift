@@ -705,7 +705,7 @@ struct OnlineDiscoverView: View {
                       alignment: .leading,
                       spacing: 18) {
                 ForEach(shown) { album in
-                    AlbumCard(album: album) { path.append(.album(album)) }
+                    AlbumCard(album: album, onOpenArtist: { openArtist(named: $0) }) { path.append(.album(album)) }
                         .contextMenu { OnlineCollectionMenu(.album(album)) }
                 }
             }
@@ -1099,7 +1099,7 @@ struct OnlineDiscoverView: View {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 132, maximum: 166), spacing: 16)],
                       alignment: .leading, spacing: 18) {
                 ForEach(shown) { album in
-                    MixAlbumCard(album: album) { path.append(.album(album)) }
+                    MixAlbumCard(album: album, onOpenArtist: { openArtist(named: $0) }) { path.append(.album(album)) }
                         .contextMenu { OnlineCollectionMenu(.album(album)) }
                 }
             }
@@ -1202,7 +1202,7 @@ struct OnlineDiscoverView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(alignment: .top, spacing: 16) {
                     ForEach(browse.newReleases) { album in
-                        AlbumCard(album: album) { path.append(.album(album)) }
+                        AlbumCard(album: album, onOpenArtist: { openArtist(named: $0) }) { path.append(.album(album)) }
                             .frame(width: 150)
                             .contextMenu { OnlineCollectionMenu(.album(album)) }
                     }
@@ -1819,6 +1819,7 @@ private struct ArtistCircle: View {
 
 private struct AlbumCard: View {
     let album: OnlineAlbum
+    var onOpenArtist: ((String) -> Void)? = nil
     let onTap: () -> Void
     @State private var hovering = false
 
@@ -1839,9 +1840,9 @@ private struct AlbumCard: View {
             Text(album.title)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(Color.mixTextPrimary).lineLimit(1)
-            Text(album.artistName)
-                .font(.system(size: 11))
-                .foregroundStyle(Color.mixTextSecondary).lineLimit(1)
+            ClickableArtistLine(names: ImportService.creditedArtists(from: album.artistName),
+                                font: .system(size: 11), color: Color.mixTextSecondary,
+                                onOpen: onOpenArtist)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
@@ -1958,7 +1959,7 @@ private struct DiscoverArtistPage: View {
             }
             ShareHeroButton(.artist(artist))
             // The card's right-click menu, for anyone who's already on the page.
-            Menu { OnlineCollectionMenu(.artist(artist)) } label: {
+            Menu { OnlineCollectionMenu(.artist(artist), showsShare: false) } label: {
                 HeroCircleLabel(systemImage: "ellipsis")
             }
             .menuStyle(.button)
@@ -2152,8 +2153,15 @@ private struct DiscoverAlbumPage: View {
                             .foregroundStyle(Color.mixTextSecondary)
                         Text(album.title).font(.system(size: 30, weight: .bold))
                             .foregroundStyle(Color.mixTextPrimary).lineLimit(3)
-                        Text(album.artistName).font(.system(size: 14))
-                            .foregroundStyle(Color.mixTextSecondary)
+                        ClickableArtistLine(names: ImportService.creditedArtists(from: album.artistName),
+                                            font: .system(size: 14), color: Color.mixTextSecondary,
+                                            onOpen: { name in
+                                                Task {
+                                                    if let a = await deps.itunesClient.resolveArtist(name: name, trackID: nil) {
+                                                        onOpenArtist(a)
+                                                    }
+                                                }
+                                            })
                         HStack(spacing: 10) {
                             AlbumSaveButton(title: album.title, artistName: album.artistName,
                                             onSave: { Task { await coordinator.addAlbumToLibrary(tracks) } })
@@ -2165,7 +2173,7 @@ private struct DiscoverAlbumPage: View {
                             .disabled(tracks.isEmpty)
                             ShareHeroButton(.album(album))
                             // The card's right-click menu, for anyone who's already on the page.
-                            Menu { OnlineCollectionMenu(.album(album)) } label: {
+                            Menu { OnlineCollectionMenu(.album(album), showsShare: false) } label: {
                                 HeroCircleLabel(systemImage: "ellipsis")
                             }
                             .menuStyle(.button)

@@ -24,6 +24,7 @@ struct MixtapeApp: App {
         // created at all — more reliable than CommandGroup(replacing: .toolbar),
         // which only removes them after a multi-second delay on first launch.
         NSWindow.allowsAutomaticWindowTabbing = false
+        MixSheetCorners.install()
         #endif
     }
 

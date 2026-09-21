@@ -459,6 +459,38 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
     /// normal flow so the resolver re-picks. Flashes whether it found a different
     /// upload or the same one was all it had.
     public func reResolveAndPlay(_ result: OnlineTrack, context: [OnlineTrack] = []) async {
+        await reResolve(result) { await self.playRespectingRejections(result, context: context) }
+    }
+
+    /// The live-session slot a queue row or the playing song re-resolves
+    /// through. Nil outside an online session and for a slot playing from the
+    /// user's own file — there is no source there to swap.
+    public func reResolvableSlot(for track: Track, at index: Int? = nil) -> Int? {
+        guard hasActiveOnlineSession else { return nil }
+        let slot = [index, playingSlot].compactMap { $0 }.first {
+            contextDisplayTracks.indices.contains($0) && contextDisplayTracks[$0].id == track.id
+        }
+        guard let slot, context.indices.contains(slot),
+              localSubstitutes[context[slot].id] == nil else { return nil }
+        return slot
+    }
+
+    /// "Wrong version" from the queue or the player. The playing song is fetched
+    /// again in place, so the queue around it stays; one further down forgets
+    /// its source and picks another when playback reaches it.
+    public func reResolve(slot: Int) async {
+        guard context.indices.contains(slot) else { return }
+        let result = context[slot]
+        guard slot == playingSlot else {
+            if let previous = videoIDIndex[result.id] { reject(previous, for: result.id) }
+            clearCache(for: result)
+            flashStatus("“\(result.title)” will use a different version when it comes up.")
+            return
+        }
+        await reResolve(result) { await self.playFromContext(at: slot, skippingUnfindable: false) }
+    }
+
+    private func reResolve(_ result: OnlineTrack, replay: () async -> Void) async {
         let previousVideoID = videoIDIndex[result.id]
 
         // Record the rejection before searching again, not after. Clearing the
@@ -476,7 +508,7 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
                     ? "Looking for another version of “\(result.title)” (\(refused.count) ruled out)…"
                     : "Finding a different source for “\(result.title)”…")
 
-        await playRespectingRejections(result, context: context)
+        await replay()
 
         // The play path records the freshly-resolved videoID. Compare against the
         // one we just cleared to tell the user whether anything actually changed.
@@ -488,7 +520,7 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
         if newVideoID == nil, !refused.isEmpty {
             clearRejections(for: result.id)
             clearCache(for: result)
-            await playRespectingRejections(result, context: context)
+            await replay()
             newVideoID = videoIDIndex[result.id]
             if newVideoID != nil {
                 flashStatus("That's every version we could find for “\(result.title)” — back to the first.")

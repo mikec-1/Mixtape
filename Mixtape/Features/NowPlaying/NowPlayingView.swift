@@ -337,6 +337,13 @@ public struct NowPlayingView: View {
                 }
             }
 
+            if let track = queueService.currentTrack,
+               let slot = deps.onlineCoordinator.reResolvableSlot(for: track) {
+                Button { Task { await deps.onlineCoordinator.reResolve(slot: slot) } } label: {
+                    Label("Wrong Version? Re-resolve", systemImage: "arrow.triangle.2.circlepath")
+                }
+            }
+
             Divider()
 
             Menu("Playback Speed") {
@@ -1254,6 +1261,11 @@ private struct UpNextSheet: View {
                     }
                 } label: { Label("Add to Liked Songs", systemImage: "heart") }
             }
+            if let slot = deps.onlineCoordinator.reResolvableSlot(for: item.track, at: item.index) {
+                Button { Task { await deps.onlineCoordinator.reResolve(slot: slot) } } label: {
+                    Label("Wrong Version? Re-resolve", systemImage: "arrow.triangle.2.circlepath")
+                }
+            }
             Button(role: .destructive) { removeRow(item) } label: {
                 Label("Remove from queue", systemImage: "minus.circle")
             }
@@ -1590,32 +1602,46 @@ struct GetInfoSheet: View {
         // It's a metadata panel, so it reads as one surface: the artwork, then
         // the facts, separated by hairlines rather than by cards.
         MixSheet(title: "Song Info", size: .medium) {
+            #if os(macOS)
+            // Side by side on the Mac: stacked, the artwork alone pushed the
+            // facts below the fold of a sheet that has the width to spare.
+            HStack(alignment: .top, spacing: 20) {
+                artworkHeader(track)
+                details(track)
+            }
+            #else
             VStack(alignment: .leading, spacing: 22) {
                 artworkHeader(track)
                     .frame(maxWidth: .infinity)
+                details(track)
+            }
+            #endif
+        }
+    }
 
-                infoGroup {
-                    row("Title", track.title)
-                    artistRow(track)
-                    if !track.albumTitle.isEmpty { row("Album", track.albumTitle) }
-                    row("Duration", formatTime(track.duration))
-                    if let year = track.year { row("Year", String(year)) }
-                    if let genre = track.genre, !genre.isEmpty { row("Genre", genre) }
-                    if let tn = track.trackNumber { row("Track", String(tn)) }
-                    if let composer = track.composer, !composer.isEmpty { row("Composer", composer) }
-                    row("Source", isOnline ? "Streaming (Discover)" : "Library")
-                }
+    private func details(_ track: Track) -> some View {
+        VStack(alignment: .leading, spacing: 22) {
+            infoGroup {
+                row("Title", track.title)
+                artistRow(track)
+                if !track.albumTitle.isEmpty { row("Album", track.albumTitle) }
+                row("Duration", formatTime(track.duration))
+                if let year = track.year { row("Year", String(year)) }
+                if let genre = track.genre, !genre.isEmpty { row("Genre", genre) }
+                if let tn = track.trackNumber { row("Track", String(tn)) }
+                if let composer = track.composer, !composer.isEmpty { row("Composer", composer) }
+                row("Source", isOnline ? "Streaming (Discover)" : "Library")
+            }
 
-                if let (format, size) = fileInfo(track) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("FILE")
-                            .font(.system(size: MixFontScale.size(10.5), weight: .semibold))
-                            .foregroundStyle(Color.mixTextTertiary)
-                            .tracking(0.8)
-                        infoGroup {
-                            row("Format", format)
-                            if let size { row("Size", size) }
-                        }
+            if let (format, size) = fileInfo(track) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("FILE")
+                        .font(.system(size: MixFontScale.size(10.5), weight: .semibold))
+                        .foregroundStyle(Color.mixTextTertiary)
+                        .tracking(0.8)
+                    infoGroup {
+                        row("Format", format)
+                        if let size { row("Size", size) }
                     }
                 }
             }

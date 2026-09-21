@@ -244,7 +244,7 @@ struct MacAlbumDetailView: View {
                 AlbumDownloadButton(ids: album.trackIDs, downloads: deps.downloadManager, library: library)
                 ShareHeroButton(.album(album))
                 // Same overflow as the iPhone album page and the playlist page.
-                Menu { AlbumActionsMenu(album: album) } label: {
+                Menu { AlbumActionsMenu(album: album, showsShare: false) } label: {
                     HeroCircleLabel(systemImage: "ellipsis")
                 }
                 .menuStyle(.button)

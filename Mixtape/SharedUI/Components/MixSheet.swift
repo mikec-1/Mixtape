@@ -29,6 +29,36 @@
 
 import SwiftUI
 
+#if os(macOS)
+// MARK: - Corners
+
+/// Tahoe gives every sheet the 26pt corner of a toolbar window, which on a
+/// small modal reads as an iOS card. `presentationCornerRadius` is ignored on
+/// the Mac and AppKit has no public knob, so this calls NSWindow's private
+/// `_setCornerRadius:`. If that selector ever disappears the lookup fails and
+/// sheets quietly keep the system corner.
+enum MixSheetCorners {
+    static let radius: CGFloat = 8
+
+    /// Installed once at launch. Covers every sheet, MixSheet or not: a sheet
+    /// becomes key before it is positioned or drawn, so there is no flash.
+    static func install() {
+        NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification,
+                                               object: nil, queue: .main) { note in
+            guard let window = note.object as? NSWindow else { return }
+            MainActor.assumeIsolated {
+                guard window.isSheet else { return }
+                let sel = Selector(("_setCornerRadius:"))
+                guard let method = class_getInstanceMethod(object_getClass(window), sel) else { return }
+                typealias Setter = @convention(c) (AnyObject, Selector, CGFloat) -> Void
+                unsafeBitCast(method_getImplementation(method), to: Setter.self)(window, sel, radius)
+                window.invalidateShadow()
+            }
+        }
+    }
+}
+#endif
+
 // MARK: - Size
 
 /// Named sizes, so callers stop hard-coding frames.
@@ -127,6 +157,9 @@ struct MixSheet<Content: View, Footer: View>: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var edges = MixScrollEdges()
+    #if os(macOS)
+    @State private var contentHeight: CGFloat = 0
+    #endif
 
     private let scrollSpace = "mixSheetScroll"
 
@@ -212,6 +245,9 @@ struct MixSheet<Content: View, Footer: View>: View {
                         .padding(.horizontal, MixSheetMetrics.margin)
                         .padding(.vertical, MixSheetMetrics.contentVertical)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        #if os(macOS)
+                        .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { contentHeight = $0 }
+                        #endif
                         .background(
                             GeometryReader { inner in
                                 let f = inner.frame(in: .named(scrollSpace))
@@ -226,12 +262,15 @@ struct MixSheet<Content: View, Footer: View>: View {
                         )
                 }
                 .coordinateSpace(name: scrollSpace)
+                .scrollBounceBehavior(.basedOnSize)
                 .onPreferenceChange(MixScrollEdgeKey.self) { edges = $0 }
             }
             #if os(macOS)
             // The sheet is bounded, not fixed: it takes the height its content
             // needs and stops at `maxHeight`, where the scroll view takes over.
-            .frame(maxHeight: .infinity)
+            // A GeometryReader has no height of its own, so without the ideal
+            // every sheet opened at `minHeight` and scrolled whatever didn't fit.
+            .frame(minHeight: 0, idealHeight: contentHeight, maxHeight: .infinity)
             #endif
         } else {
             content()

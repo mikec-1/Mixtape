@@ -29,9 +29,9 @@ struct DownloadMenuItems: View {
         #if os(macOS)
         // Whether there's a file to show is a question about the disk, not about
         // how the file got there — an imported song, a downloaded one and a
-        // cached Discover play all answer yes. `resolve` stats the disk, which is
-        // why it's asked here (once, when the menu opens) and not per row.
-        if let url = AudioPaths.resolve(localPath: track.file.localPath) {
+        // cached Discover play all answer yes. `fileOnDisk` stats the disk, which
+        // is why it's asked here (once, when the menu opens) and not per row.
+        if let url = track.fileOnDisk {
             Divider()
             Button("Show in Finder", systemImage: "folder") {
                 NSWorkspace.shared.activateFileViewerSelecting([url])
@@ -122,3 +122,14 @@ struct BulkDownloadMenuItems: View {
         }
     }
 }
+
+#if os(macOS)
+extension Track {
+    /// The file "Show in Finder" reveals. A download lives in the offline store
+    /// under its id and leaves `localPath` empty, so asking `localPath` alone
+    /// hid the item for every downloaded Discover or Spotify song.
+    var fileOnDisk: URL? {
+        AudioPaths.resolve(localPath: file.localPath) ?? OfflineStore.shared.url(for: id)
+    }
+}
+#endif

@@ -30,7 +30,12 @@ struct OnlineCollectionMenu: View {
     }
 
     let collection: Collection
-    init(_ collection: Collection) { self.collection = collection }
+    /// Off in a page's "…", which sits beside that page's own Share button.
+    let showsShare: Bool
+    init(_ collection: Collection, showsShare: Bool = true) {
+        self.collection = collection
+        self.showsShare = showsShare
+    }
 
     @EnvironmentObject private var deps: AppDependencies
     #if os(macOS)
@@ -64,10 +69,12 @@ struct OnlineCollectionMenu: View {
             albumLibraryItems(album)
             Divider()
             goToArtist(ImportService.creditedArtists(from: album.artistName))
-            ShareMenuItems(.album(album))
+            if showsShare { ShareMenuItems(.album(album)) }
         case .artist(let artist):
-            Divider()
-            ShareMenuItems(.artist(artist))
+            if showsShare {
+                Divider()
+                ShareMenuItems(.artist(artist))
+            }
         case .mix(let mix):
             Divider()
             mixLibraryItems(mix)

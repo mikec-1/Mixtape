@@ -451,7 +451,9 @@ struct PersonalLandingSections: View {
                       alignment: .leading, spacing: 2) {
                 ForEach(songs) { song in
                     MixSongRow(song: song,
-                               isResolving: resolvingID == song.id) {
+                               isResolving: resolvingID == song.id,
+                               onOpenAlbum: actions.openAlbumFor.map { open in { open(song) } },
+                               onOpenArtist: actions.openArtistNamed.map { open in { open($0, song) } }) {
                         actions.playTrack(song, songs)
                     }
                     .contextMenu { songMenu(song, context: songs) }
@@ -833,6 +835,10 @@ struct MixSongRow: View {
     /// artwork every other song list in the app draws, because it's the same
     /// wait — the landing was simply the one page that never said so.
     var isResolving: Bool = false
+    /// Where the names go, as on every other Mac song row. A phone row stays
+    /// one tap target.
+    var onOpenAlbum:  (() -> Void)?       = nil
+    var onOpenArtist: ((String) -> Void)? = nil
     let onPlay: () -> Void
 
     @State private var isHovered = false
@@ -904,16 +910,29 @@ struct MixSongRow: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 5) {
+                    #if os(macOS)
+                    MixLinkText(text: song.title,
+                                font: .system(size: MixFontScale.size(13.5), weight: .medium),
+                                color: isCurrent ? Color.mixPrimary : Color.mixTextPrimary,
+                                target: onOpenAlbum)
+                    #else
                     Text(song.title)
                         .font(.system(size: MixFontScale.size(13.5), weight: .medium))
                         .foregroundStyle(isCurrent ? Color.mixPrimary : Color.mixTextPrimary)
                         .lineLimit(1)
+                    #endif
                     if song.isExplicit { MixExplicitBadge() }
                 }
-                Text(song.artistName)
-                    .font(.system(size: MixFontScale.size(12)))
-                    .foregroundStyle(Color.mixTextSecondary)
-                    .lineLimit(1)
+                #if os(macOS)
+                if let onOpenArtist {
+                    MixArtistLine(targets: song.displayArtists.map { name in (name, { onOpenArtist(name) }) },
+                                  font: .system(size: MixFontScale.size(12)))
+                } else {
+                    artistText(song.artistName)
+                }
+                #else
+                artistText(song.artistName)
+                #endif
             }
 
             Spacer(minLength: 8)
@@ -933,6 +952,13 @@ struct MixSongRow: View {
         // Inside the label, so the button's hit region is the whole row —
         // including the gap the `Spacer` opens up between title and duration.
         .contentShape(Rectangle())
+    }
+
+    private func artistText(_ name: String) -> some View {
+        Text(name)
+            .font(.system(size: MixFontScale.size(12)))
+            .foregroundStyle(Color.mixTextSecondary)
+            .lineLimit(1)
     }
 
     private static func formatted(_ seconds: TimeInterval) -> String {
@@ -995,6 +1021,8 @@ struct MixArtistBubble: View {
 struct MixAlbumCard: View {
 
     let album: OnlineAlbum
+    /// The credit as links. Mac only, like the song rows.
+    var onOpenArtist: ((String) -> Void)? = nil
     let onOpen: () -> Void
 
     @State private var isHovered = false
@@ -1025,10 +1053,16 @@ struct MixAlbumCard: View {
                     .font(.system(size: MixFontScale.size(13.5), weight: .semibold))
                     .foregroundStyle(Color.mixTextPrimary)
                     .lineLimit(1)
-                Text(album.artistName)
-                    .font(.system(size: MixFontScale.size(12)))
-                    .foregroundStyle(Color.mixTextTertiary)
-                    .lineLimit(1)
+                #if os(macOS)
+                if let onOpenArtist {
+                    MixArtistLine(targets: ImportService.creditedArtists(from: album.artistName)
+                                    .map { name in (name, { onOpenArtist(name) }) },
+                                  font: .system(size: MixFontScale.size(12)),
+                                  color: Color.mixTextTertiary)
+                } else { artistText }
+                #else
+                artistText
+                #endif
             }
             .frame(width: side, alignment: .leading)
         }
@@ -1041,6 +1075,13 @@ struct MixAlbumCard: View {
         .mixTapAction(onOpen)
         .mixHoverCursor { isHovered = $0 }
         .mixAnimation(.easeOut(duration: 0.16), value: isHovered)
+    }
+
+    private var artistText: some View {
+        Text(album.artistName)
+            .font(.system(size: MixFontScale.size(12)))
+            .foregroundStyle(Color.mixTextTertiary)
+            .lineLimit(1)
     }
 }
 

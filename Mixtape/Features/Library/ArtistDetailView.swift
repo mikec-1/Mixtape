@@ -114,7 +114,7 @@ public struct ArtistDetailView: View {
 
                 // The overflow the album and playlist pages already had. This
                 // was the only detail page you couldn't queue or download from.
-                Menu { ArtistActionsMenu(name: artist.name) } label: {
+                Menu { ArtistActionsMenu(name: artist.name, showsShare: false) } label: {
                     HeroCircleLabel(systemImage: "ellipsis")
                 }
                 #if os(macOS)

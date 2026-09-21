@@ -891,7 +891,7 @@ extension NativeTrackTable {
             // Show in Finder — only when there is a file to show. No dead row for
             // a stream-only song; the SwiftUI menus draw the same item from
             // `DownloadMenuItems`.
-            if !many, let url = AudioPaths.resolve(localPath: track.file.localPath) {
+            if !many, let url = track.fileOnDisk {
                 let item = NSMenuItem(title: "Show in Finder",
                                       action: #selector(menuShowInFinder(_:)), keyEquivalent: "")
                 item.target = self

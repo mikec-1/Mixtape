@@ -325,7 +325,18 @@ final class MacAppState: ObservableObject {
     /// query should survive a section change, because there the section change
     /// *is* the result the user asked for. Cleared by the next edit or the next
     /// move to any other section.
-    @Published var searchInLibrary: Bool = false
+    ///
+    /// Show all borrows the Songs tab for the query. Ending the handoff gives
+    /// back the tab the user had, unless they picked another meanwhile — the tab
+    /// is remembered, so a borrowed Songs used to become the Library's new home.
+    @Published var searchInLibrary: Bool = false {
+        didSet {
+            guard oldValue, !searchInLibrary, let tab = tabBeforeShowAll else { return }
+            tabBeforeShowAll = nil
+            if libraryTab == .songs { libraryTab = tab }
+        }
+    }
+    private var tabBeforeShowAll: LibraryTab?
 
     /// Whether the query has been *asked for* — Return, or a row picked out of
     /// the suggestions panel — rather than merely typed.
@@ -375,6 +386,7 @@ final class MacAppState: ObservableObject {
         // page reads `activeSearchText` like everything else, and a query that
         // stopped counting on the way over would arrive as no query at all.
         searchCommitted = true
+        if !searchInLibrary { tabBeforeShowAll = libraryTab }
         searchInLibrary = true
         libraryTab      = .songs
         selection       = .library

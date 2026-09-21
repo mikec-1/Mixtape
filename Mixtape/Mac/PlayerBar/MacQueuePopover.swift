@@ -416,6 +416,12 @@ private struct QueuePanelRow: View {
                             onPlay: { playRow() },
                             removeFrom: onRemove == nil ? nil : "Queue",
                             onRemove:   onRemove.map { remove in { _ in remove() } })
+            if let slot = coordinator.reResolvableSlot(for: track, at: index) {
+                Divider()
+                Button("Wrong Version? Re-resolve", systemImage: "arrow.triangle.2.circlepath") {
+                    Task { await coordinator.reResolve(slot: slot) }
+                }
+            }
         }
     }
 

@@ -127,7 +127,7 @@ public struct AlbumDetailView: View {
             // The overflow, matching the playlist page's: an album page with no
             // "…" was the only detail page you couldn't queue or leave for its
             // artist from.
-            Menu { AlbumActionsMenu(album: album) } label: {
+            Menu { AlbumActionsMenu(album: album, showsShare: false) } label: {
                 HeroCircleLabel(systemImage: "ellipsis")
             }
             #if os(macOS)

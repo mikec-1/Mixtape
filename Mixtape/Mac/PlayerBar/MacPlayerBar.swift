@@ -259,6 +259,11 @@ struct MacPlayerBar: View {
         if let go = artistTarget(for: track) {
             Button("Go to Artist", systemImage: "music.mic", action: go)
         }
+        if let slot = coordinator.reResolvableSlot(for: track) {
+            Button("Wrong Version? Re-resolve", systemImage: "arrow.triangle.2.circlepath") {
+                Task { await coordinator.reResolve(slot: slot) }
+            }
+        }
         Divider()
         // A Discover song keeps its Deezer id, which makes the shorter link.
         if let online = coordinator.currentOnlineTrack, !isInLibrary(track) {

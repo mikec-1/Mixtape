@@ -27,6 +27,8 @@ struct ArtistActionsMenu: View {
     /// for artists with no library row of their own, which is the only artwork
     /// those have.
     var artwork: ShareItem.Artwork? = nil
+    /// Off in a page's "…", which sits beside that page's own Share button.
+    var showsShare = true
 
     @EnvironmentObject private var deps:   AppDependencies
     @EnvironmentObject private var engine: PlaybackEngine
@@ -82,7 +84,7 @@ struct ArtistActionsMenu: View {
             iosAppState.openOnlineArtist(name: name)
             #endif
         }
-        ShareMenuItems(shareItem)
+        if showsShare { ShareMenuItems(shareItem) }
     }
 
     // MARK: - Songs
