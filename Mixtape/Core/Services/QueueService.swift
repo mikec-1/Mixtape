@@ -613,7 +613,12 @@ public final class QueueService: ObservableObject {
     /// `manual` marks it as the user's own choice. Everything that reaches this
     /// is a menu item, so it defaults to true.
     public func insertNext(_ track: Track, manual: Bool = true) {
-        insert([track], at: min(max(currentIndex + 1, 0), queue.count),
+        insertNext(contentsOf: [track], manual: manual)
+    }
+
+    /// A whole album or mix next, in its running order, as one change.
+    public func insertNext(contentsOf tracks: [Track], manual: Bool = true) {
+        insert(tracks, at: min(max(currentIndex + 1, 0), queue.count),
                lane: manual ? .manual : .context)
     }
 

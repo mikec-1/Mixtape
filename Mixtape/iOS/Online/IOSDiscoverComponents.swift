@@ -347,9 +347,7 @@ struct IOSArtistCircle: View {
         .frame(width: 112)
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
-        .contextMenu {
-            ShareMenuItems(.artist(artist))
-        }
+        .contextMenu { OnlineCollectionMenu(.artist(artist)) }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
     }
@@ -676,7 +674,7 @@ struct IOSDiscoverArtistPage: View {
             LazyVGrid(columns: albumColumns, alignment: .leading, spacing: 18) {
                 ForEach(shown) { album in
                     IOSAlbumCard(album: album) { onOpenAlbum(album) }
-                        .contextMenu { ShareMenuItems(.album(album)) }
+                        .contextMenu { OnlineCollectionMenu(.album(album)) }
                 }
             }
             if albums.count > collapsedAlbumCount {
@@ -764,13 +762,6 @@ struct IOSDiscoverAlbumPage: View {
     @State private var tracks: [OnlineTrack] = []
     @State private var loading = true
 
-    /// Adding an album adds its songs; ones already in the library are skipped.
-    private func importAll() async {
-        for song in tracks where deps.libraryService.track(id: song.stableTrackID) == nil {
-            await coordinator.addToLibrary(song, albumOnly: true)
-        }
-    }
-
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
@@ -785,11 +776,11 @@ struct IOSDiscoverAlbumPage: View {
                             .foregroundStyle(Color.mixTextSecondary)
                         HStack(spacing: 10) {
                             AlbumSaveButton(title: album.title, artistName: album.artistName,
-                                            onSave: { Task { await importAll() } })
+                                            onSave: { Task { await coordinator.addAlbumToLibrary(tracks) } })
                             AlbumDownloadButton(ids: tracks.map(\.stableTrackID), downloads: deps.downloadManager,
                                                 library: deps.libraryService) {
                                 SavedAlbumsService.shared.setSaved(true, title: album.title, artistName: album.artistName)
-                                await importAll()
+                                await coordinator.addAlbumToLibrary(tracks)
                             }
                             .disabled(tracks.isEmpty)
                             ShareHeroButton(.album(album))

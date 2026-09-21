@@ -143,13 +143,7 @@ struct PersonalLandingSections: View {
                               alignment: .leading, spacing: 18) {
                         ForEach(shown) { artist in
                             MixArtistBubble(artist: artist) { actions.openArtist(artist) }
-                                .contextMenu {
-                                    Button("Open Artist", systemImage: MixtapeIcons.artist) {
-                                        actions.openArtist(artist)
-                                    }
-                                    Divider()
-                                    ShareMenuItems(.artist(artist))
-                                }
+                                .contextMenu { OnlineCollectionMenu(.artist(artist)) }
                         }
                     }
                 }
@@ -418,10 +412,7 @@ struct PersonalLandingSections: View {
                       isResolving: mix.tracks.first.map { resolvingID == $0.id } ?? false,
                       onOpen: { actions.openMix(mix) },
                       onPlay: { actions.playMix(mix) })
-            .contextMenu {
-                Button("Play", systemImage: "play.fill") { actions.playMix(mix) }
-                Button("Open Mix", systemImage: "square.stack") { actions.openMix(mix) }
-            }
+            .contextMenu { OnlineCollectionMenu(.mix(mix)) }
     }
 
     /// The heading is the bare phrase and the artist is named by the card, so
@@ -435,21 +426,7 @@ struct PersonalLandingSections: View {
                 onOpenArtist: { actions.openArtist(release.artist) },
                 onPlay: actions.playAlbum.map { play in { await play(release.album) } }
             )
-            .contextMenu {
-                if let play = actions.playAlbum {
-                    Button("Play", systemImage: "play.fill") {
-                        Task { await play(release.album) }
-                    }
-                }
-                Button("Open Album", systemImage: MixtapeIcons.album) {
-                    actions.openAlbum(release.album)
-                }
-                Button("Open Artist", systemImage: MixtapeIcons.artist) {
-                    actions.openArtist(release.artist)
-                }
-                Divider()
-                ShareMenuItems(.album(release.album))
-            }
+            .contextMenu { OnlineCollectionMenu(.album(release.album)) }
         }
     }
 

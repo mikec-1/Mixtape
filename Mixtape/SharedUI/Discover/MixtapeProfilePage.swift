@@ -143,10 +143,7 @@ struct MixtapeProfilePage: View {
                               isResolving: mix.tracks.first.map { resolvingID == $0.id } ?? false,
                               onOpen: { onOpenMix(mix) },
                               onPlay: { onPlayMix(mix) })
-                    .contextMenu {
-                        Button("Play", systemImage: "play.fill") { onPlayMix(mix) }
-                        Button("Open Mix", systemImage: "square.stack") { onOpenMix(mix) }
-                    }
+                    .contextMenu { OnlineCollectionMenu(.mix(mix)) }
             }
         }
     }

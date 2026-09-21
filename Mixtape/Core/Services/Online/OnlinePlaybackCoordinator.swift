@@ -1856,6 +1856,15 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
         )
     }
 
+    /// Save a whole Discover album: its songs join as album-only rows, so the
+    /// record is held without every song on it counting as liked. Songs already
+    /// in the library are left as they are.
+    public func addAlbumToLibrary(_ tracks: [OnlineTrack]) async {
+        for song in tracks where importService.libraryService.track(id: song.stableTrackID) == nil {
+            await addToLibrary(song, albumOnly: true)
+        }
+    }
+
     // MARK: - Queue (Discover context menu)
 
     /// Insert `result` immediately after the current track.
@@ -1874,6 +1883,19 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
         await enqueue(result) { [weak self] track in
             self?.engine.queue.insertNext(track)
         }
+    }
+
+    /// Play a whole album, artist or mix next — the bulk form of `playNext(_:)`,
+    /// kept out of a loop for the reasons `addToQueue(_ results:)` gives.
+    public func playNext(_ results: [OnlineTrack]) async {
+        guard !results.isEmpty else { return }
+        if hasActiveOnlineSession {
+            insertIntoContext(contentsOf: results, lane: .manual,
+                              at: min(max(queueAnchor + 1, 0), context.count))
+            return
+        }
+        engine.queue.insertNext(contentsOf: results.map { $0.asTrack(deviceID: deviceID) })
+        await fillQueueArtwork(for: results)
     }
 
     /// Append `result` to the end of the queue (online context or local queue —
@@ -2125,9 +2147,10 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
     /// display mirror — the bulk form of `insertIntoContext(_:at:prefetchNow:lane:)`.
     /// Takes what it is given: a song asked for twice is queued twice, and
     /// callers that don't want that (suggestions) filter first.
-    private func insertIntoContext(contentsOf results: [OnlineTrack], lane: QueueOrigin) {
+    private func insertIntoContext(contentsOf results: [OnlineTrack], lane: QueueOrigin,
+                                   at index: Int? = nil) {
         guard !results.isEmpty else { return }
-        let at = contextInsertionIndex(for: lane)
+        let at = index ?? contextInsertionIndex(for: lane)
         contextLanes = alignedContextLanes()
         context.insert(contentsOf: results, at: at)
         contextDisplayTracks.insert(contentsOf: results.map { $0.asTrack(deviceID: deviceID) },

@@ -950,20 +950,9 @@ struct MixDetailPage: View {
     }
 
     private func performSave() {
-        let saved = deps.importService.saveOnlinePlaylist(
-            id:          mix.savedPlaylistID,
-            name:        mix.title,
-            description: mix.subtitle,
-            coverURLs:   mix.covers,
-            origin:      .mix,
-            ownerName:   BylineMember.mixtape.name,
-            tracks:      mix.tracks,
-            // The covers this page fetched to draw its own list. Handing them
-            // over is what stops every row going grey the moment it becomes a
-            // library row.
-            coverBytes:  artwork,
-            coverBand:   .init(title: mix.title, rgb: MixCoverStyle.rgb(for: mix.id))
-        )
+        // The covers this page fetched to draw its own list. Handing them over
+        // is what stops every row going grey the moment it becomes a library row.
+        let saved = deps.importService.saveMix(mix, coverBytes: artwork)
 
         if saved == nil {
             optimisticallySaved = false
@@ -1010,6 +999,25 @@ struct MixDetailPage: View {
         let minutes = (total % 3600) / 60
         if hours > 0 { return "\(hours) hr \(minutes) min" }
         return "\(max(minutes, 1)) min"
+    }
+}
+
+// MARK: - Saving
+
+extension ImportService {
+
+    /// Keep a mix as a playlist — the page's + button and the card's menu.
+    /// Nil when none of its songs could be saved.
+    func saveMix(_ mix: PersonalMix, coverBytes: [String: Data] = [:]) -> Playlist? {
+        saveOnlinePlaylist(id:          mix.savedPlaylistID,
+                           name:        mix.title,
+                           description: mix.subtitle,
+                           coverURLs:   mix.covers,
+                           origin:      .mix,
+                           ownerName:   BylineMember.mixtape.name,
+                           tracks:      mix.tracks,
+                           coverBytes:  coverBytes,
+                           coverBand:   .init(title: mix.title, rgb: MixCoverStyle.rgb(for: mix.id)))
     }
 }
 

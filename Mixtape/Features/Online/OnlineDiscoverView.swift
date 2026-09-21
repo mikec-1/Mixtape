@@ -706,13 +706,7 @@ struct OnlineDiscoverView: View {
                       spacing: 18) {
                 ForEach(shown) { album in
                     AlbumCard(album: album) { path.append(.album(album)) }
-                        .contextMenu {
-                            Button("Open Album", systemImage: MixtapeIcons.album) {
-                                path.append(.album(album))
-                            }
-                            Divider()
-                            ShareMenuItems(.album(album))
-                        }
+                        .contextMenu { OnlineCollectionMenu(.album(album)) }
                 }
             }
         }
@@ -1106,13 +1100,7 @@ struct OnlineDiscoverView: View {
                       alignment: .leading, spacing: 18) {
                 ForEach(shown) { album in
                     MixAlbumCard(album: album) { path.append(.album(album)) }
-                        .contextMenu {
-                            Button("Open Album", systemImage: MixtapeIcons.album) {
-                                path.append(.album(album))
-                            }
-                            Divider()
-                            ShareMenuItems(.album(album))
-                        }
+                        .contextMenu { OnlineCollectionMenu(.album(album)) }
                 }
             }
         }
@@ -1202,13 +1190,7 @@ struct OnlineDiscoverView: View {
                   spacing: 18) {
             ForEach(artists) { artist in
                 ArtistCircle(artist: artist) { path.append(.artist(artist)) }
-                    .contextMenu {
-                        Button("Open Artist", systemImage: MixtapeIcons.artist) {
-                            path.append(.artist(artist))
-                        }
-                        Divider()
-                        ShareMenuItems(.artist(artist))
-                    }
+                    .contextMenu { OnlineCollectionMenu(.artist(artist)) }
             }
         }
     }
@@ -1222,13 +1204,7 @@ struct OnlineDiscoverView: View {
                     ForEach(browse.newReleases) { album in
                         AlbumCard(album: album) { path.append(.album(album)) }
                             .frame(width: 150)
-                            .contextMenu {
-                                Button("Open Album", systemImage: MixtapeIcons.album) {
-                                    path.append(.album(album))
-                                }
-                                Divider()
-                                ShareMenuItems(.album(album))
-                            }
+                            .contextMenu { OnlineCollectionMenu(.album(album)) }
                     }
                 }
                 .padding(.bottom, 4)
@@ -2158,13 +2134,6 @@ private struct DiscoverAlbumPage: View {
     @State private var tracks: [OnlineTrack] = []
     @State private var loading = true
 
-    /// Adding an album adds its songs; ones already in the library are skipped.
-    private func importAll() async {
-        for song in tracks where deps.libraryService.track(id: song.stableTrackID) == nil {
-            await coordinator.addToLibrary(song, albumOnly: true)
-        }
-    }
-
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
@@ -2179,11 +2148,11 @@ private struct DiscoverAlbumPage: View {
                             .foregroundStyle(Color.mixTextSecondary)
                         HStack(spacing: 10) {
                             AlbumSaveButton(title: album.title, artistName: album.artistName,
-                                            onSave: { Task { await importAll() } })
+                                            onSave: { Task { await coordinator.addAlbumToLibrary(tracks) } })
                             AlbumDownloadButton(ids: tracks.map(\.stableTrackID), downloads: deps.downloadManager,
                                                 library: deps.libraryService) {
                                 SavedAlbumsService.shared.setSaved(true, title: album.title, artistName: album.artistName)
-                                await importAll()
+                                await coordinator.addAlbumToLibrary(tracks)
                             }
                             .disabled(tracks.isEmpty)
                             ShareHeroButton(.album(album))

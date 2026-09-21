@@ -466,9 +466,7 @@ struct IOSDiscoverView: View {
         ) {
             mixCover(mix)
         } actions: {
-            Button("Play", systemImage: "play.fill") { playMix(mix) }
-            Button("Shuffle", systemImage: "shuffle") { shuffle(mix) }
-            Button("Open Mix", systemImage: "square.stack") { path.append(DiscoverDestination.mix(mix)) }
+            OnlineCollectionMenu(.mix(mix))
         }
     }
 
@@ -526,9 +524,7 @@ struct IOSDiscoverView: View {
             ) {
                 coverTile(album.coverURL)
             } actions: {
-                Button("Play", systemImage: "play.fill") { Task { await playAlbum(album) } }
-                Button("Open Album", systemImage: MixtapeIcons.album, action: openAlbum)
-                Button("Go to \(release.artist.name)", systemImage: MixtapeIcons.artist, action: openArtist)
+                OnlineCollectionMenu(.album(album))
             }
         }
     }
@@ -574,10 +570,7 @@ struct IOSDiscoverView: View {
                               isResolving: mix.tracks.first.map { coordinator.resolvingID == $0.id } ?? false,
                               onOpen: { path.append(DiscoverDestination.mix(mix)) },
                               onPlay: { playMix(mix) })
-                    .contextMenu {
-                        Button("Play", systemImage: "play.fill") { playMix(mix) }
-                        Button("Open Mix", systemImage: "square.stack") { path.append(DiscoverDestination.mix(mix)) }
-                    }
+                    .contextMenu { OnlineCollectionMenu(.mix(mix)) }
             }
         }
     }
@@ -611,14 +604,7 @@ struct IOSDiscoverView: View {
                 shelf {
                     ForEach(newReleaseAlbums) { album in
                         IOSAlbumCard(album: album) { path.append(DiscoverDestination.album(album)) }
-                            .contextMenu {
-                                Button("Play", systemImage: "play.fill") { Task { await playAlbum(album) } }
-                                Button("Open Album", systemImage: MixtapeIcons.album) {
-                                    path.append(DiscoverDestination.album(album))
-                                }
-                                Divider()
-                                ShareMenuItems(.album(album))
-                            }
+                            .contextMenu { OnlineCollectionMenu(.album(album)) }
                     }
                 }
             }
