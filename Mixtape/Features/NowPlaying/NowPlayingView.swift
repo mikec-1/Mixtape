@@ -1416,6 +1416,13 @@ private struct UpNextSheet: View {
         .foregroundStyle(isOn ? Color.mixPrimary : Color.mixTextPrimary)
         .frame(maxWidth: .infinity, minHeight: 68)
         .background(Color.mixSurface2, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        // A ring, so "on" isn't carried by the tint alone.
+        .overlay {
+            if isOn {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(Color.mixPrimary, lineWidth: 1.5)
+            }
+        }
         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 

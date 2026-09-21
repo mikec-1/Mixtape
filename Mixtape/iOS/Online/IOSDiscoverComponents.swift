@@ -848,8 +848,8 @@ struct IOSBrowseSongCard: View {
                     if isResolving {
                         RoundedRectangle(cornerRadius: 6, style: .continuous).fill(.black.opacity(0.45))
                         ProgressView().controlSize(.small).tint(.white)
-                    } else if isCurrent && isPlaying {
-                        Image(systemName: "speaker.wave.2.fill")
+                    } else if isCurrent {
+                        Image(systemName: isPlaying ? "speaker.wave.2.fill" : "pause.fill")
                             .font(.system(size: 22))
                             .foregroundStyle(Color.mixPrimary)
                             .padding(8)

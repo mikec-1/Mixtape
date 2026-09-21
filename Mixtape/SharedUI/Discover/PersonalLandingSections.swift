@@ -892,6 +892,15 @@ struct MixSongRow: View {
                     Image(systemName: "play.fill")
                         .font(.system(size: 14, weight: .bold))
                         .foregroundStyle(.white)
+                } else if isCurrent {
+                    // Every other song list marks the playing row with a shape
+                    // as well as the colour; this one only had the colour.
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color.black.opacity(0.4))
+                        .frame(width: 44, height: 44)
+                    Image(systemName: "waveform")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Color.mixPrimary)
                 }
             }
 

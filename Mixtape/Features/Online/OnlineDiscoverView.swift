@@ -2325,7 +2325,9 @@ private struct BrowseSongCard: View {
                     }
                 }
                 .overlay(alignment: .bottomTrailing) {
-                    if !isResolving && (hovering || (isCurrent && isPlaying)) {
+                    // Current-but-paused keeps its button too, so the card is
+                    // marked by more than its tinted title.
+                    if !isResolving && (hovering || isCurrent) {
                         Image(systemName: (isCurrent && isPlaying) ? "pause.circle.fill" : "play.circle.fill")
                             .font(.system(size: 34))
                             .foregroundStyle(Color.mixPrimary)

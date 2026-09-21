@@ -379,12 +379,21 @@ struct MacPlayerBar: View {
                     }
                 }
             } label: {
-                Image(systemName: engine.sleepTimerRemaining != nil ? "moon.zzz.fill" : "speedometer")
-                    .font(.system(size: 13))
-                    .foregroundStyle(
-                        (engine.playbackRate != 1.0 || engine.sleepTimerRemaining != nil)
-                            ? Color.mixPrimary : Color.mixTextTertiary
-                    )
+                Group {
+                    // The rate itself rather than a tinted gauge, so a changed
+                    // speed doesn't rest on colour alone.
+                    if engine.sleepTimerRemaining == nil && engine.playbackRate != 1.0 {
+                        Text(String(format: "%g×", Double(engine.playbackRate)))
+                            .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                    } else {
+                        Image(systemName: engine.sleepTimerRemaining != nil ? "moon.zzz.fill" : "speedometer")
+                            .font(.system(size: 13))
+                    }
+                }
+                .foregroundStyle(
+                    (engine.playbackRate != 1.0 || engine.sleepTimerRemaining != nil)
+                        ? Color.mixPrimary : Color.mixTextTertiary
+                )
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)

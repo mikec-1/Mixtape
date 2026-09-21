@@ -524,6 +524,13 @@ struct HeroActionBar<Extras: View>: View {
                     .font(.system(size: 22, weight: .semibold))
                     .foregroundStyle(isShuffling ? Color.mixPrimary : Color.mixTextSecondary)
                     .frame(width: 44, height: 44)
+                    // The player's own shuffle mark: the tint alone is lost on
+                    // anyone who can't tell green from grey.
+                    .overlay(alignment: .bottom) {
+                        if isShuffling {
+                            Circle().fill(Color.mixPrimary).frame(width: 4, height: 4)
+                        }
+                    }
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain).mixHandCursor()
