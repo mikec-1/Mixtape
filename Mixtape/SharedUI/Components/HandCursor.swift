@@ -22,4 +22,10 @@ private struct HandCursor: ViewModifier {
 
 extension View {
     func mixHandCursor() -> some View { modifier(HandCursor()) }
+
+    /// `.onTapGesture` that Tab, Space and VoiceOver can reach: the same view
+    /// as the label of a plain button, so it's focusable and reads as one.
+    func mixTapAction(_ action: @escaping () -> Void) -> some View {
+        Button(action: action) { self }.buttonStyle(.plain)
+    }
 }

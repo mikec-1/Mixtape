@@ -276,7 +276,7 @@ struct PlaylistRowItem: View {
                                  : (isHovered ? Color.primary.opacity(0.07) : .clear))
         )
         .contentShape(Rectangle())
-        .onTapGesture { onOpen() }          // one click enters the playlist
+        .mixTapAction { onOpen() }          // one click enters the playlist
         // ⌘- and ⇧-clicks come from AppKit instead.
         //
         // SwiftUI drops a plain tap while a modifier key is held, so those

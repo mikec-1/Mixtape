@@ -472,7 +472,7 @@ private struct LocalSongRow: View {
                 }
             }
             .contentShape(Rectangle())
-            .onTapGesture(perform: onPlay)
+            .mixTapAction(onPlay)
 
             VStack(alignment: .leading, spacing: 2) {
                 LocalClickableText(text: track.title,
@@ -564,7 +564,7 @@ private struct LocalAlbumCard: View {
         .frame(width: 150)
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
-        .onTapGesture(perform: onTap)
+        .mixTapAction(onTap)
     }
 }
 
@@ -590,7 +590,7 @@ private struct LocalArtistCircle: View {
         .frame(width: 124)
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
-        .onTapGesture(perform: onTap)
+        .mixTapAction(onTap)
     }
 }
 
@@ -620,7 +620,7 @@ private struct LocalPlaylistCard: View {
         .frame(width: 150)
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
-        .onTapGesture(perform: onTap)
+        .mixTapAction(onTap)
     }
 }
 

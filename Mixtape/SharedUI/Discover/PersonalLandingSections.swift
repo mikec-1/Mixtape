@@ -602,7 +602,7 @@ struct MixMosaicCard: View {
         // like it was drawn on a wave.
         .frame(maxHeight: .infinity, alignment: .top)
         .contentShape(Rectangle())
-        .onTapGesture(perform: onOpen)
+        .mixTapAction(onOpen)
         .mixHoverCursor { isHovered = $0 }
         .mixAnimation(.easeOut(duration: 0.16), value: isHovered)
         .mixAnimation(.easeInOut(duration: 0.12), value: isResolving)
@@ -725,7 +725,7 @@ struct MixNewReleaseHero: View {
             Spacer(minLength: 0)
         }
         .contentShape(Rectangle())
-        .onTapGesture(perform: onOpenArtist)
+        .mixTapAction(onOpenArtist)
         .mixHoverCursor { artistHovered = $0 }
         .mixAnimation(.easeOut(duration: 0.16), value: artistHovered)
     }
@@ -809,7 +809,7 @@ struct MixNewReleaseHero: View {
                 .fill(Color.mixSurface.opacity(isHovered ? 1 : 0.7))
         )
         .contentShape(Rectangle())
-        .onTapGesture(perform: onOpenAlbum)
+        .mixTapAction(onOpenAlbum)
         .mixHoverCursor { isHovered = $0 }
         .mixAnimation(.easeOut(duration: 0.16), value: isHovered)
     }
@@ -840,13 +840,11 @@ struct MixSongRow: View {
     var body: some View {
         // A real button, not a tap gesture on a stack.
         //
-        // Every other card here gets away with `.onTapGesture` because it's
-        // exactly as big as its own content — a 132pt cover, a 112pt circle.
-        // This row is the only one that stretches: it fills whatever the grid
-        // column happens to be, and a stretched stack under a `.contextMenu` is
-        // where AppKit's hit region and SwiftUI's drawn frame stop agreeing.
-        // A button has one hit region by construction, and it brings focus and
-        // VoiceOver with it, neither of which a tap gesture has ever had.
+        // This row stretches to whatever the grid column happens to be, and a
+        // stretched stack under a `.contextMenu` is where AppKit's hit region
+        // and SwiftUI's drawn frame stop agreeing. A button has one hit region
+        // by construction. (The fixed-size cards use `mixTapAction`, which is
+        // the same button, for focus and VoiceOver.)
         // Not disabled while it resolves: `.disabled` fades a plain button's
         // whole label, and the label here is the entire row — title, artist,
         // artwork and all. A second press costs nothing; the coordinator drops
@@ -986,7 +984,7 @@ struct MixArtistBubble: View {
         // like it was drawn on a wave.
         .frame(maxHeight: .infinity, alignment: .top)
         .contentShape(Rectangle())
-        .onTapGesture(perform: onOpen)
+        .mixTapAction(onOpen)
         .mixHoverCursor { isHovered = $0 }
         .mixAnimation(.easeOut(duration: 0.16), value: isHovered)
     }
@@ -1040,7 +1038,7 @@ struct MixAlbumCard: View {
         // like it was drawn on a wave.
         .frame(maxHeight: .infinity, alignment: .top)
         .contentShape(Rectangle())
-        .onTapGesture(perform: onOpen)
+        .mixTapAction(onOpen)
         .mixHoverCursor { isHovered = $0 }
         .mixAnimation(.easeOut(duration: 0.16), value: isHovered)
     }
@@ -1160,10 +1158,9 @@ private struct GenerateMixTile: View {
             .frame(width: MixMosaicCard.side, alignment: .leading)
         }
         .contentShape(Rectangle())
-        .onTapGesture(perform: action)
+        .mixTapAction(action)
         .mixHoverCursor { isHovered = $0 }
         .mixAnimation(.spring(response: 0.28, dampingFraction: 0.7), value: isHovered)
-        .accessibilityAddTraits(.isButton)
         .accessibilityLabel("Generate a Mix")
     }
 }

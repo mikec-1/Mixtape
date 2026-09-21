@@ -166,7 +166,7 @@ struct DiscoverLikedSongsPage: View {
                     isResolving:       engine.routingTrackIDs.contains(track.id)
                 )
                 .contentShape(Rectangle())
-                .onTapGesture {
+                .mixTapAction {
                     Task { await engine.play(track: track, in: shown, source: .named("Liked Songs")) }
                 }
                 // Every row here is liked, so the shared menu's own

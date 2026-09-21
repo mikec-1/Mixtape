@@ -123,7 +123,7 @@ public struct TrackPreparingBar: View {
                 .strokeBorder(Color.mixSeparator.opacity(0.6), lineWidth: 0.5)
         )
         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .onTapGesture { isExpanded.toggle() }
+        .mixTapAction { isExpanded.toggle() }
         .onHover { isHovering = $0 }
         .mixAnimation(.spring(response: 0.28, dampingFraction: 0.85), value: isExpanded)
         .help(isExpanded ? "Hide the detail" : "Show what's happening")

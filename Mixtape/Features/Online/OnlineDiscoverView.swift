@@ -1530,7 +1530,7 @@ private struct WideSongHero: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.mixSurface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .contentShape(Rectangle())
-        .onTapGesture(perform: onPlay)   // clicking anywhere on the hero plays it
+        .mixTapAction(onPlay)   // clicking anywhere on the hero plays it
         .onHover { hovering = $0 }
         .mixAnimation(.easeInOut(duration: 0.12), value: hovering)
         .mixAnimation(.easeInOut(duration: 0.12), value: isThisPlaying)
@@ -1710,7 +1710,7 @@ private struct SongRow: View {
                 }
             }
             .contentShape(Rectangle())
-            .onTapGesture(perform: onPlay)   // single click on the artwork plays
+            .mixTapAction(onPlay)   // single click on the artwork plays
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     ClickableText(text: song.displayTitle,
@@ -1811,7 +1811,7 @@ private struct ArtistCircle: View {
         .frame(width: 120)
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
-        .onTapGesture(perform: onTap)
+        .mixTapAction(onTap)
     }
 }
 
@@ -1846,7 +1846,7 @@ private struct AlbumCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
-        .onTapGesture(perform: onTap)
+        .mixTapAction(onTap)
     }
 
     /// Square cover sized by the column it lands in.
@@ -2360,7 +2360,7 @@ private struct BrowseSongCard: View {
                 }
             }
         }
-        .onTapGesture(perform: onPlay)
+        .mixTapAction(onPlay)
         .mixAnimation(.easeInOut(duration: 0.12), value: hovering)
         .mixAnimation(.easeInOut(duration: 0.12), value: isResolving)
     }
@@ -2415,7 +2415,7 @@ private struct GenreTile: View {
         }
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
-        .onTapGesture(perform: onTap)
+        .mixTapAction(onTap)
         .mixAnimation(.easeInOut(duration: 0.12), value: hovering)
     }
 }

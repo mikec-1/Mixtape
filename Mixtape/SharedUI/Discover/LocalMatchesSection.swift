@@ -181,7 +181,7 @@ struct LibrarySongRow: View {
                 .fill(isHovered ? Color.primary.opacity(0.07) : .clear)
         )
         .contentShape(Rectangle())
-        .onTapGesture(perform: onPlay)
+        .mixTapAction(onPlay)
         .mixHoverCursor { isHovered = $0 }
         .mixAnimation(.easeOut(duration: 0.12), value: isHovered)
     }

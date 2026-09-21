@@ -929,7 +929,8 @@ struct MacRootView: View {
 // is on screen and is cleaned up when the view disappears.
 //
 // Shortcuts:
-//   Space         → play / pause  (blocked when a text field is focused)
+//   Space         → play / pause  (blocked when a text field is focused; under
+//                   Full Keyboard Access it presses the focused control first)
 //   Cmd+Right (⌘→) → next track
 //   Cmd+Left  (⌘←) → previous / restart
 
@@ -950,6 +951,14 @@ private final class KeyboardShortcutHandler: ObservableObject {
 
             switch event.keyCode {
             case 49 where !cmd:             // Space — play / pause
+                // Full Keyboard Access presses the focused control with Space,
+                // so let it through; `SpaceFallback` plays/pauses only if
+                // nothing took it. A focused table would spend it on
+                // type-select, so it keeps plain play/pause.
+                if NSApp.isFullKeyboardAccessEnabled, !(fr is NSTableView), let window = event.window {
+                    SpaceFallback.install(in: window, engine: engine)
+                    return event
+                }
                 Task { @MainActor in engine.togglePlayPause() }
                 return nil                  // consume
 
@@ -973,6 +982,31 @@ private final class KeyboardShortcutHandler: ObservableObject {
     }
 
     deinit { stop() }
+}
+
+/// Sits after the window in the responder chain, so it only hears a Space
+/// the focused control didn't want.
+private final class SpaceFallback: NSResponder {
+    weak var engine: PlaybackEngine?
+
+    static func install(in window: NSWindow, engine: PlaybackEngine) {
+        if let existing = window.nextResponder as? SpaceFallback { existing.engine = engine; return }
+        let fallback = SpaceFallback()
+        fallback.engine = engine
+        fallback.nextResponder = window.nextResponder
+        window.nextResponder = fallback
+    }
+
+    override func keyDown(with event: NSEvent) {
+        guard event.keyCode == 49, let engine else { return super.keyDown(with: event) }
+        engine.togglePlayPause()
+    }
+
+    // Views that run `interpretKeyEvents` hand an unwanted Space up as text.
+    override func insertText(_ insertString: Any) {
+        guard (insertString as? String) == " ", let engine else { return super.insertText(insertString) }
+        engine.togglePlayPause()
+    }
 }
 
 // MARK: - View Menu Commands

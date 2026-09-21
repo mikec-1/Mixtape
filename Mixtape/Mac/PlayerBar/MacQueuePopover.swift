@@ -420,7 +420,7 @@ private struct QueuePanelRow: View {
                 }
             }
             .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-            .onTapGesture { playRow() }
+            .mixTapAction { playRow() }
     }
 
     @ViewBuilder

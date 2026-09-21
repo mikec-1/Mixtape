@@ -183,7 +183,7 @@ private struct MacArtistCard: View {
             .frame(maxWidth: .infinity)
         }
         .contentShape(Rectangle())
-        .onTapGesture { onSelect() }
+        .mixTapAction { onSelect() }
         .onHover { hovering in
             withMixAnimation(.easeOut(duration: 0.12)) { isHovered = hovering }
         }

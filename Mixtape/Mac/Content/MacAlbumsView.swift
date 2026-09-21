@@ -101,7 +101,7 @@ private struct MacAlbumCard: View {
             infoArea
         }
         .contentShape(Rectangle())
-        .onTapGesture { onSelect() }
+        .mixTapAction { onSelect() }
         .onContinuousHover { phase in
             switch phase {
             case .active(_): isHovered = true
