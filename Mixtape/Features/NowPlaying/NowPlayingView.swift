@@ -263,6 +263,7 @@ public struct NowPlayingView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain).mixHandCursor()
+            .accessibilityLabel("Close")
 
             Spacer()
 

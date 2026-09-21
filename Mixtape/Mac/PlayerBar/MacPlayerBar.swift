@@ -654,6 +654,8 @@ struct MacProgressScrubber: View {
             )
             .tint(Color.mixPrimary)
             .disabled(engine.duration == 0)
+            .accessibilityLabel("Playback position")
+            .accessibilityValue("\(formatTime(isDragging ? dragValue : clock.currentTime)) of \(formatTime(engine.duration))")
 
             timeLabel(engine.duration)
         }

@@ -74,6 +74,7 @@ public struct MiniPlayerBar: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain).mixHandCursor()
+                    .accessibilityLabel(engine.state.isPlaying ? "Pause" : "Play")
 
                     #if os(iOS)
                     // Devices — only once there is somewhere else to play.
@@ -105,6 +106,7 @@ public struct MiniPlayerBar: View {
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain).mixHandCursor()
+                        .accessibilityLabel(favoured ? "Remove from Liked Songs" : "Add to Liked Songs")
                     }
 
                     #if !os(iOS)
@@ -124,6 +126,7 @@ public struct MiniPlayerBar: View {
                     }
                     .buttonStyle(.plain).mixHandCursor()
                     .disabled(!engine.queue.hasNext)
+                    .accessibilityLabel("Next")
                     #endif
                 }
                 .padding(.horizontal, 12)
@@ -155,6 +158,14 @@ public struct MiniPlayerBar: View {
             .mixShadow(color: .black.opacity(0.18), radius: 12, y: 4)
         }
         .buttonStyle(.plain).mixHandCursor()
+        .accessibilityHint("Opens Now Playing")
+        #if os(iOS)
+        // The swipe is the only way to skip here, and VoiceOver can't swipe it.
+        .accessibilityActions {
+            if engine.queue.hasNext { Button("Next") { Task { await engine.playNext() } } }
+            if engine.queue.hasPrevious { Button("Previous") { Task { await engine.playPrevious() } } }
+        }
+        #endif
         #if !os(iOS)
         .sheet(isPresented: $showNowPlaying) {
             NowPlayingView()

@@ -93,6 +93,8 @@ struct GenerateMixSheet: View {
 
             Slider(value: $libraryShare, in: 0...1, step: 0.05)
                 .tint(Color.mixPrimary)
+                .accessibilityLabel("Blend")
+                .accessibilityValue("\(fromLibrary) of \(Int(count)) from your library")
 
             HStack {
                 Text("All new to me")

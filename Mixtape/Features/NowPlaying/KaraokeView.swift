@@ -40,6 +40,8 @@ struct KaraokeView: View {
     /// Transport, seek bar and header fade out while nothing is being touched —
     /// the same three seconds macOS gives its karaoke chrome.
     @State private var awake = true
+    /// VoiceOver can't reach controls that have faded out, so they never do.
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
     @State private var showsTuning = false
     @State private var sleep: Task<Void, Never>?
 
@@ -86,6 +88,7 @@ struct KaraokeView: View {
         })
         .onAppear { refreshColors(); loadOffset(); wake() }
         .onChange(of: track?.id) { _, _ in refreshColors(); loadOffset() }
+        .onChange(of: voiceOver) { _, _ in wake() }
         .onDisappear { sleep?.cancel() }
     }
 
@@ -94,6 +97,7 @@ struct KaraokeView: View {
     private func wake() {
         withMixAnimation(.easeInOut(duration: 0.3)) { awake = true }
         sleep?.cancel()
+        guard !voiceOver else { return }
         sleep = Task {
             try? await Task.sleep(nanoseconds: 3_000_000_000)
             guard !Task.isCancelled else { return }
