@@ -28,6 +28,8 @@ extension Notification.Name {
     static let mixGoBack         = Notification.Name("mix.goBack")
     /// View ▸ Go Forward (⌘]). Same indirection as the sidebar toggle.
     static let mixGoForward      = Notification.Name("mix.goForward")
+    /// Controls ▸ Get Info (⌘I) for the playing song. Same indirection as the sidebar toggle.
+    static let mixShowInfo       = Notification.Name("mix.showInfo")
     /// File ▸ New Playlist (⌘N). Creates a blank playlist and navigates to it.
     static let mixNewPlaylist    = Notification.Name("mix.newPlaylist")
 }

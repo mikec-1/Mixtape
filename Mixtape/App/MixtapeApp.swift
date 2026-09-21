@@ -183,6 +183,9 @@ struct MixtapeApp: App {
                     NotificationCenter.default.post(name: .mixMergeDuplicates, object: nil)
                 }
             }
+            ControlsCommands(engine: dependencies.playbackEngine,
+                             queue: dependencies.playbackEngine.queue,
+                             library: dependencies.libraryService)
         }
         #endif
         #if os(iOS)
@@ -197,3 +200,75 @@ struct MixtapeApp: App {
 
 
 }
+
+#if os(macOS)
+/// Controls ▸ — every transport action, where a Mac user looks for its shortcut.
+///
+/// Space has no key equivalent here: a menu's plain Space fires before a text
+/// field's, so typing a space in search would pause the song. It stays in
+/// `MacRootView`'s key monitor, which skips text fields; the ⌘-arrows below are
+/// handed back to text fields by that same monitor.
+struct ControlsCommands: Commands {
+    @ObservedObject var engine: PlaybackEngine
+    @ObservedObject var queue: QueueService
+    @ObservedObject var library: LibraryService   // only so the like title follows the heart
+
+    var body: some Commands {
+        CommandMenu("Controls") {
+            let track = queue.currentTrack
+            let liked = track.flatMap { engine.isLiked?($0) } ?? false
+            Button(engine.state.isPlaying ? "Pause" : "Play") { engine.togglePlayPause() }
+            Button("Next") { Task { await engine.playNext() } }
+                .keyboardShortcut(.rightArrow, modifiers: .command)
+                .disabled(track == nil)
+            Button("Previous") { Task { await engine.playPrevious() } }
+                .keyboardShortcut(.leftArrow, modifiers: .command)
+                .disabled(track == nil)
+
+            Divider()
+
+            Button("Skip Forward 15 Seconds") { skip(15) }
+                .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
+                .disabled(track == nil)
+            Button("Skip Back 15 Seconds") { skip(-15) }
+                .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
+                .disabled(track == nil)
+
+            Divider()
+
+            Toggle("Shuffle", isOn: Binding(get: { queue.shuffleEnabled }, set: { queue.setShuffle($0) }))
+                .keyboardShortcut("s", modifiers: [.command, .shift])
+            Picker("Repeat", selection: Binding(get: { queue.repeatMode }, set: { queue.setRepeat($0) })) {
+                Text("Off").tag(RepeatMode.off)
+                Text("All").tag(RepeatMode.all)
+                Text("One").tag(RepeatMode.one)
+            }
+
+            Divider()
+
+            Button("Increase Volume") { engine.volume = min(1, engine.volume + 0.1) }
+                .keyboardShortcut(.upArrow, modifiers: .command)
+            Button("Decrease Volume") { engine.volume = max(0, engine.volume - 0.1) }
+                .keyboardShortcut(.downArrow, modifiers: .command)
+
+            Divider()
+
+            // Same path as the lock-screen heart: toggles a library song, saves
+            // anything else.
+            Button(liked ? "Remove from Liked Songs" : "Add to Liked Songs") {
+                guard let track else { return }
+                Task { await engine.onRemoteLike?(track); engine.syncRemoteCommandState() }
+            }
+            .keyboardShortcut("l", modifiers: .command)
+            .disabled(track == nil)
+            Button("Get Info") { NotificationCenter.default.post(name: .mixShowInfo, object: nil) }
+                .keyboardShortcut("i", modifiers: .command)
+                .disabled(track == nil)
+        }
+    }
+
+    private func skip(_ seconds: TimeInterval) {
+        engine.seek(to: max(0, min(engine.duration, engine.currentTime + seconds)))
+    }
+}
+#endif

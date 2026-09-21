@@ -962,11 +962,17 @@ private final class KeyboardShortcutHandler: ObservableObject {
             if event.type == .leftMouseDown { self.focusFromKeyboard = false; return event }
             if event.keyCode == 48 { self.focusFromKeyboard = true }   // Tab / ⇧Tab
 
-            // Never steal events from text input (search field, any NSTextField/NSTextView)
-            let fr = NSApp.keyWindow?.firstResponder
-            if fr is NSText { return event }
-
             let cmd = event.modifierFlags.contains(.command)
+
+            // Never steal events from text input (search field, any NSTextField/NSTextView).
+            // ⌘-arrows go straight to it: otherwise Controls ▸ Next/Previous/Volume,
+            // whose key equivalents fire first, would eat line start/end.
+            let fr = NSApp.keyWindow?.firstResponder
+            if let fr = fr as? NSText {
+                guard cmd, (123...126).contains(event.keyCode) else { return event }
+                fr.keyDown(with: event)
+                return nil
+            }
 
             switch event.keyCode {
             case 49 where !cmd:             // Space — play / pause
@@ -981,14 +987,6 @@ private final class KeyboardShortcutHandler: ObservableObject {
                 }
                 Task { @MainActor in engine.togglePlayPause() }
                 return nil                  // consume
-
-            case 124 where cmd:             // Cmd + Right — next track
-                Task { @MainActor in await engine.playNext() }
-                return nil
-
-            case 123 where cmd:             // Cmd + Left — previous / restart
-                Task { @MainActor in await engine.playPrevious() }
-                return nil
 
             default:
                 return event
@@ -1046,6 +1044,9 @@ private struct ViewMenuCommands: ViewModifier {
             .onReceive(NotificationCenter.default.publisher(for: .mixActualSize)) { _ in appState.resetZoom() }
             .onReceive(NotificationCenter.default.publisher(for: .mixGoBack))     { _ in appState.goBack() }
             .onReceive(NotificationCenter.default.publisher(for: .mixGoForward))  { _ in appState.goForward() }
+            .onReceive(NotificationCenter.default.publisher(for: .mixShowInfo)) { _ in
+                if let track = deps.playbackEngine.queue.currentTrack { appState.showInspector(for: track) }
+            }
             .onReceive(NotificationCenter.default.publisher(for: .mixNewPlaylist)) { _ in createNewPlaylist() }
     }
 
