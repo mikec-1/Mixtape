@@ -4,6 +4,7 @@
 import Foundation
 import SwiftUI
 import Combine
+import OSLog
 
 @MainActor
 public final class SettingsViewModel: ObservableObject {
@@ -113,7 +114,7 @@ public final class SettingsViewModel: ObservableObject {
             try await syncService.deleteAllServerTracks()
         } catch {
             deleteTracksError = "Couldn't delete from server: \(error.localizedDescription)"
-            print("[Settings] ❌ deleteAllServerTracks failed: \(error)")
+            MixLog.library.error("[Settings] ❌ deleteAllServerTracks failed: \(error)")
             return
         }
 
@@ -124,7 +125,7 @@ public final class SettingsViewModel: ObservableObject {
         // Reset per-table pull timestamps for tracks, albums, artists so
         // a subsequent sync doesn't re-download deleted items.
         syncService.resetSyncTimestamps()
-        print("[Settings] ✅ All music deleted on server and locally")
+        MixLog.library.debug("[Settings] ✅ All music deleted on server and locally")
     }
 
     /// Forces the next sync to pull every server record rather than only what
@@ -174,7 +175,7 @@ public final class SettingsViewModel: ObservableObject {
         findCoversResult = remaining == 0
             ? "Found artwork for all \(found)."
             : "Found \(found) of \(missing.count). The other \(remaining) aren't in the catalogue."
-        print("[Settings] 🖼️ Cover repair: found \(found), \(remaining) still missing")
+        MixLog.library.debug("[Settings] 🖼️ Cover repair: found \(found), \(remaining) still missing")
     }
 
     /// Fetches full-size covers again for songs stored at the old ceilings.
@@ -204,7 +205,7 @@ public final class SettingsViewModel: ObservableObject {
             replacingExisting: true
         )
         upgradeCoversResult = "Replaced \(replaced) of \(low.count) with full-size artwork."
-        print("[Settings] 🖼️ Cover upgrade: replaced \(replaced) of \(low.count)")
+        MixLog.library.debug("[Settings] 🖼️ Cover upgrade: replaced \(replaced) of \(low.count)")
     }
 
     /// Brings back songs a re-sync removed by replaying an out-of-date deletion
@@ -231,7 +232,7 @@ public final class SettingsViewModel: ObservableObject {
         await triggerSync()
 
         restoreSongsResult = "Restored \(restored) song\(restored == 1 ? "" : "s")."
-        print("[Settings] ♻️ Restored \(restored) song(s)")
+        MixLog.library.debug("[Settings] ♻️ Restored \(restored) song(s)")
     }
 
     /// How many songs a deleted playlist left in the library. Cheap enough to
@@ -250,7 +251,7 @@ public final class SettingsViewModel: ObservableObject {
         orphanCount = 0
         guard removed > 0 else { return }
         await triggerSync()
-        print("[Settings] 🧹 Removed \(removed) orphaned song(s)")
+        MixLog.library.debug("[Settings] 🧹 Removed \(removed) orphaned song(s)")
     }
 
     /// Deletes all user-created playlists from the server and every device.
@@ -267,12 +268,12 @@ public final class SettingsViewModel: ObservableObject {
             try await syncService.deleteAllServerUserPlaylists()
         } catch {
             deletePlaylistsError = "Couldn't delete from server: \(error.localizedDescription)"
-            print("[Settings] ❌ deleteAllServerUserPlaylists failed: \(error)")
+            MixLog.library.error("[Settings] ❌ deleteAllServerUserPlaylists failed: \(error)")
             return
         }
 
         libraryService.deleteAllUserPlaylists()
-        print("[Settings] ✅ All user playlists deleted on server and locally")
+        MixLog.library.debug("[Settings] ✅ All user playlists deleted on server and locally")
     }
 
     public func signOut() async {
@@ -294,7 +295,7 @@ public final class SettingsViewModel: ObservableObject {
         isRebuilding = true
         defer { isRebuilding = false }
         await importService.rebuildGroupings()
-        print("[Settings] ✅ Library groupings rebuilt")
+        MixLog.library.debug("[Settings] ✅ Library groupings rebuilt")
     }
 
     /// Wipes listening history: the local play log, the snapshots of played
@@ -321,7 +322,7 @@ public final class SettingsViewModel: ObservableObject {
         if let userID = currentUser?.id {
             await profileStats.publishMyStats(userID: userID)
         }
-        print("[Settings] ✅ Listening history reset")
+        MixLog.library.debug("[Settings] ✅ Listening history reset")
     }
 
     /// Deletes ALL data for this user from the Supabase database and Storage,
@@ -348,7 +349,7 @@ public final class SettingsViewModel: ObservableObject {
             try await syncService.deleteAllServerData()
         } catch {
             clearError = "Couldn't delete from server: \(error.localizedDescription)"
-            print("[Settings] ❌ Server delete failed: \(error)")
+            MixLog.library.error("[Settings] ❌ Server delete failed: \(error)")
             // Restart background sync even if we fail.
             syncService.startBackgroundSync(intervalSeconds: 60)
             return
@@ -381,6 +382,6 @@ public final class SettingsViewModel: ObservableObject {
 
         // Restart background sync (will pull nothing since server is empty).
         syncService.startBackgroundSync(intervalSeconds: 60)
-        print("[Settings] ✅ Library, history and published stats cleared")
+        MixLog.library.debug("[Settings] ✅ Library, history and published stats cleared")
     }
 }

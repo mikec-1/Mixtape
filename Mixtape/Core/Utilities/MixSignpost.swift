@@ -42,6 +42,18 @@ public nonisolated enum MixLog {
     /// question is *which* stage spent the time — this is where that is
     /// answered. Filter Console on category "search".
     public static let search    = Logger(subsystem: subsystem, category: "search")
+    /// Supabase sync, realtime, continuity and sharing.
+    public static let sync      = Logger(subsystem: subsystem, category: "sync")
+    /// The engine, resolving, the play cache, downloads and play history.
+    public static let playback  = Logger(subsystem: subsystem, category: "playback")
+    /// Lyrics lookups and the sources they came from.
+    public static let lyrics    = Logger(subsystem: subsystem, category: "lyrics")
+    /// Library upkeep, settings resets, stats and artwork.
+    public static let library   = Logger(subsystem: subsystem, category: "library")
+    /// Third-party catalogues: iTunes, Deezer, the Spotify Web API.
+    public static let catalog   = Logger(subsystem: subsystem, category: "catalog")
+    /// Sign-in, sign-out and session state.
+    public static let auth      = Logger(subsystem: subsystem, category: "auth")
 }
 
 /// Signposters, one per category.

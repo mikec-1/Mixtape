@@ -2,6 +2,7 @@
 // Mixtape — Core/Services
 
 import Foundation
+import OSLog
 
 /// Cover bytes, kept beside the store instead of only inside it.
 ///
@@ -84,6 +85,6 @@ nonisolated enum ArtworkDiskCache {
             try? FileManager.default.removeItem(at: url)
             total -= size
         }
-        print("[ArtworkCache] 🧹 Trimmed to \(total / 1024 / 1024)MB")
+        MixLog.library.debug("[ArtworkCache] 🧹 Trimmed to \(total / 1024 / 1024)MB")
     }
 }

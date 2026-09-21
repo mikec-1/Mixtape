@@ -1094,7 +1094,7 @@ public final class ITunesSearchClient: Sendable {
             guard (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
             return try JSONDecoder().decode(T.self, from: data)
         } catch {
-            print("[Lyrics] netease lyric search failed: \(error.localizedDescription)")
+            MixLog.lyrics.error("netease lyric search failed: \(error.localizedDescription)")
             return nil
         }
     }
@@ -1742,7 +1742,7 @@ public final class ITunesSearchClient: Sendable {
                 guard (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
                 return body
             } catch {
-                print("[Deezer] request failed \(url.lastPathComponent): \(error.localizedDescription)")
+                MixLog.catalog.error("[Deezer] request failed \(url.lastPathComponent): \(error.localizedDescription)")
                 return nil
             }
         }) else { return nil }
@@ -1752,12 +1752,12 @@ public final class ITunesSearchClient: Sendable {
         // Not the shape we asked for. Deezer reports its own failures at HTTP 200,
         // so read the body again as an error before calling this malformed JSON.
         guard let envelope = try? JSONDecoder().decode(DeezerErrorEnvelope.self, from: data) else {
-            print("[Deezer] unreadable response from \(url.lastPathComponent)")
+            MixLog.catalog.debug("[Deezer] unreadable response from \(url.lastPathComponent)")
             return nil
         }
 
         guard envelope.isTransient, attempt < deezerMaxRetries else {
-            print("[Deezer] \(url.lastPathComponent): \(envelope.describedError)")
+            MixLog.catalog.error("[Deezer] \(url.lastPathComponent): \(envelope.describedError)")
             return nil
         }
 
@@ -1816,7 +1816,7 @@ public final class ITunesSearchClient: Sendable {
         }
 
         let unique = deduplicated(all)
-        print("[iTunes] title='\(title)' → \(unique.count) songs (text search)")
+        MixLog.catalog.debug("[iTunes] title='\(title)' → \(unique.count) songs (text search)")
         return unique.isEmpty ? nil : unique
     }
 
@@ -1826,10 +1826,10 @@ public final class ITunesSearchClient: Sendable {
     /// This is the most reliable method — avoids the noise of general text search.
     private func searchByArtistCatalogue(_ artist: String) async throws -> [ITunesTrackResult]? {
         guard let artistId = try await findArtistId(artist) else {
-            print("[iTunes] No artist ID found for '\(artist)'")
+            MixLog.catalog.debug("[iTunes] No artist ID found for '\(artist)'")
             return nil
         }
-        print("[iTunes] Artist '\(artist)' → ID \(artistId)")
+        MixLog.catalog.debug("[iTunes] Artist '\(artist)' → ID \(artistId)")
         return try await lookupSongs(artistId: artistId)
     }
 
@@ -1870,7 +1870,7 @@ public final class ITunesSearchClient: Sendable {
         }
 
         guard let best else { return nil }
-        print("[iTunes] Found artist '\(best.name)' id=\(best.id) in \(best.country) store")
+        MixLog.catalog.debug("[iTunes] Found artist '\(best.name)' id=\(best.id) in \(best.country) store")
         return best.id
     }
 
@@ -1895,7 +1895,7 @@ public final class ITunesSearchClient: Sendable {
         }
 
         let unique = deduplicated(all)
-        print("[iTunes] Lookup artistId=\(artistId) → \(unique.count) songs across storefronts")
+        MixLog.catalog.debug("[iTunes] Lookup artistId=\(artistId) → \(unique.count) songs across storefronts")
         return unique.isEmpty ? nil : unique
     }
 

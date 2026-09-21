@@ -11,6 +11,7 @@ import Combine
 #if os(macOS)
 import ServiceManagement
 #endif
+import OSLog
 
 // MARK: - Storage report
 
@@ -118,7 +119,7 @@ final class LaunchAtLogin: ObservableObject {
             }
         } catch {
             failure = error.localizedDescription
-            print("[LaunchAtLogin] ⚠️ Couldn't \(enabled ? "register" : "unregister"): \(error)")
+            MixLog.launch.error("[LaunchAtLogin] ⚠️ Couldn't \(enabled ? "register" : "unregister"): \(error)")
         }
 
         isEnabled = SMAppService.mainApp.status == .enabled
@@ -217,6 +218,6 @@ enum SettingsReset {
         }
         #endif
 
-        print("[Settings] ✅ All preferences restored to defaults")
+        MixLog.library.debug("[Settings] ✅ All preferences restored to defaults")
     }
 }

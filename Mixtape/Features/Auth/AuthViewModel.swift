@@ -5,6 +5,7 @@ import Foundation
 import SwiftUI
 import Combine
 import AuthenticationServices
+import OSLog
 
 @MainActor
 public final class AuthViewModel: ObservableObject {
@@ -103,9 +104,9 @@ public final class AuthViewModel: ObservableObject {
     // MARK: - Actions
 
     public func submit() async {
-        print("[AuthViewModel] submit called. isSignUpMode: \(isSignUpMode), isFormValid: \(isFormValid)")
+        MixLog.auth.debug("[AuthViewModel] submit called. isSignUpMode: \(self.isSignUpMode), isFormValid: \(self.isFormValid)")
         guard isFormValid else {
-            print("[AuthViewModel] Form validation failed.")
+            MixLog.auth.debug("[AuthViewModel] Form validation failed.")
             return
         }
         isLoading = true
@@ -115,14 +116,14 @@ public final class AuthViewModel: ObservableObject {
         do {
             if isSignUpMode {
                 let cleanUsername = username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                print("[AuthViewModel] Registering. Cleaned username: '\(cleanUsername)'")
+                MixLog.auth.debug("[AuthViewModel] Registering. Cleaned username: '\(cleanUsername)'")
                 // Check if username is taken
                 let isTaken = try await authService.isUsernameTaken(cleanUsername)
-                print("[AuthViewModel] Username '\(cleanUsername)' isTaken: \(isTaken)")
+                MixLog.auth.debug("[AuthViewModel] Username '\(cleanUsername)' isTaken: \(isTaken)")
                 if isTaken {
                     errorMessage = "Username is already taken."
                     showError = true
-                    print("[AuthViewModel] Aborting signup: username is taken.")
+                    MixLog.auth.debug("[AuthViewModel] Aborting signup: username is taken.")
                     return
                 }
 

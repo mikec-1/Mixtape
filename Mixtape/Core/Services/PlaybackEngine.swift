@@ -28,6 +28,7 @@ import UIKit
 #elseif os(macOS)
 import AppKit
 #endif
+import OSLog
 
 // MARK: - Playback State
 
@@ -573,7 +574,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             try audioEngine.start()
             return true
         } catch {
-            print("[PlaybackEngine] ❌ Failed to start AVAudioEngine: \(error)")
+            MixLog.playback.error("[PlaybackEngine] ❌ Failed to start AVAudioEngine: \(error)")
             return false
         }
     }
@@ -660,7 +661,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             // Logged because this is a click that produces nothing at all: no
             // audio, no error, no visible change. When it is wrong it is
             // invisible, and it was wrong for years.
-            print("[PlaybackEngine] ⏳ Ignored play of \"\(track.title)\" — already routing")
+            MixLog.playback.debug("[PlaybackEngine] ⏳ Ignored play of \"\(track.title)\" — already routing")
             return
         }
         // A direct play() takes over the local queue. Drop any online routing so
@@ -1083,7 +1084,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         switch type {
         case .began:
             wasPlayingBeforeInterruption = (state == .playing)
-            print("[PlaybackEngine] Audio interrupted (was playing: \(wasPlayingBeforeInterruption))")
+            MixLog.playback.debug("[PlaybackEngine] Audio interrupted (was playing: \(self.wasPlayingBeforeInterruption))")
             // Go through `pause()` so the UI, the lock screen and the fade all
             // agree with the silence the system has already imposed.
             if state == .playing { pause() }
@@ -1093,7 +1094,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
                 guard let raw = note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt else { return [] }
                 return AVAudioSession.InterruptionOptions(rawValue: raw)
             }()
-            print("[PlaybackEngine] Interruption ended (shouldResume: \(options.contains(.shouldResume)))")
+            MixLog.playback.debug("[PlaybackEngine] Interruption ended (shouldResume: \(options.contains(.shouldResume)))")
             guard wasPlayingBeforeInterruption, options.contains(.shouldResume) else {
                 wasPlayingBeforeInterruption = false
                 return
@@ -1104,7 +1105,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             do {
                 try AVAudioSession.sharedInstance().setActive(true)
             } catch {
-                print("[PlaybackEngine] ❌ Could not reactivate session after interruption: \(error)")
+                MixLog.playback.error("[PlaybackEngine] ❌ Could not reactivate session after interruption: \(error)")
                 return
             }
             resume()
@@ -1121,7 +1122,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         // business. Everything else (a new device arriving, a category change)
         // the system handles on its own.
         guard reason == .oldDeviceUnavailable else { return }
-        print("[PlaybackEngine] Output device went away — pausing")
+        MixLog.playback.debug("[PlaybackEngine] Output device went away — pausing")
         if state == .playing { pause() }
     }
     #endif
@@ -1129,7 +1130,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     /// The graph was rebuilt under us. Reconnect it and, if the user still
     /// thinks a song is playing, get it going again.
     private func handleEngineConfigurationChange() {
-        print("[PlaybackEngine] Audio engine reconfigured — rebuilding the graph")
+        MixLog.playback.debug("[PlaybackEngine] Audio engine reconfigured — rebuilding the graph")
         // Nothing to reconnect if nothing was ever connected.
         guard graphConfigured else { return }
         // The connections are gone but the nodes are still attached, so this is
@@ -1376,7 +1377,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
                 guard loadGeneration == generation else { return }
                 if waitsForAudio { haltCurrentAudio() }
                 setError("Couldn't download \"\(track.title)\". Check your connection and try again.")
-                print("[PlaybackEngine] ❌ Download failed for \"\(track.title)\": \(error)")
+                MixLog.playback.error("[PlaybackEngine] ❌ Download failed for \"\(track.title)\": \(error)")
                 return
             }
             guard loadGeneration == generation else { return }
@@ -1416,7 +1417,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             // the exception: it holds its own id here, and staying silent would
             // leave the spinner up forever.
             if !resolved, routingTrackIDs.contains(track.id) {
-                print("[PlaybackEngine] ⏳ No audio yet for \"\(track.title)\" — still routing")
+                MixLog.playback.debug("[PlaybackEngine] ⏳ No audio yet for \"\(track.title)\" — still routing")
                 return
             }
 
@@ -1428,7 +1429,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             } else {
                 setError(UnavailableReason.needsInternet.message(for: track.title))
             }
-            print("[PlaybackEngine] ❌ No playable audio for \"\(track.title)\" (\(location))")
+            MixLog.playback.error("[PlaybackEngine] ❌ No playable audio for \"\(track.title)\" (\(String(describing: location)))")
             return
         }
 
@@ -1441,7 +1442,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
             try AVAudioSession.sharedInstance().setActive(true)
         } catch {
-            print("[PlaybackEngine] Audio session error: \(error)")
+            MixLog.playback.error("[PlaybackEngine] Audio session error: \(error)")
         }
         #endif
 
@@ -1515,7 +1516,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             try openAndPlay(fileURL)
         } catch {
             guard loadGeneration == generation else { return }
-            print("[PlaybackEngine] ⚠️ First open failed for \"\(track.title)\": \(error) — attempting self-heal")
+            MixLog.playback.error("[PlaybackEngine] ⚠️ First open failed for \"\(track.title)\": \(error) — attempting self-heal")
 
             // Self-heal: a corrupt cached copy (e.g. a legacy bad ID3-on-m4a
             // download, or a truncated fetch) makes AVAudioFile throw
@@ -1541,16 +1542,16 @@ public final class PlaybackEngine: NSObject, ObservableObject {
                 do {
                     fileURL = healedURL
                     try openAndPlay(healedURL)
-                    print("[PlaybackEngine] ✅ Self-heal succeeded for \"\(track.title)\"")
+                    MixLog.playback.debug("[PlaybackEngine] ✅ Self-heal succeeded for \"\(track.title)\"")
                     return
                 } catch {
                     guard loadGeneration == generation else { return }
-                    print("[PlaybackEngine] ❌ Self-heal retry failed for \"\(track.title)\": \(error)")
+                    MixLog.playback.error("[PlaybackEngine] ❌ Self-heal retry failed for \"\(track.title)\": \(error)")
                 }
             }
 
             setError("Couldn't play \"\(track.title)\" right now. Please try again.")
-            print("[PlaybackEngine] ❌ Playback failed for \"\(track.title)\": \(error)")
+            MixLog.playback.error("[PlaybackEngine] ❌ Playback failed for \"\(track.title)\": \(error)")
         }
     }
 
@@ -1878,16 +1879,16 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     /// so repeated plays aggregate rather than pile up as unique entries.
     private func recordCurrentPlay() {
         guard let track = queue.currentTrack else {
-            print("[history] recordCurrentPlay: no currentTrack — skipped")
+            MixLog.playback.debug("[history] recordCurrentPlay: no currentTrack — skipped")
             return
         }
         if recentlyPlayed.first?.id == track.id {
-            print("[history] recordCurrentPlay: '\(track.title)' already at top — skipped")
+            MixLog.playback.debug("[history] recordCurrentPlay: '\(track.title)' already at top — skipped")
             return
         }
         recentlyPlayed.insert(track, at: 0)
         if recentlyPlayed.count > 50 { recentlyPlayed.removeLast() }
-        print("[history] RECORDED '\(track.title)' id=\(track.id) online=\(track.isOnline) recentlyPlayed.count=\(recentlyPlayed.count)")
+        MixLog.playback.debug("[history] RECORDED '\(track.title)' id=\(track.id) online=\(track.isOnline) recentlyPlayed.count=\(self.recentlyPlayed.count)")
         onTrackAddedToHistory?(track, loggedPlaySeconds)
     }
 
@@ -1903,7 +1904,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         }
         let target = duration > 0 ? min(30, duration * 0.9) : 30
         guard currentTime >= target else { return }
-        print("[history] threshold reached: currentTime=\(currentTime) target=\(target) duration=\(duration)")
+        MixLog.playback.debug("[history] threshold reached: currentTime=\(self.currentTime) target=\(target) duration=\(self.duration)")
         didRecordHistoryCurrent = true
         loggedPlayTrackID = track.id
         loggedPlaySeconds = currentTime

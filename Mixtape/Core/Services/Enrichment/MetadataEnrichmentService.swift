@@ -12,6 +12,7 @@
 // This service is stateless and Sendable — safe to share across concurrency domains.
 
 import Foundation
+import OSLog
 
 public final class MetadataEnrichmentService: Sendable {
 
@@ -141,14 +142,14 @@ public final class MetadataEnrichmentService: Sendable {
                 // and — because both gates ran — it recognised the *pair*, not
                 // just a song that happens to share the name. That's the only
                 // evidence available about which half of the filename is which.
-                print("[Enrichment] Swapped reading matched — filename was 'Title - Artist'")
+                MixLog.importing.debug("[Enrichment] Swapped reading matched — filename was 'Title - Artist'")
                 scoredBest = hit
                 reading    = alternate
             } else {
                 scoredBest = nil
             }
         } catch {
-            print("[Enrichment] iTunes query failed: \(error.localizedDescription)")
+            MixLog.importing.error("[Enrichment] iTunes query failed: \(error.localizedDescription)")
             return EnrichmentCandidate(title: primary.rawTitle,
                                        artistName: primary.artist,
                                        trackNumber: parsed.trackNumber,
@@ -160,7 +161,7 @@ public final class MetadataEnrichmentService: Sendable {
         //    the original title. Neither reading was recognised, so there is no
         //    reason to prefer the flipped one; the parser's assumption stands.
         guard let (best, confidence) = scoredBest else {
-            print("[Enrichment] No result above threshold \(Self.minConfidence) — using filename only")
+            MixLog.importing.debug("[Enrichment] No result above threshold \(Self.minConfidence) — using filename only")
             // Use the RAW (un-stripped) title so the track keeps its original name
             return EnrichmentCandidate(title: primary.rawTitle,
                                        artistName: primary.artist,
@@ -181,7 +182,7 @@ public final class MetadataEnrichmentService: Sendable {
         // Primary artist name for the Deezer lookup (strip featured artists)
         let primaryArtist = ImportService.primaryArtistName(from: best.artistName)
         let artistImageURL = await itunesClient.artistImageURL(for: primaryArtist)
-        print("[Enrichment] Deezer artist image for '\(primaryArtist)': \(artistImageURL?.absoluteString ?? "none")")
+        MixLog.importing.debug("[Enrichment] Deezer artist image for '\(primaryArtist)': \(artistImageURL?.absoluteString ?? "none")")
 
         return EnrichmentCandidate(
             title:          originalTitle,     // ← preserve "Mist slowed", not "Mist"
@@ -217,7 +218,7 @@ public final class MetadataEnrichmentService: Sendable {
     private func bestMatch(for reading: Reading) async throws -> (ITunesTrackResult, Double)? {
         let results = try await itunesClient.search(title: reading.searchTitle,
                                                     artist: reading.artist)
-        print("[Enrichment] iTunes returned \(results.count) results for title='\(reading.searchTitle)' artist='\(reading.artist ?? "nil")'")
+        MixLog.importing.debug("[Enrichment] iTunes returned \(results.count) results for title='\(reading.searchTitle)' artist='\(reading.artist ?? "nil")'")
 
         // Pre-filter: exclude result types that clearly don't match the intent.
         // If the user's file isn't labelled "instrumental" or "karaoke", they don't
@@ -232,7 +233,7 @@ public final class MetadataEnrichmentService: Sendable {
                    !name.contains("tribute")      &&
                    !name.contains("made famous")
         }
-        print("[Enrichment] After type-filter: \(filteredResults.count) / \(results.count) results remain")
+        MixLog.importing.debug("[Enrichment] After type-filter: \(filteredResults.count) / \(results.count) results remain")
 
         // Identity gates. Scoring alone can't do this job — it's a weighted
         // blend, so a perfect title drags a completely wrong artist over the
@@ -247,14 +248,14 @@ public final class MetadataEnrichmentService: Sendable {
             guard let artist = reading.artist else { return true }
             return artistsMatch(r.artistName, artist)
         }
-        print("[Enrichment] After identity gates: \(plausible.count) / \(filteredResults.count) results remain")
+        MixLog.importing.debug("[Enrichment] After identity gates: \(plausible.count) / \(filteredResults.count) results remain")
 
         return plausible
             .map { r -> (ITunesTrackResult, Double) in
                 let s = score(result: r,
                               queryTitle: reading.searchTitle,
                               queryArtist: reading.artist)
-                print("[Enrichment]   \(String(format: "%.2f", s)) '\(r.trackName)' by '\(r.artistName)'")
+                MixLog.importing.debug("[Enrichment]   \(String(format: "%.2f", s)) '\(r.trackName)' by '\(r.artistName)'")
                 return (r, s)
             }
             .filter { $0.1 >= Self.minConfidence }

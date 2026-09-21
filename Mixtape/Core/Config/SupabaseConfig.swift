@@ -6,6 +6,7 @@
 
 import Foundation
 import Supabase
+import OSLog
 
 public enum SupabaseConfig {
 
@@ -96,7 +97,7 @@ extension SupabaseClient {
         do {
             try await joinWithDeadline(channel)
         } catch {
-            print("[Realtime] \(label) join failed (\(error)) — replacing the socket")
+            MixLog.sync.error("[Realtime] \(label) join failed (\(error)) — replacing the socket")
             await reconnectRealtimeSocket()
             try? await channel.subscribeWithError()
         }

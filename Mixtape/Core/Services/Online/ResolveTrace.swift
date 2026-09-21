@@ -13,9 +13,11 @@
 // `begin` supersedes whatever came before, which is exactly what a skip does.
 //
 // Off unless asked for: DEBUG builds always, release builds behind
-// `defaults write com.mikey.Mixtape MixtapeResolveTrace -bool YES`.
+// `defaults write com.mikey.Mixtape MixtapeResolveTrace -bool YES`. Logged at
+// `.notice` and public, so an opted-in release build shows it unredacted.
 
 import Foundation
+import OSLog
 
 final class ResolveTrace: @unchecked Sendable {
 
@@ -68,13 +70,13 @@ final class ResolveTrace: @unchecked Sendable {
         } ?? false
         if let pressed, pressIsFresh {
             start = pressed.at
-            print("[Resolve] ── \(label)  (from \(pressed.what) press)")
-            print("[Resolve]    \(pad("press → resolve"))  Δ\(ms(from: pressed.at, to: now))  t+\(ms(from: pressed.at, to: now))")
+            MixLog.playback.notice("[Resolve] ── \(label, privacy: .public)  (from \(pressed.what, privacy: .public) press)")
+            MixLog.playback.notice("[Resolve]    \(self.pad("press → resolve"), privacy: .public)  Δ\(self.ms(from: pressed.at, to: now), privacy: .public)  t+\(self.ms(from: pressed.at, to: now), privacy: .public)")
             self.pressed = nil
         } else {
             self.pressed = nil
             start = now
-            print("[Resolve] ── \(label)")
+            MixLog.playback.notice("[Resolve] ── \(label, privacy: .public)")
         }
         last  = now
         self.label = label
@@ -95,7 +97,7 @@ final class ResolveTrace: @unchecked Sendable {
         guard let start, let previous = last else { return }
         let now = DispatchTime.now()
         last = now
-        print("[Resolve]    \(pad(stage))  Δ\(ms(from: previous, to: now))  t+\(ms(from: start, to: now))")
+        MixLog.playback.notice("[Resolve]    \(self.pad(stage), privacy: .public)  Δ\(self.ms(from: previous, to: now), privacy: .public)  t+\(self.ms(from: start, to: now), privacy: .public)")
     }
 
     /// Close the attempt. `outcome` says which path actually served the audio.
@@ -104,7 +106,7 @@ final class ResolveTrace: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         guard let start else { return }
         let total = ms(from: start, to: DispatchTime.now())
-        print("[Resolve] ══ \(label) → \(outcome) in \(total)")
+        MixLog.playback.notice("[Resolve] ══ \(self.label, privacy: .public) → \(outcome, privacy: .public) in \(total, privacy: .public)")
         self.start = nil
         self.last  = nil
     }

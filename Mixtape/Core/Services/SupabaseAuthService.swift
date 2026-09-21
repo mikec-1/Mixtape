@@ -16,6 +16,7 @@ import UIKit
 #else
 import AppKit
 #endif
+import OSLog
 
 @MainActor
 public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
@@ -316,7 +317,7 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
             await reconcileProfileAvatar()
             await checkUsernamePrompt()
         } catch {
-            print("[Auth] ❌ Google sign-in failed: \(error) — \(error.localizedDescription)")
+            MixLog.auth.error("❌ Google sign-in failed: \(error) — \(error.localizedDescription)")
             throw map(error)
         }
     }
@@ -483,7 +484,7 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
         }
         
         let cleaned = username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        print("[SupabaseAuthService] Checking if username '\(cleaned)' is taken...")
+        MixLog.auth.debug("[SupabaseAuthService] Checking if username '\(cleaned)' is taken...")
         do {
             let response: [ProfileCheck] = try await client.from("profiles")
                 .select("id")
@@ -492,10 +493,10 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
                 .execute()
                 .value
             let taken = !response.isEmpty
-            print("[SupabaseAuthService] Username '\(cleaned)' taken check result: \(taken) (found \(response.count) rows)")
+            MixLog.auth.debug("[SupabaseAuthService] Username '\(cleaned)' taken check result: \(taken) (found \(response.count) rows)")
             return taken
         } catch {
-            print("[SupabaseAuthService] isUsernameTaken error for '\(cleaned)': \(error)")
+            MixLog.auth.error("[SupabaseAuthService] isUsernameTaken error for '\(cleaned)': \(error)")
             throw error
         }
     }
@@ -825,7 +826,7 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
         do {
             try await client.auth.session(from: url)
         } catch {
-            print("[SupabaseAuthService] Deep link handling failed: \(error.localizedDescription)")
+            MixLog.auth.error("[SupabaseAuthService] Deep link handling failed: \(error.localizedDescription)")
         }
     }
 

@@ -523,7 +523,7 @@ public final class SpotifyImportService {
         if !tracks.isEmpty { libraryService.deleteTracks(ids: tracks) }
         libraryService.deletePlaylists(ids: playlists)
         if !tracks.isEmpty || !playlists.isEmpty {
-            print("[SpotifyImport] \u{21A9} Stopped — removed \(tracks.count) song(s) and \(playlists.count) playlist(s)")
+            MixLog.importing.debug("[SpotifyImport] \u{21A9} Stopped — removed \(tracks.count) song(s) and \(playlists.count) playlist(s)")
         }
     }
 

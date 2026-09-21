@@ -19,6 +19,7 @@
 import Foundation
 import Combine
 import Supabase
+import OSLog
 
 @MainActor
 public final class ContinuityService: ObservableObject {
@@ -188,7 +189,7 @@ public final class ContinuityService: ObservableObject {
                     try await client.joinWithDeadline(channel)
                 } catch {
                     guard !Task.isCancelled else { return }
-                    print("[Continuity] join failed, retrying in \(delay): \(error)")
+                    MixLog.sync.error("[Continuity] join failed, retrying in \(delay): \(error)")
                     self.channel = nil
                     await client.removeChannel(channel)
                     // A join only ever fails here because the socket is dead —
@@ -198,10 +199,10 @@ public final class ContinuityService: ObservableObject {
                     delay = min(delay * 2, .seconds(30))
                     continue
                 }
-                print("[Continuity] joined \(topic) as \(me.name)")
+                MixLog.sync.debug("[Continuity] joined \(topic) as \(me.name)")
                 devices = []
                 presenceRefs = [:]
-                do { try await channel.track(me) } catch { print("[Continuity] track failed: \(error)") }
+                do { try await channel.track(me) } catch { MixLog.sync.error("[Continuity] track failed: \(error)") }
                 sendState()
                 await listen(presence: presence, states: states, commands: commands)
                 return
@@ -317,7 +318,7 @@ public final class ContinuityService: ObservableObject {
             presenceRefs[key]?.remove(p.ref)
             guard presenceRefs[key]?.isEmpty ?? true else { continue }
             presenceRefs[key] = nil
-            print("[Continuity] device left: \(key)")
+            MixLog.sync.debug("[Continuity] device left: \(key)")
             devices.removeAll { $0.id == key }
             lastStates[key] = nil
             statuses[key] = nil
@@ -335,7 +336,7 @@ public final class ContinuityService: ObservableObject {
             if let i = devices.firstIndex(where: { $0.id == key }) {
                 if devices[i] != device { devices[i] = device }
             } else {
-                print("[Continuity] device joined: \(device.name) (\(device.platform))")
+                MixLog.sync.debug("[Continuity] device joined: \(device.name) (\(device.platform))")
                 devices.append(device)
                 joined = true
             }

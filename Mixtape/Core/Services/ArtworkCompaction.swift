@@ -161,7 +161,7 @@ public final class ArtworkCompaction {
             do {
                 try context.save()
             } catch {
-                print("[ArtworkCompaction] save failed at offset \(offset): \(error)")
+                MixLog.database.error("[ArtworkCompaction] save failed at offset \(offset): \(error)")
                 break
             }
 
@@ -182,7 +182,6 @@ public final class ArtworkCompaction {
         let verb    = cancelled ? "stopped after" : "done —"
         let line = String(format: "[ArtworkCompaction] %@ %d covers re-encoded, %.1f MB reclaimed in %.1fs",
                           verb, rewritten, mb, seconds)
-        print(line)
         MixLog.database.notice("\(line, privacy: .public)")
     }
 }

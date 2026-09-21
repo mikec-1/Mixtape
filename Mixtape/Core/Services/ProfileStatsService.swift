@@ -7,6 +7,7 @@
 
 import Foundation
 import Supabase
+import OSLog
 
 // MARK: - Public Models
 
@@ -167,7 +168,7 @@ public final class ProfileStatsService {
         do {
             try await client.from("profile_stats").upsert(row).execute()
         } catch {
-            print("[ProfileStatsService] publish failed: \(error.localizedDescription)")
+            MixLog.library.error("[ProfileStatsService] publish failed: \(error.localizedDescription)")
         }
     }
 

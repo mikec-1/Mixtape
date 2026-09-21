@@ -22,6 +22,7 @@
 
 import Foundation
 import CryptoKit
+import OSLog
 
 public enum PlaybackCache {
 
@@ -304,6 +305,6 @@ public enum PlaybackCache {
             }
         }
         try? fm.removeItem(at: legacy)
-        if moved > 0 { print("[PlaybackCache] Adopted \(moved) file(s) from the old Discover cache") }
+        if moved > 0 { MixLog.playback.debug("[PlaybackCache] Adopted \(moved) file(s) from the old Discover cache") }
     }
 }

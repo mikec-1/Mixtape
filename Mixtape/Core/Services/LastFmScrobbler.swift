@@ -22,6 +22,7 @@
 import Foundation
 import Combine
 import CryptoKit
+import OSLog
 
 @MainActor
 public final class LastFmScrobbler: ObservableObject {
@@ -330,10 +331,10 @@ public final class LastFmScrobbler: ObservableObject {
             if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
                 // Failures are logged rather than surfaced or queued.
                 let body = String(data: data, encoding: .utf8) ?? ""
-                print("[LastFmScrobbler] Request failed (\(http.statusCode)): \(body)")
+                MixLog.playback.error("[LastFmScrobbler] Request failed (\(http.statusCode)): \(body)")
             }
         } catch {
-            print("[LastFmScrobbler] Network error: \(error)")
+            MixLog.playback.error("[LastFmScrobbler] Network error: \(error)")
         }
     }
 

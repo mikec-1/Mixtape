@@ -9,6 +9,7 @@ import Foundation
 import SwiftData
 import Supabase
 import Combine
+import OSLog
 
 @MainActor
 public final class AppDependencies: ObservableObject {
@@ -504,12 +505,12 @@ LaunchTimeline.mark("deps/engine")
         let deviceID = Self.deviceID
         self.playbackEngine.onTrackAddedToHistory = { track, seconds in
             do { try historyRepo.record(trackID: track.id, deviceID: deviceID, secondsPlayed: seconds) }
-            catch { print("[history] persist FAILED: \(error)") }
+            catch { MixLog.playback.error("[history] persist FAILED: \(error)") }
             // Online (Discover) tracks have no library row — persist a lightweight
             // snapshot so they survive relaunch on Home and resolve in stats.
             if track.isOnline {
-                do { try snapshotRepo.upsert(track); print("[history] snapshot upserted '\(track.title)'") }
-                catch { print("[history] snapshot upsert FAILED: \(error)") }
+                do { try snapshotRepo.upsert(track); MixLog.playback.debug("[history] snapshot upserted '\(track.title)'") }
+                catch { MixLog.playback.error("[history] snapshot upsert FAILED: \(error)") }
             }
         }
 
@@ -517,7 +518,7 @@ LaunchTimeline.mark("deps/engine")
         // the difference between "started this" and "actually listened to this".
         self.playbackEngine.onPlaySecondsFinalised = { trackID, seconds in
             do { try historyRepo.finaliseLatestPlay(trackID: trackID, secondsPlayed: seconds) }
-            catch { print("[history] finalise FAILED: \(error)") }
+            catch { MixLog.playback.error("[history] finalise FAILED: \(error)") }
         }
 
         // Restore persisted history so the "Recently Played" list is populated on
@@ -533,7 +534,7 @@ LaunchTimeline.mark("deps/engine")
                 if let row = try? trackRepo.fetch(id: id) { return row.isDeleted ? nil : row }
                 return snapshots[id]
             }
-            print("[history] restore: \(recentIDs.count) ids, \(snapshots.count) snapshots, resolved \(tracks.count) tracks")
+            MixLog.playback.debug("[history] restore: \(recentIDs.count) ids, \(snapshots.count) snapshots, resolved \(tracks.count) tracks")
             self.playbackEngine.restoreHistory(tracks)
         }
         }
@@ -736,7 +737,7 @@ LaunchTimeline.mark("deps/engine")
         let lastUserKey = ModelStore.lastUserKey
         let lastUserID = UserDefaults.standard.string(forKey: lastUserKey)
         if ModelStore.shared.open(for: user.id) {
-            print("[AppDependencies] 🔀 Different user signed in — opened their own local store.")
+            MixLog.library.debug("[AppDependencies] 🔀 Different user signed in — opened their own local store.")
             adoptSwitchedStore()
         }
 

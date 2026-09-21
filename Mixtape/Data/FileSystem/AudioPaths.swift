@@ -24,6 +24,7 @@
 // so nothing looked wrong until the file was gone.
 
 import Foundation
+import OSLog
 
 public nonisolated enum AudioPaths {
 
@@ -187,7 +188,7 @@ public nonisolated enum AudioPaths {
         }
         try? fm.removeItem(at: oldDir)
         if moved > 0 {
-            print("[AudioPaths] Migrated \(moved) file(s) from Documents/Music/ to Application Support")
+            MixLog.library.debug("[AudioPaths] Migrated \(moved) file(s) from Documents/Music/ to Application Support")
         }
     }
 
@@ -220,7 +221,7 @@ public nonisolated enum AudioPaths {
             }
         }
         if reclaimed > 0 {
-            print("[AudioPaths] Reclaimed \(reclaimed) never-uploaded file(s) from the purgeable cache")
+            MixLog.library.debug("[AudioPaths] Reclaimed \(reclaimed) never-uploaded file(s) from the purgeable cache")
         }
         return reclaimed
     }

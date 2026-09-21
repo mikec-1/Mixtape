@@ -27,6 +27,7 @@
 
 import Foundation
 import Combine
+import OSLog
 
 // MARK: - Paths
 
@@ -112,7 +113,7 @@ public nonisolated enum OfflineStorePaths {
         do {
             try await AudioTranscoder.transcode(source, to: scratch, quality: quality)
         } catch {
-            print("[OfflineStore] ⚠️ Couldn't re-encode \(trackID) at \(quality.rawValue), keeping the original: \(error)")
+            MixLog.playback.error("[OfflineStore] ⚠️ Couldn't re-encode \(trackID) at \(quality.rawValue), keeping the original: \(error)")
             return try await keepOriginal()
         }
 

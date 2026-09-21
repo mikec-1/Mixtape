@@ -46,7 +46,7 @@ public enum ModelContainerSetup {
                         wiping: nil, owner: owner)
         }
         if StoreFileLayout.adoptSharedStore(at: url, owner: owner) {
-            print("[ModelContainerSetup] 📦 Adopted the shared store as \(url.lastPathComponent)")
+            MixLog.database.debug("[ModelContainerSetup] 📦 Adopted the shared store as \(url.lastPathComponent)")
         }
         return open(ModelConfiguration(schema: schema, url: url, allowsSave: true),
                     wiping: url, owner: owner)
@@ -60,8 +60,8 @@ public enum ModelContainerSetup {
                 return container
             }
         } catch {
-            print("[ModelContainerSetup] ⚠️ Failed to load ModelContainer (probably schema migration issue): \(error)")
-            print("[ModelContainerSetup] 🗑️ Wiping local SQLite store to recover...")
+            MixLog.database.error("[ModelContainerSetup] ⚠️ Failed to load ModelContainer (probably schema migration issue): \(error)")
+            MixLog.database.debug("[ModelContainerSetup] 🗑️ Wiping local SQLite store to recover...")
 
             if let url { StoreFileLayout.remove(storeAt: url) }
 

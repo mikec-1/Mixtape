@@ -7,6 +7,7 @@
 // minutes and a by-hour distribution.
 
 import Foundation
+import OSLog
 
 // MARK: - Period
 
@@ -106,11 +107,11 @@ public final class ListeningStatsService {
     /// they asked for it explicitly.
     public func resetHistory() {
         do { try history.deleteAll() } catch {
-            print("[ListeningStats] history wipe failed: \(error)")
+            MixLog.library.error("[ListeningStats] history wipe failed: \(error)")
         }
         remoteWipe?()
         do { try snapshots?.deleteAll() } catch {
-            print("[ListeningStats] snapshot wipe failed: \(error)")
+            MixLog.library.error("[ListeningStats] snapshot wipe failed: \(error)")
         }
     }
 

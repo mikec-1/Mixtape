@@ -457,7 +457,7 @@ public final class LibraryService: ObservableObject {
                 fetchMilliseconds: Int((CFAbsoluteTimeGetCurrent() - fetchStarted) * 1000)
             ))
         } catch {
-            print("[LibraryService] refresh tracks/albums/artists failed: \(error)")
+            MixLog.library.error("[LibraryService] refresh tracks/albums/artists failed: \(error)")
         }
         endRefreshPass(pass)
     }
@@ -489,7 +489,7 @@ public final class LibraryService: ObservableObject {
         do {
             apply(try await snapshotReader.read(container: ModelStore.shared.container))
         } catch {
-            print("[LibraryService] refresh tracks/albums/artists failed: \(error)")
+            MixLog.library.error("[LibraryService] refresh tracks/albums/artists failed: \(error)")
         }
         endRefreshPass(pass)
     }
@@ -1287,7 +1287,7 @@ public final class LibraryService: ObservableObject {
             let ordered = pinned + unpinned
             if playlists != ordered { playlists = ordered }
         } catch {
-            print("[LibraryService] refresh playlists failed: \(error)")
+            MixLog.library.error("[LibraryService] refresh playlists failed: \(error)")
         }
     }
 
@@ -1350,7 +1350,7 @@ public final class LibraryService: ObservableObject {
             try albumRepo.deleteAll()
             try artistRepo.deleteAll()
         } catch {
-            print("[LibraryService] clearAll failed: \(error)")
+            MixLog.library.error("[LibraryService] clearAll failed: \(error)")
         }
         // Favourites are their own rows; without this the hearts come back the
         // moment a song with a matching id is imported again.
@@ -1467,7 +1467,7 @@ public final class LibraryService: ObservableObject {
             restored += 1
         }
         if restored > 0 {
-            print("[LibraryService] ♻️ Restored \(restored) track(s) tombstoned by a stale server record")
+            MixLog.library.debug("[LibraryService] ♻️ Restored \(restored) track(s) tombstoned by a stale server record")
             refresh()
         }
         return restored
@@ -1480,13 +1480,13 @@ public final class LibraryService: ObservableObject {
     /// Call `syncService.deleteAllServerTracks()` BEFORE this to push the deletion.
     public func deleteAllTracks() {
         do { try trackRepo.deleteAll() } catch {
-            print("[LibraryService] deleteAllTracks — trackRepo.deleteAll failed: \(error)")
+            MixLog.library.error("[LibraryService] deleteAllTracks — trackRepo.deleteAll failed: \(error)")
         }
         do { try albumRepo.deleteAll() } catch {
-            print("[LibraryService] deleteAllTracks — albumRepo.deleteAll failed: \(error)")
+            MixLog.library.error("[LibraryService] deleteAllTracks — albumRepo.deleteAll failed: \(error)")
         }
         do { try artistRepo.deleteAll() } catch {
-            print("[LibraryService] deleteAllTracks — artistRepo.deleteAll failed: \(error)")
+            MixLog.library.error("[LibraryService] deleteAllTracks — artistRepo.deleteAll failed: \(error)")
         }
         try? favoriteRepo.deleteAll()
 
@@ -1671,7 +1671,7 @@ public final class LibraryService: ObservableObject {
             }
             if !doomed.isEmpty { deleteTracks(ids: doomed) }
             guard !rescue.isEmpty || !doomed.isEmpty else { return }
-            print("[Library] 🎧 Migrated \(rescue.count) saved song(s) to likes, removed \(doomed.count) leftover(s)")
+            MixLog.library.debug("🎧 Migrated \(rescue.count) saved song(s) to likes, removed \(doomed.count) leftover(s)")
             refresh()
         }
     }
@@ -2347,7 +2347,7 @@ public final class LibraryService: ObservableObject {
         do {
             deleted = try trackRepo.softDelete(ids: Array(doomed))
         } catch {
-            print("[LibraryService] deleteTracks failed: \(error)")
+            MixLog.library.error("[LibraryService] deleteTracks failed: \(error)")
             return
         }
         guard !deleted.isEmpty else { return }

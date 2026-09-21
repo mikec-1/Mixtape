@@ -36,6 +36,7 @@
 
 import Foundation
 import Combine
+import OSLog
 
 @MainActor
 public final class SpotifyFollowService: ObservableObject {
@@ -417,7 +418,7 @@ public final class SpotifyFollowService: ObservableObject {
                 // The playlist is gone here either way; a failed write to
                 // Spotify leaves their copy standing rather than blocking the
                 // deletion the user actually made.
-                print("[SpotifyFollow] Couldn't remove \(link.name) from Spotify: \(error)")
+                MixLog.sync.error("[SpotifyFollow] Couldn't remove \(link.name) from Spotify: \(error)")
             }
         }
         save()
@@ -674,7 +675,8 @@ public final class SpotifyFollowService: ObservableObject {
                         // flag stops that.
                         pushedCover = true
                     } catch {
-                        print("[SpotifyFollow] Cover not sent for \(link.name): \(error)")
+                        let name = link.name   // a log message can't capture an inout
+                        MixLog.sync.error("[SpotifyFollow] Cover not sent for \(name): \(error)")
                     }
                 }
             }

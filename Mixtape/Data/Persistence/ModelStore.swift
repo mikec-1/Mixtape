@@ -5,6 +5,7 @@
 
 import Foundation
 import SwiftData
+import OSLog
 
 /// The store that is open right now, and the account it belongs to.
 ///
@@ -70,7 +71,7 @@ public final class ModelStore {
         ArtworkProvider.shared.invalidateAll()
         openContainer = nil
         ownerID = userID
-        print("[ModelStore] Switched to the store for \(userID.uuidString)")
+        MixLog.database.debug("[ModelStore] Switched to the store for \(userID.uuidString)")
         return true
     }
 }

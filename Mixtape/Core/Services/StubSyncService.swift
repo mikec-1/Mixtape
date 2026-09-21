@@ -5,6 +5,7 @@
 
 import Foundation
 import Combine
+import OSLog
 
 @MainActor
 public final class StubSyncService: ObservableObject, SyncServiceProtocol {
@@ -21,7 +22,7 @@ public final class StubSyncService: ObservableObject, SyncServiceProtocol {
 
     public func onSignIn(user: AppUser, accessToken: String) async {
         syncState = .idle
-        print("[StubSyncService] signed in as \(user.email) — sync not yet implemented")
+        MixLog.sync.debug("[StubSyncService] signed in as \(user.email) — sync not yet implemented")
     }
 
     public func onSignOut() async {
@@ -31,11 +32,11 @@ public final class StubSyncService: ObservableObject, SyncServiceProtocol {
 
     public func sync() async throws {
         // No-op; local-only
-        print("[StubSyncService] sync() called — stub, no-op")
+        MixLog.sync.debug("[StubSyncService] sync() called — stub, no-op")
     }
 
     public func push<T: Codable>(_ entity: T, table: String) async throws {
-        print("[StubSyncService] push() to '\(table)' — stub, no-op")
+        MixLog.sync.debug("[StubSyncService] push() to '\(table)' — stub, no-op")
     }
 
     public func startBackgroundSync(intervalSeconds: TimeInterval) {
@@ -56,6 +57,6 @@ public final class StubSyncService: ObservableObject, SyncServiceProtocol {
     }
 
     public func resolveConflict(entityID: UUID, resolution: ConflictResolution) async throws {
-        print("[StubSyncService] resolveConflict for \(entityID) — stub, no-op")
+        MixLog.sync.debug("[StubSyncService] resolveConflict for \(entityID) — stub, no-op")
     }
 }

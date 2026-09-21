@@ -25,6 +25,7 @@
 import Foundation
 import Combine
 import Network
+import OSLog
 
 /// How a track can be played on *this* device, right now.
 public enum TrackAvailability: Equatable, Hashable {
@@ -1681,7 +1682,7 @@ public final class DownloadManager: ObservableObject {
                                                               quality: effectiveDownloadQuality)
                         exportedTrackIDs.insert(track.id)
                     } catch {
-                        print("[DownloadManager] ⚠️ Downloaded but couldn't write a file copy: \(error)")
+                        MixLog.playback.error("[DownloadManager] ⚠️ Downloaded but couldn't write a file copy: \(error)")
                     }
                 }
 
@@ -1689,7 +1690,7 @@ public final class DownloadManager: ObservableObject {
                 discardStaging()
                 source.supersededCacheEntry?()
 
-                print("[DownloadManager] ✅ Downloaded for offline playback: \(track.title)")
+                MixLog.playback.debug("[DownloadManager] ✅ Downloaded for offline playback: \(track.title)")
             } catch is CancellationError {
                 // Asked to stop, not a failure. Marking it failed would light up
                 // the retry button for something the user deliberately called off.
@@ -1714,14 +1715,14 @@ public final class DownloadManager: ObservableObject {
         attempts[track.id] = attempt
 
         guard attempt < Self.maxAttempts else {
-            print("[DownloadManager] ❌ Gave up on \(track.title) after \(attempt) attempts: \(error)")
+            MixLog.playback.error("[DownloadManager] ❌ Gave up on \(track.title) after \(attempt) attempts: \(error)")
             requalifying.remove(track.id)
             markFailed(track.id, message: error.localizedDescription)
             return
         }
 
         let delay = Self.retryDelay(afterAttempt: attempt)
-        print("[DownloadManager] ⚠️ \(track.title) failed (attempt \(attempt)), retrying: \(error)")
+        MixLog.playback.error("[DownloadManager] ⚠️ \(track.title) failed (attempt \(attempt)), retrying: \(error)")
 
         retryTasks[track.id]?.cancel()
         retryTasks[track.id] = Task { [weak self] in

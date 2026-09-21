@@ -5,6 +5,7 @@
 
 import Foundation
 import Combine
+import OSLog
 
 public final class StubFileStorageService: FileStorageProtocol {
 
@@ -17,17 +18,17 @@ public final class StubFileStorageService: FileStorageProtocol {
     public init() {}
 
     public func upload(track: Track, accessToken: String) async throws -> String {
-        print("[StubFileStorageService] upload() — stub, returning local path as key")
+        MixLog.sync.debug("[StubFileStorageService] upload() — stub, returning local path as key")
         return track.file.localPath
     }
 
     public func download(track: Track, accessToken: String) async throws -> URL {
-        print("[StubFileStorageService] download() — stub, returning existing local URL")
+        MixLog.sync.debug("[StubFileStorageService] download() — stub, returning existing local URL")
         return track.file.localURL
     }
 
     public func delete(remoteKey: String, accessToken: String) async throws {
-        print("[StubFileStorageService] delete(\(remoteKey)) — stub, no-op")
+        MixLog.sync.debug("[StubFileStorageService] delete(\(remoteKey)) — stub, no-op")
     }
 
     public func localURL(for track: Track) -> URL? {
@@ -36,7 +37,7 @@ public final class StubFileStorageService: FileStorageProtocol {
     }
 
     public func clearLocalCache() throws {
-        print("[StubFileStorageService] clearLocalCache() — stub, no-op")
+        MixLog.sync.debug("[StubFileStorageService] clearLocalCache() — stub, no-op")
     }
 
     public func localCacheSize() throws -> Int64 {

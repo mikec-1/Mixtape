@@ -343,7 +343,7 @@ public final class ExportManager: ObservableObject {
                 return url
             } catch {
                 // Ignore resolve error and fall back to path
-                print("[ExportManager] Bookmark resolution failed: \(error)")
+                MixLog.exporting.error("[ExportManager] Bookmark resolution failed: \(error)")
             }
         }
         
@@ -538,7 +538,7 @@ public final class ExportManager: ObservableObject {
             // FLAC/Opus/WAV imports kept at High keep their original container,
             // and there's no tagger here for those. The copy is correct audio
             // with whatever tags it already carried.
-            print("[Export] No tagger for .\(destinationURL.pathExtension.lowercased()) — copied without rewriting metadata")
+            MixLog.exporting.debug("No tagger for .\(destinationURL.pathExtension.lowercased()) — copied without rewriting metadata")
         }
 
         rememberExport(destinationURL, for: track.id)
@@ -742,7 +742,7 @@ public final class ExportManager: ObservableObject {
                 )
             }
         } catch {
-            print("[ExportManager] Failed to update file metadata on disk: \(error)")
+            MixLog.exporting.error("[ExportManager] Failed to update file metadata on disk: \(error)")
         }
     }
 

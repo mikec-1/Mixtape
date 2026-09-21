@@ -14,6 +14,7 @@
 import Foundation
 import Combine
 import Supabase
+import OSLog
 
 @MainActor
 public final class PlaylistSharingService: ObservableObject {
@@ -1062,7 +1063,7 @@ public final class PlaylistSharingService: ObservableObject {
                 .execute()
                 .value
         } catch {
-            print("[Sharing] ❌ Invite inbox read failed: \(error)")
+            MixLog.sync.error("[Sharing] ❌ Invite inbox read failed: \(error)")
             return
         }
 
@@ -1081,7 +1082,7 @@ public final class PlaylistSharingService: ObservableObject {
                 .execute()
                 .value
         } catch {
-            print("[Sharing] ❌ Invite playlist read failed: \(error)")
+            MixLog.sync.error("[Sharing] ❌ Invite playlist read failed: \(error)")
             return
         }
 
@@ -1429,7 +1430,7 @@ public final class PlaylistSharingService: ObservableObject {
                     .execute()
                 repaired.insert(summary.id)
             } catch {
-                print("[Sharing] ❌ Cover backfill failed for \(summary.name): \(error)")
+                MixLog.sync.error("[Sharing] ❌ Cover backfill failed for \(summary.name): \(error)")
             }
         }
 
@@ -1467,7 +1468,7 @@ public final class PlaylistSharingService: ObservableObject {
                 .upload(path, data: jpeg, options: FileOptions(contentType: "image/jpeg", upsert: true))
             return path
         } catch {
-            print("[Sharing] ❌ Cover upload failed for \(playlist.name): \(error)")
+            MixLog.sync.error("[Sharing] ❌ Cover upload failed for \(playlist.name): \(error)")
             return nil
         }
     }
@@ -1521,13 +1522,13 @@ public final class PlaylistSharingService: ObservableObject {
                 published.insert(track.id.uuidString)
                 uploadedAny = true
             } catch {
-                print("[Sharing] ❌ Track cover upload failed for \(track.title): \(error)")
+                MixLog.sync.error("[Sharing] ❌ Track cover upload failed for \(track.title): \(error)")
             }
         }
 
         if uploadedAny {
             Self.publishedTrackCoverIDs = published
-            print("[Sharing] ✅ Published \(pending.count) track cover(s)")
+            MixLog.sync.debug("[Sharing] ✅ Published \(pending.count) track cover(s)")
         }
     }
 
@@ -1672,7 +1673,7 @@ public final class PlaylistSharingService: ObservableObject {
                 .eq("id", value: link.sharedPlaylistID.uuidString)
                 .execute()
         } catch {
-            print("[Sharing] ❌ Push failed for \(local.name): \(error)")
+            MixLog.sync.error("[Sharing] ❌ Push failed for \(local.name): \(error)")
         }
 
         // A song the owner adds after sharing needs its cover published too, or

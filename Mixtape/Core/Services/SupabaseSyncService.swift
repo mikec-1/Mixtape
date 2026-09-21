@@ -21,6 +21,7 @@ import CoreGraphics
 #if canImport(UIKit)
 import UIKit
 #endif
+import OSLog
 
 @MainActor
 public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
@@ -138,7 +139,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
             // login after a revocation correctly re-registers.
             if wasDeviceRegistered(userID: user.id),
                await !deviceRowStillExists(userID: user.id) {
-                print("[Sync] 🔒 Device row was revoked while offline — signing out.")
+                MixLog.sync.debug("🔒 Device row was revoked while offline — signing out.")
                 clearDeviceRegisteredFlag(userID: user.id)
                 await onDeviceRevoked?()
                 return
@@ -304,7 +305,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
             }
         }
 
-        print("[Sync] ▶︎ Sync started")
+        MixLog.sync.debug("▶︎ Sync started")
         // Nine full table scans for one debug line used to live here, on the
         // main actor, once a minute. Even behind `#if DEBUG` that is what the
         // user runs, and on the phone it measured up to 722 ms of a frozen main
@@ -347,15 +348,15 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
                 // that therefore sees it.
                 await mixPhase("sync/refresh") { await libraryService.refreshOffMain() }
             } else {
-                print("[Sync] Nothing changed locally — skipping refresh")
+                MixLog.sync.debug("Nothing changed locally — skipping refresh")
             }
             let liveAfterPull = libraryService.tracks.filter { !$0.isDeleted }.count
             if liveBeforePull > 0 && liveAfterPull == 0 {
-                print("[Sync] Library emptied by a remote clear — resetting derived state")
+                MixLog.sync.debug("Library emptied by a remote clear — resetting derived state")
                 UserDataReset.announce(.everything)
             }
             syncState = .upToDate(lastSynced: Date())
-            print("[Sync] ✅ Sync complete")
+            MixLog.sync.debug("✅ Sync complete")
             // Cumulative, not per-sync: the question A3 asks is where the main
             // actor's time goes over a session, and a sync is simply the most
             // regular moment at which to ask it. Console, subsystem = the
@@ -363,7 +364,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
             MainThreadActivity.shared.logReport("after sync")
         } catch {
             syncState = .error(error.localizedDescription)
-            print("[Sync] ❌ Sync failed: \(error)")
+            MixLog.sync.error("❌ Sync failed: \(error)")
             throw error
         }
     }
@@ -391,12 +392,12 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
             // Logged even at zero. "Nothing to prune" and "the prune never ran"
             // look identical from the outside otherwise, and they call for
             // completely different investigations.
-            print("[Sync] 🧹 Pruned \(removed) tombstone\(removed == 1 ? "" : "s")")
+            MixLog.sync.debug("🧹 Pruned \(removed) tombstone\(removed == 1 ? "" : "s")")
         } catch {
             // Includes "function does not exist" on a project that hasn't had
             // the migration applied yet, which is a perfectly fine state to be
             // in — the pulls page correctly either way.
-            print("[Sync] tombstone prune skipped: \(error)")
+            MixLog.sync.error("tombstone prune skipped: \(error)")
         }
     }
 
@@ -438,7 +439,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
             for row in rows { row.localPath = "" }
             try context.save()
         } catch {
-            print("[Sync] deleted-audio sweep skipped: \(error)")
+            MixLog.sync.error("deleted-audio sweep skipped: \(error)")
             return
         }
 
@@ -450,7 +451,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
         }.value
 
         didWriteLocally = true
-        print("[Sync] \u{1F5D1} Removed audio for \(paths.count) deleted track\(paths.count == 1 ? "" : "s")")
+        MixLog.sync.debug("\u{1F5D1} Removed audio for \(paths.count) deleted track\(paths.count == 1 ? "" : "s")")
     }
 
     // MARK: - Count Reconcile
@@ -521,7 +522,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
             }
         } catch {
             // Never fails the sync: this is a diagnostic that happens to repair.
-            print("[Sync] reconcile skipped: \(error)")
+            MixLog.sync.error("reconcile skipped: \(error)")
             return
         }
         UserDefaults.standard.set(Date(), forKey: key)
@@ -539,11 +540,11 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
         let missingHere     = serverIDs.subtracting(localIDs)
         let missingOnServer = localIDs.subtracting(serverIDs)
         guard !missingHere.isEmpty || !missingOnServer.isEmpty else {
-            print("[Sync] \u{2696} Reconcile: \(localIDs.count) tracks, both sides agree")
+            MixLog.sync.debug("\u{2696} Reconcile: \(localIDs.count) tracks, both sides agree")
             return
         }
 
-        print("[Sync] \u{2696} Reconcile: local \(localIDs.count), server \(serverIDs.count) — \(missingHere.count) missing here, \(missingOnServer.count) missing on the server")
+        MixLog.sync.debug("\u{2696} Reconcile: local \(localIDs.count), server \(serverIDs.count) — \(missingHere.count) missing here, \(missingOnServer.count) missing on the server")
 
         var lost: [TrackEntity] = []
         var heldBack: [String: Int] = [:]
@@ -558,12 +559,12 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
             }
         }
         for (reason, count) in heldBack.sorted(by: { $0.key < $1.key }) {
-            print("[Sync]    \(count) held back on purpose (\(reason))")
+            MixLog.sync.debug("   \(count) held back on purpose (\(reason))")
         }
         // Capped: the point is to identify the divergence, not to print a
         // library into the console the first time a device runs this.
         for row in lost.prefix(10) {
-            print("[Sync]    never pushed: \(row.title) — \(row.artistName)")
+            MixLog.sync.debug("   never pushed: \(row.title) — \(row.artistName)")
         }
         if !lost.isEmpty {
             for row in lost where row.syncStatus == SyncStatus.synced.rawValue {
@@ -571,7 +572,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
                 row.syncLocalModifiedAt = Date()
             }
             try? context.save()
-            print("[Sync]    re-queued \(lost.count) for the next push")
+            MixLog.sync.debug("   re-queued \(lost.count) for the next push")
         }
 
         if !missingHere.isEmpty {
@@ -599,7 +600,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
     private func adoptMissingTracks(ids: [UUID], userID: UUID) async {
         let wanted = Array(ids.prefix(500))
         if wanted.count < ids.count {
-            print("[Sync]    \(ids.count) rows missing locally — adopting the first \(wanted.count)")
+            MixLog.sync.debug("   \(ids.count) rows missing locally — adopting the first \(wanted.count)")
         }
         var adopted = 0, revived = 0
         for chunk in stride(from: 0, to: wanted.count, by: 100).map({
@@ -633,13 +634,13 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
                 }
                 try context.save()
             } catch {
-                print("[Sync]    adopt failed: \(error)")
+                MixLog.sync.error("   adopt failed: \(error)")
                 return
             }
         }
         if adopted + revived > 0 {
             didWriteLocally = true
-            print("[Sync]    adopted \(adopted) missing track\(adopted == 1 ? "" : "s"), revived \(revived)")
+            MixLog.sync.debug("   adopted \(adopted) missing track\(adopted == 1 ? "" : "s"), revived \(revived)")
         }
     }
 
@@ -669,7 +670,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
                 .execute()
             markDeviceRegistered(userID: userID)
         } catch {
-            print("[Sync] device register failed: \(error)")
+            MixLog.sync.error("device register failed: \(error)")
         }
     }
 
@@ -703,13 +704,13 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
                 .execute()
                 .value
             if rows.isEmpty, wasDeviceRegistered(userID: userID) {
-                print("[Sync] 🔒 Device row gone during heartbeat — revoked, signing out.")
+                MixLog.sync.debug("🔒 Device row gone during heartbeat — revoked, signing out.")
                 clearDeviceRegisteredFlag(userID: userID)
                 await onDeviceRevoked?()
             }
         } catch {
             // Network/query error — never force a logout on a failed heartbeat.
-            print("[Sync] device heartbeat failed: \(error)")
+            MixLog.sync.error("device heartbeat failed: \(error)")
         }
     }
 
@@ -757,7 +758,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
             )
 
             await client.join(channel, label: "revocation listener")
-            print("[Sync] 👂 Revocation listener subscribed (device \(deviceID))")
+            MixLog.sync.debug("👂 Revocation listener subscribed (device \(deviceID))")
 
             for await deletion in deletions {
                 guard !Task.isCancelled else { break }
@@ -769,15 +770,15 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
                 // Re-check whether our own row still exists; if it's gone, this
                 // device was the one revoked.
                 let oldDeviceID = deletion.oldRecord["device_id"]?.stringValue
-                print("[Sync] 👂 devices DELETE received (device_id=\(oldDeviceID ?? "nil")) — verifying our row")
+                MixLog.sync.debug("👂 devices DELETE received (device_id=\(oldDeviceID ?? "nil")) — verifying our row")
                 if oldDeviceID != nil && oldDeviceID != deviceID { continue }
 
                 if await deviceRowStillExists(userID: userID) {
-                    print("[Sync] 👂 our device row still present — not us, ignoring")
+                    MixLog.sync.debug("👂 our device row still present — not us, ignoring")
                     continue
                 }
 
-                print("[Sync] 🔒 This device revoked remotely — signing out.")
+                MixLog.sync.debug("🔒 This device revoked remotely — signing out.")
                 await onDeviceRevoked?()
                 break
             }
@@ -799,7 +800,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
             return !rows.isEmpty
         } catch {
             // On a query error, don't force a logout — fail safe (stay signed in).
-            print("[Sync] device existence check failed: \(error)")
+            MixLog.sync.error("device existence check failed: \(error)")
             return true
         }
     }
@@ -899,7 +900,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
             // `supabase_realtime` publication, this still says "subscribed" and
             // then never delivers a single event — the failure mode is silence,
             // not an error.
-            print("[Sync] 👂 Library listener subscribed (device \(deviceID)) — status \(channel.status)")
+            MixLog.sync.debug("👂 Library listener subscribed (device \(deviceID)) — status \(String(describing: channel.status))")
 
             await withTaskGroup(of: Void.self) { group in
                 group.addTask { [weak self] in
@@ -961,7 +962,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
         // legitimately arrives as 20+ events; printing each one buried
         // everything else in the console and read like an echo storm.
         if pullBurstStart == nil {
-            print("[Sync] 📡 Remote change on \(table) — scheduling pull")
+            MixLog.sync.debug("📡 Remote change on \(table) — scheduling pull")
         }
         scheduleRemotePull()
     }
@@ -1163,7 +1164,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
         let pending = try fetchPendingTracks()
         guard !pending.isEmpty else { return }
 
-        print("[Sync] ↑ Pushing \(pending.count) track(s): \(pending.map(\.title).joined(separator: ", "))")
+        MixLog.sync.debug("↑ Pushing \(pending.count) track(s): \(pending.map(\.title).joined(separator: ", "))")
         // FIX: SwiftData may cache entity.isDeleted=false even after softDelete() sets it to true.
         // Explicitly force isDeleted=true for any entity whose syncStatus is "deleted" so the
         // correct tombstone always reaches the server.
@@ -1237,9 +1238,9 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
         // magnitude. Done after the save so the fetch below sees the real state.
         await deleteOrphanedAudio(keys: deletedAudioKeys)
         if hardDeletedCount > 0 {
-            print("[Sync] ↑ Pushed \(pending.count) track(s), hard-deleted \(hardDeletedCount) confirmed deletion(s)")
+            MixLog.sync.debug("↑ Pushed \(pending.count) track(s), hard-deleted \(hardDeletedCount) confirmed deletion(s)")
         } else {
-            print("[Sync] ↑ Pushed \(pending.count) track(s)")
+            MixLog.sync.debug("↑ Pushed \(pending.count) track(s)")
         }
     }
 
@@ -1276,12 +1277,12 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
 
         do {
             try await storageRemove(bucket: "audio", paths: orphans)
-            print("[Sync] 🗑 Removed \(orphans.count) orphaned audio file(s) from Storage")
+            MixLog.sync.debug("🗑 Removed \(orphans.count) orphaned audio file(s) from Storage")
         } catch {
             // Not fatal, and not retried: the tombstone is already gone locally,
             // so this key won't come round again. Logged so a persistent failure
             // is visible rather than silently accumulating files.
-            print("[Sync] orphaned audio cleanup failed for \(orphans.count) file(s): \(error)")
+            MixLog.sync.error("orphaned audio cleanup failed for \(orphans.count) file(s): \(error)")
         }
     }
 
@@ -1357,7 +1358,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
             }
             try context.save()
         }
-        print("[Sync] ↑ Play history: \(pending.count)")
+        MixLog.sync.debug("↑ Play history: \(pending.count)")
     }
 
     private func pushPlaylists(userID: UUID) async throws {
@@ -1387,7 +1388,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
             }
         }
         try context.save()
-        print("[Sync] ↑ Playlists: pushed \(pending.count)")
+        MixLog.sync.debug("↑ Playlists: pushed \(pending.count)")
     }
 
     // MARK: - File Upload
@@ -1412,7 +1413,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
             // Verify the local file still exists (it might have been cleared).
             guard let localURL = Self.uploadSourceURL(for: entity) else {
                 missingFileCount += 1
-                print("[SupabaseSyncService] ⚠️ Local file missing for \"\(entity.title)\" at \(entity.localPath) — skipping upload")
+                MixLog.sync.warning("[SupabaseSyncService] ⚠️ Local file missing for \"\(entity.title)\" at \(entity.localPath) — skipping upload")
                 continue
             }
 
@@ -1429,16 +1430,16 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
                 let attrs = try FileManager.default.attributesOfItem(atPath: localURL.path(percentEncoded: false))
                 diskSize = (attrs[.size] as? Int64) ?? 0
             } catch {
-                print("[SupabaseSyncService] ⚠️ Can't stat \"\(entity.title)\": \(error) — skipping")
+                MixLog.sync.error("[SupabaseSyncService] ⚠️ Can't stat \"\(entity.title)\": \(error) — skipping")
                 continue
             }
             guard diskSize > 0 else {
-                print("[SupabaseSyncService] ⚠️ \"\(entity.title)\" is 0 bytes on disk — skipping upload")
+                MixLog.sync.warning("[SupabaseSyncService] ⚠️ \"\(entity.title)\" is 0 bytes on disk — skipping upload")
                 continue
             }
             // If we stored a file size at import time, do a quick sanity check.
             if entity.fileSize > 0 && diskSize < entity.fileSize / 2 {
-                print("[SupabaseSyncService] ⚠️ \"\(entity.title)\" disk size (\(diskSize)) is less than half of stored size (\(entity.fileSize)) — file may be truncated, skipping")
+                MixLog.sync.warning("[SupabaseSyncService] ⚠️ \"\(entity.title)\" disk size (\(diskSize)) is less than half of stored size (\(entity.fileSize)) — file may be truncated, skipping")
                 continue
             }
 
@@ -1450,11 +1451,11 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
 
                 // Guard against empty or obviously-truncated reads before hitting the network.
                 guard data.count > 0 else {
-                    print("[SupabaseSyncService] ⚠️ Data read for \"\(entity.title)\" returned 0 bytes — skipping upload")
+                    MixLog.sync.warning("[SupabaseSyncService] ⚠️ Data read for \"\(entity.title)\" returned 0 bytes — skipping upload")
                     continue
                 }
                 if diskSize > 0 && Int64(data.count) < diskSize / 2 {
-                    print("[SupabaseSyncService] ⚠️ Data read for \"\(entity.title)\" (\(data.count) bytes) is far smaller than file (\(diskSize) bytes) — skipping upload")
+                    MixLog.sync.warning("[SupabaseSyncService] ⚠️ Data read for \"\(entity.title)\" (\(data.count) bytes) is far smaller than file (\(diskSize) bytes) — skipping upload")
                     continue
                 }
 
@@ -1467,11 +1468,11 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
                 entity.syncStatus          = SyncStatus.modified.rawValue
                 entity.syncLocalModifiedAt = Date()
                 uploadedAny = true
-                print("[SupabaseSyncService] ✅ Uploaded \"\(entity.title)\" (\(data.count / 1024)KB) → \(remotePath)")
+                MixLog.sync.debug("[SupabaseSyncService] ✅ Uploaded \"\(entity.title)\" (\(data.count / 1024)KB) → \(remotePath)")
 
             } catch {
                 // Log and skip — will retry on the next sync cycle.
-                print("[SupabaseSyncService] ❌ Upload failed for \"\(entity.title)\": \(error)")
+                MixLog.sync.error("[SupabaseSyncService] ❌ Upload failed for \"\(entity.title)\": \(error)")
             }
         }
 
@@ -1479,11 +1480,11 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
             try context.save()
             // Push again so the server records the updated remoteKey + fileUploaded=true.
             try await pushTracks(userID: userID)
-            print("[SupabaseSyncService] ✅ File sync complete — \(tracks.count) file(s) processed")
+            MixLog.sync.debug("[SupabaseSyncService] ✅ File sync complete — \(tracks.count) file(s) processed")
         } else if missingFileCount > 0 {
-            print("[SupabaseSyncService] ⚠️ \(missingFileCount)/\(tracks.count) pending track(s) have missing local files — they cannot be uploaded until the source file is present")
+            MixLog.sync.warning("[SupabaseSyncService] ⚠️ \(missingFileCount)/\(tracks.count) pending track(s) have missing local files — they cannot be uploaded until the source file is present")
         } else {
-            print("[SupabaseSyncService] No pending file uploads")
+            MixLog.sync.debug("[SupabaseSyncService] No pending file uploads")
         }
     }
 
@@ -1688,14 +1689,14 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
         }
 
         guard total > 0 else {
-            print("[Sync] ↓ Tracks: nothing new since last pull")
+            MixLog.sync.debug("↓ Tracks: nothing new since last pull")
             setLastPullDate(table: "tracks", userID: userID)
             return
         }
 
         setLastPullDate(table: "tracks", userID: userID)
         if inserted + updated > 0 { didWriteLocally = true; announceWork() }
-        print("[Sync] ↓ Tracks: \(inserted) new, \(updated) updated, \(skipped) skipped")
+        MixLog.sync.debug("↓ Tracks: \(inserted) new, \(updated) updated, \(skipped) skipped")
     }
 
     private func pullAlbums(userID: UUID) async throws {
@@ -1721,7 +1722,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
         }
         if inserted + updated > 0 { didWriteLocally = true; announceWork() }
         if total > 0 {
-            print("[Sync] ↓ Albums: \(inserted) new, \(updated) updated")
+            MixLog.sync.debug("↓ Albums: \(inserted) new, \(updated) updated")
         }
         setLastPullDate(table: "albums", userID: userID)
     }
@@ -1757,7 +1758,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
         }
         if inserted + updated > 0 { didWriteLocally = true; announceWork() }
         if total > 0 {
-            print("[Sync] ↓ Artists: \(inserted) new, \(updated) updated")
+            MixLog.sync.debug("↓ Artists: \(inserted) new, \(updated) updated")
         }
         setLastPullDate(table: "artists", userID: userID)
     }
@@ -1781,7 +1782,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
         if inserted > 0 {
             didWriteLocally = true
             announceWork()
-            print("[Sync] ↓ Play history: \(inserted) new")
+            MixLog.sync.debug("↓ Play history: \(inserted) new")
         }
         if total > 0 { setLastPullDate(table: "play_history", userID: userID) }
     }
@@ -1870,7 +1871,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
         }
 
         if inserted + updated > 0 { didWriteLocally = true; announceWork() }
-        print("[Sync] ↓ Playlists: \(inserted) new, \(updated) updated, \(skipped) skipped")
+        MixLog.sync.debug("↓ Playlists: \(inserted) new, \(updated) updated, \(skipped) skipped")
     }
 
     // MARK: - Pending Count
@@ -2101,7 +2102,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
         let uid = userID.uuidString
         let now = iso8601Now()
 
-        print("[Sync] 🗑  Soft-deleting all server data for user \(uid)…")
+        MixLog.sync.debug("🗑  Soft-deleting all server data for user \(uid)…")
 
         // 1. Soft-delete DB rows — set is_deleted = true and bump updated_at so
         //    other devices' incremental pull picks up the change.
@@ -2117,13 +2118,13 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
         //    every sync forever.
         let wipe = WipePayload(updatedAt: now)
         try await client.from("tracks")   .update(wipe).eq("user_id", value: uid).eq("is_deleted", value: false).execute()
-        print("[Sync] 🗑  Soft-deleted tracks")
+        MixLog.sync.debug("🗑  Soft-deleted tracks")
         try await client.from("albums")   .update(wipe).eq("user_id", value: uid).eq("is_deleted", value: false).execute()
-        print("[Sync] 🗑  Soft-deleted albums")
+        MixLog.sync.debug("🗑  Soft-deleted albums")
         try await client.from("artists")  .update(wipe).eq("user_id", value: uid).eq("is_deleted", value: false).execute()
-        print("[Sync] 🗑  Soft-deleted artists")
+        MixLog.sync.debug("🗑  Soft-deleted artists")
         try await client.from("playlists").update(wipe).eq("user_id", value: uid).eq("is_deleted", value: false).execute()
-        print("[Sync] 🗑  Soft-deleted playlists")
+        MixLog.sync.debug("🗑  Soft-deleted playlists")
 
         // 2. Hard-delete audio files from Storage (non-fatal if this fails).
         //    Files don't need a deletion signal — once is_deleted propagates, the
@@ -2136,15 +2137,15 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
             }
             if !paths.isEmpty {
                 try await storageRemove(bucket: "audio", paths: paths)
-                print("[Sync] 🗑  Deleted \(paths.count) audio file(s) from Storage")
+                MixLog.sync.debug("🗑  Deleted \(paths.count) audio file(s) from Storage")
             } else {
-                print("[Sync] 🗑  No audio files in Storage for this user")
+                MixLog.sync.debug("🗑  No audio files in Storage for this user")
             }
         } catch {
-            print("[Sync] ⚠️  Storage delete failed (non-fatal): \(error)")
+            MixLog.sync.error("⚠️  Storage delete failed (non-fatal): \(error)")
         }
 
-        print("[Sync] 🗑  Server wipe complete")
+        MixLog.sync.debug("🗑  Server wipe complete")
     }
 
     // MARK: - Reset
@@ -2164,7 +2165,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
             .delete()
             .eq("user_id", value: userID.uuidString)
             .execute()
-        print("[Sync] 🗑  Deleted server play history for \(userID.uuidString)")
+        MixLog.sync.debug("🗑  Deleted server play history for \(userID.uuidString)")
     }
 
     public func deleteAllServerTracks() async throws {
@@ -2178,7 +2179,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
         try await client.from("tracks") .update(wipe).eq("user_id", value: uid).eq("is_deleted", value: false).execute()
         try await client.from("albums") .update(wipe).eq("user_id", value: uid).eq("is_deleted", value: false).execute()
         try await client.from("artists").update(wipe).eq("user_id", value: uid).eq("is_deleted", value: false).execute()
-        print("[Sync] 🗑  Soft-deleted all server tracks/albums/artists for \(uid)")
+        MixLog.sync.debug("🗑  Soft-deleted all server tracks/albums/artists for \(uid)")
 
         // Remove audio files from Storage (non-fatal).
         let folder = uid.lowercased()
@@ -2189,10 +2190,10 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
             }
             if !paths.isEmpty {
                 try await storageRemove(bucket: "audio", paths: paths)
-                print("[Sync] 🗑  Deleted \(paths.count) audio file(s) from Storage")
+                MixLog.sync.debug("🗑  Deleted \(paths.count) audio file(s) from Storage")
             }
         } catch {
-            print("[Sync] ⚠️  Storage delete failed (non-fatal): \(error)")
+            MixLog.sync.error("⚠️  Storage delete failed (non-fatal): \(error)")
         }
     }
 
@@ -2216,7 +2217,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
             .neq("id", value: Playlist.favouritesID.uuidString.lowercased())
             .neq("id", value: Playlist.allSongsID.uuidString.lowercased())
             .execute()
-        print("[Sync] 🗑  Soft-deleted all server user playlists for \(uid)")
+        MixLog.sync.debug("🗑  Soft-deleted all server user playlists for \(uid)")
     }
 
     /// Clears the stored pull timestamps so the next sync performs a full pull
@@ -2233,7 +2234,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
         for table in ["tracks", "albums", "artists", "playlists"] {
             UserDefaults.standard.removeObject(forKey: lastPullDateKey(table: table, userID: userID))
         }
-        print("[SupabaseSyncService] Sync timestamps reset — next pull will fetch all server records")
+        MixLog.sync.debug("[SupabaseSyncService] Sync timestamps reset — next pull will fetch all server records")
     }
 
     // MARK: - Last Pull Timestamps (per table per user, stored in UserDefaults)
@@ -2303,7 +2304,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
         try await deletePendingPlaylistArtworks(userID: userID)
 
         let playlists = try fetchPlaylistsNeedingArtworkUpload()
-        print("[Sync] 🖼️ Found \(playlists.count) playlist(s) needing artwork upload")
+        MixLog.sync.debug("🖼️ Found \(playlists.count) playlist(s) needing artwork upload")
         guard !playlists.isEmpty else { return }
 
         var uploadedAny = false
@@ -2312,7 +2313,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
             guard let rawData = entity.artworkData else { continue }
 
             guard let compressed = await compressArtwork(data: rawData) else {
-                print("[Sync] ⚠️ Compression failed for playlist artwork: \(entity.name)")
+                MixLog.sync.error("⚠️ Compression failed for playlist artwork: \(entity.name)")
                 continue
             }
 
@@ -2326,9 +2327,9 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
                 // not read as "someone changed this".
                 entity.artworkRemoteStamp = Date()
                 uploadedAny = true
-                print("[Sync] ✅ Uploaded playlist artwork: \(entity.name) (\(compressed.count / 1024)KB) -> \(remotePath)")
+                MixLog.sync.debug("✅ Uploaded playlist artwork: \(entity.name) (\(compressed.count / 1024)KB) -> \(remotePath)")
             } catch {
-                print("[Sync] ❌ Upload failed for playlist artwork (\(entity.name)): \(error)")
+                MixLog.sync.error("❌ Upload failed for playlist artwork (\(entity.name)): \(error)")
             }
         }
 
@@ -2360,12 +2361,12 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
             let path = Self.playlistArtworkPath(userID: userID, playlistID: entity.id)
             do {
                 try await storageRemove(bucket: "artwork", paths: [path])
-                print("[Sync] 🗑️ Removed playlist artwork: \(entity.name)")
+                MixLog.sync.debug("🗑️ Removed playlist artwork: \(entity.name)")
             } catch {
                 // A cover that was never uploaded has nothing to remove, and the
                 // flag must still come down or every sync retries the same
                 // missing path forever.
-                print("[Sync] Playlist artwork remove failed (treating as gone): \(error)")
+                MixLog.sync.error("Playlist artwork remove failed (treating as gone): \(error)")
             }
             entity.artworkNeedsRemoteDelete = false
             changed = true
@@ -2375,7 +2376,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
 
     private func uploadPendingTrackArtworks(userID: UUID) async throws {
         let tracks = try fetchTracksNeedingArtworkUpload()
-        print("[Sync] 🖼️ Found \(tracks.count) track(s) needing artwork upload")
+        MixLog.sync.debug("🖼️ Found \(tracks.count) track(s) needing artwork upload")
         guard !tracks.isEmpty else { return }
 
         var uploadedAny = false
@@ -2384,7 +2385,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
             guard let rawData = entity.artworkData else { continue }
 
             guard let compressed = await compressArtwork(data: rawData) else {
-                print("[Sync] ⚠️ Compression failed for track artwork: \(entity.title)")
+                MixLog.sync.error("⚠️ Compression failed for track artwork: \(entity.title)")
                 continue
             }
 
@@ -2397,9 +2398,9 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
                 entity.syncStatus = SyncStatus.modified.rawValue
                 entity.syncLocalModifiedAt = Date()
                 uploadedAny = true
-                print("[Sync] ✅ Uploaded track artwork: \(entity.title) (\(compressed.count / 1024)KB) -> \(remotePath)")
+                MixLog.sync.debug("✅ Uploaded track artwork: \(entity.title) (\(compressed.count / 1024)KB) -> \(remotePath)")
             } catch {
-                print("[Sync] ❌ Upload failed for track artwork (\(entity.title)): \(error)")
+                MixLog.sync.error("❌ Upload failed for track artwork (\(entity.title)): \(error)")
             }
         }
 
@@ -2411,7 +2412,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
 
     private func uploadPendingAlbumArtworks(userID: UUID) async throws {
         let albums = try fetchAlbumsNeedingArtworkUpload()
-        print("[Sync] 🖼️ Found \(albums.count) album(s) needing artwork upload")
+        MixLog.sync.debug("🖼️ Found \(albums.count) album(s) needing artwork upload")
         guard !albums.isEmpty else { return }
 
         var uploadedAny = false
@@ -2420,7 +2421,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
             guard let rawData = entity.artworkData else { continue }
 
             guard let compressed = await compressArtwork(data: rawData) else {
-                print("[Sync] ⚠️ Compression failed for album artwork: \(entity.title)")
+                MixLog.sync.error("⚠️ Compression failed for album artwork: \(entity.title)")
                 continue
             }
 
@@ -2433,9 +2434,9 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
                 entity.syncStatus = SyncStatus.modified.rawValue
                 entity.syncLocalModifiedAt = Date()
                 uploadedAny = true
-                print("[Sync] ✅ Uploaded album artwork: \(entity.title) (\(compressed.count / 1024)KB) -> \(remotePath)")
+                MixLog.sync.debug("✅ Uploaded album artwork: \(entity.title) (\(compressed.count / 1024)KB) -> \(remotePath)")
             } catch {
-                print("[Sync] ❌ Upload failed for album artwork (\(entity.title)): \(error)")
+                MixLog.sync.error("❌ Upload failed for album artwork (\(entity.title)): \(error)")
             }
         }
 
@@ -2447,7 +2448,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
 
     private func uploadPendingArtistArtworks(userID: UUID) async throws {
         let artists = try fetchArtistsNeedingArtworkUpload()
-        print("[Sync] 🖼️ Found \(artists.count) artist(s) needing artwork upload")
+        MixLog.sync.debug("🖼️ Found \(artists.count) artist(s) needing artwork upload")
         guard !artists.isEmpty else { return }
 
         var uploadedAny = false
@@ -2456,7 +2457,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
             guard let rawData = entity.artworkData else { continue }
 
             guard let compressed = await compressArtwork(data: rawData) else {
-                print("[Sync] ⚠️ Compression failed for artist artwork: \(entity.name)")
+                MixLog.sync.error("⚠️ Compression failed for artist artwork: \(entity.name)")
                 continue
             }
 
@@ -2469,9 +2470,9 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
                 entity.syncStatus = SyncStatus.modified.rawValue
                 entity.syncLocalModifiedAt = Date()
                 uploadedAny = true
-                print("[Sync] ✅ Uploaded artist artwork: \(entity.name) (\(compressed.count / 1024)KB) -> \(remotePath)")
+                MixLog.sync.debug("✅ Uploaded artist artwork: \(entity.name) (\(compressed.count / 1024)KB) -> \(remotePath)")
             } catch {
-                print("[Sync] ❌ Upload failed for artist artwork (\(entity.name)): \(error)")
+                MixLog.sync.error("❌ Upload failed for artist artwork (\(entity.name)): \(error)")
             }
         }
 
@@ -2620,7 +2621,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
             remote = Dictionary(files.map { ($0.name, $0.updatedAt) },
                                 uniquingKeysWith: { a, _ in a })
         } catch {
-            print("[Sync] ❌ Could not list playlist artwork in \(folder): \(error)")
+            MixLog.sync.error("❌ Could not list playlist artwork in \(folder): \(error)")
             return
         }
 
@@ -2632,7 +2633,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
                   let stamp else { return true }
             return stamp > local
         }
-        print("[Sync] 🖼️ Found \(wanted.count) playlist(s) needing artwork download")
+        MixLog.sync.debug("🖼️ Found \(wanted.count) playlist(s) needing artwork download")
         guard !wanted.isEmpty else { return }
 
         var downloadedAny = false
@@ -2642,7 +2643,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
             let stamp = remote["\(entity.id.uuidString.lowercased()).jpg"] ?? nil
             do {
                 guard let data = try await artwork(at: key, stamp: stamp) else {
-                    print("[Sync] ⏸ Artwork download budget spent — the rest wait for the next sync")
+                    MixLog.sync.debug("⏸ Artwork download budget spent — the rest wait for the next sync")
                     break
                 }
 
@@ -2653,9 +2654,9 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
                 entity.artworkRemoteStamp = stamp ?? Date()
                 libraryService.noteCoverChanged(playlistID: entity.id)
                 downloadedAny = true
-                print("[Sync] ↓ Downloaded playlist artwork: \(entity.name) (\(data.count / 1024)KB) from \(key)")
+                MixLog.sync.debug("↓ Downloaded playlist artwork: \(entity.name) (\(data.count / 1024)KB) from \(key)")
             } catch {
-                print("[Sync] ❌ Download failed for playlist artwork (\(entity.name)) from \(key): \(error)")
+                MixLog.sync.error("❌ Download failed for playlist artwork (\(entity.name)) from \(key): \(error)")
             }
         }
 
@@ -2673,7 +2674,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
 
     private func downloadPendingTrackArtworks(userID: UUID) async throws {
         let tracks = try fetchTracksNeedingArtworkDownload()
-        print("[Sync] 🖼️ Found \(tracks.count) track(s) needing artwork download")
+        MixLog.sync.debug("🖼️ Found \(tracks.count) track(s) needing artwork download")
         guard !tracks.isEmpty else { return }
 
         var downloadedAny = false
@@ -2683,7 +2684,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
             guard let key = entity.artworkKey, !key.isEmpty else { continue }
             do {
                 guard let data = try await artwork(at: key) else {
-                    print("[Sync] ⏸ Artwork download budget spent — the rest wait for the next sync")
+                    MixLog.sync.debug("⏸ Artwork download budget spent — the rest wait for the next sync")
                     break
                 }
 
@@ -2692,7 +2693,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
                 // this cover's cached image and nothing else's.
                 libraryService.noteArtworkChanged(.track(entity.id))
                 downloadedAny = true
-                print("[Sync] ↓ Downloaded track artwork: \(entity.title) (\(data.count / 1024)KB) from \(key)")
+                MixLog.sync.debug("↓ Downloaded track artwork: \(entity.title) (\(data.count / 1024)KB) from \(key)")
             } catch {
                 if isMissingObject(error) {
                     entity.artworkKey = nil
@@ -2703,13 +2704,13 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
                     downloadedAny = true
                     missingCount += 1
                 } else {
-                    print("[Sync] ❌ Download failed for track artwork (\(entity.title)) from \(key): \(error)")
+                    MixLog.sync.error("❌ Download failed for track artwork (\(entity.title)) from \(key): \(error)")
                 }
             }
         }
 
         if missingCount > 0 {
-            print("[Sync] 🧹 \(missingCount) track cover(s) had no object in the bucket — keys cleared, they won't be retried")
+            MixLog.sync.debug("🧹 \(missingCount) track cover(s) had no object in the bucket — keys cleared, they won't be retried")
         }
 
         if downloadedAny {
@@ -2724,7 +2725,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
 
     private func downloadPendingAlbumArtworks(userID: UUID) async throws {
         let albums = try fetchAlbumsNeedingArtworkDownload()
-        print("[Sync] 🖼️ Found \(albums.count) album(s) needing artwork download")
+        MixLog.sync.debug("🖼️ Found \(albums.count) album(s) needing artwork download")
         guard !albums.isEmpty else { return }
 
         var downloadedAny = false
@@ -2734,7 +2735,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
             guard let key = entity.artworkKey, !key.isEmpty else { continue }
             do {
                 guard let data = try await artwork(at: key) else {
-                    print("[Sync] ⏸ Artwork download budget spent — the rest wait for the next sync")
+                    MixLog.sync.debug("⏸ Artwork download budget spent — the rest wait for the next sync")
                     break
                 }
 
@@ -2743,7 +2744,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
                 // this cover's cached image and nothing else's.
                 libraryService.noteArtworkChanged(.album(entity.id))
                 downloadedAny = true
-                print("[Sync] ↓ Downloaded album artwork: \(entity.title) (\(data.count / 1024)KB) from \(key)")
+                MixLog.sync.debug("↓ Downloaded album artwork: \(entity.title) (\(data.count / 1024)KB) from \(key)")
             } catch {
                 if isMissingObject(error) {
                     entity.artworkKey = nil
@@ -2754,13 +2755,13 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
                     downloadedAny = true
                     missingCount += 1
                 } else {
-                    print("[Sync] ❌ Download failed for album artwork (\(entity.title)) from \(key): \(error)")
+                    MixLog.sync.error("❌ Download failed for album artwork (\(entity.title)) from \(key): \(error)")
                 }
             }
         }
 
         if missingCount > 0 {
-            print("[Sync] 🧹 \(missingCount) album cover(s) had no object in the bucket — keys cleared, they won't be retried")
+            MixLog.sync.debug("🧹 \(missingCount) album cover(s) had no object in the bucket — keys cleared, they won't be retried")
         }
 
         if downloadedAny {
@@ -2775,7 +2776,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
 
     private func downloadPendingArtistArtworks(userID: UUID) async throws {
         let artists = try fetchArtistsNeedingArtworkDownload()
-        print("[Sync] 🖼️ Found \(artists.count) artist(s) needing artwork download")
+        MixLog.sync.debug("🖼️ Found \(artists.count) artist(s) needing artwork download")
         guard !artists.isEmpty else { return }
 
         var downloadedAny = false
@@ -2785,7 +2786,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
             guard let key = entity.artworkKey, !key.isEmpty else { continue }
             do {
                 guard let data = try await artwork(at: key) else {
-                    print("[Sync] ⏸ Artwork download budget spent — the rest wait for the next sync")
+                    MixLog.sync.debug("⏸ Artwork download budget spent — the rest wait for the next sync")
                     break
                 }
 
@@ -2794,7 +2795,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
                 // this cover's cached image and nothing else's.
                 libraryService.noteArtworkChanged(.artist(entity.id))
                 downloadedAny = true
-                print("[Sync] ↓ Downloaded artist artwork: \(entity.name) (\(data.count / 1024)KB) from \(key)")
+                MixLog.sync.debug("↓ Downloaded artist artwork: \(entity.name) (\(data.count / 1024)KB) from \(key)")
             } catch {
                 if isMissingObject(error) {
                     entity.artworkKey = nil
@@ -2805,13 +2806,13 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
                     downloadedAny = true
                     missingCount += 1
                 } else {
-                    print("[Sync] ❌ Download failed for artist artwork (\(entity.name)) from \(key): \(error)")
+                    MixLog.sync.error("❌ Download failed for artist artwork (\(entity.name)) from \(key): \(error)")
                 }
             }
         }
 
         if missingCount > 0 {
-            print("[Sync] 🧹 \(missingCount) artist cover(s) had no object in the bucket — keys cleared, they won't be retried")
+            MixLog.sync.debug("🧹 \(missingCount) artist cover(s) had no object in the bucket — keys cleared, they won't be retried")
         }
 
         if downloadedAny {
@@ -2840,7 +2841,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
             let total = (try? context.fetchCount(FetchDescriptor<T>())) ?? -1
             let art   = (try? context.fetchCount(FetchDescriptor<T>(predicate: hasArt))) ?? -1
             let key   = (try? context.fetchCount(FetchDescriptor<T>(predicate: hasKey))) ?? -1
-            print("[Sync Debug] \(label) - Total: \(total), with artworkData: \(art), with artworkKey: \(key)")
+            MixLog.sync.debug("[Sync Debug] \(label) - Total: \(total), with artworkData: \(art), with artworkKey: \(key)")
         }
         counts(TrackEntity.self,  label: "Tracks",
                hasArt: #Predicate { $0.artworkData != nil },
@@ -2877,7 +2878,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
         if let rows = mixMainActivity("sync/artwork-scan ▸ \(label) fast", { try? context.fetch(descriptor) }) {
             return rows
         }
-        print("[Sync] ⚠️ artwork scan fell back to the in-memory filter for \(label) — every blob is being loaded")
+        MixLog.sync.warning("⚠️ artwork scan fell back to the in-memory filter for \(label) — every blob is being loaded")
         return try mixMainActivity("sync/artwork-scan ▸ \(label) legacy") {
             try context.fetch(legacy).filter(fallback)
         }

@@ -1175,7 +1175,7 @@ public final class ImportService {
             // then fire once everything has landed.
             try? await Task.sleep(for: .seconds(1))
             guard !Task.isCancelled else { return }
-            print("[ImportService] ⬆︎ Auto-sync triggered after import")
+            MixLog.importing.debug("[ImportService] ⬆︎ Auto-sync triggered after import")
             await onSyncNeeded?()
         }
     }

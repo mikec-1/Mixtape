@@ -15,6 +15,7 @@
 
 import Foundation
 import Combine
+import OSLog
 
 // MARK: - Models
 
@@ -217,7 +218,7 @@ public final class LyricsService: ObservableObject {
         // file whose tags carry the wrong words is one of the reasons someone
         // reaches for this, and an override that loses to the thing it was
         // meant to override isn't an override.
-        print("[Lyrics] resolving \"\(track.title)\" — \(track.artistName) (album: \(track.albumTitle), \(Int(track.duration))s)")
+        MixLog.lyrics.debug("resolving \"\(track.title)\" — \(track.artistName) (album: \(track.albumTitle), \(Int(track.duration))s)")
         if let own = UserLyricsStore.shared.text(for: track) {
             var parsed = Self.parse(own)
             parsed.isUserProvided = true
@@ -226,14 +227,14 @@ public final class LyricsService: ObservableObject {
 
         // 1. Embedded lyrics on the track.
         if let embedded = track.lyrics, !embedded.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            print("[Lyrics] source: embedded tags")
+            MixLog.lyrics.debug("source: embedded tags")
             return Self.parse(embedded)
         }
 
         // 2. .lrc sidecar next to the local file.
         if let sidecar = Self.readSidecar(for: track) {
             let parsed = Self.parse(sidecar)
-            if parsed.hasAny { print("[Lyrics] source: .lrc sidecar"); return parsed }
+            if parsed.hasAny { MixLog.lyrics.debug("source: .lrc sidecar"); return parsed }
         }
 
         // 3. Word-timed lyrics (Apple's TTML). Ahead of LRCLIB because it is a
@@ -241,13 +242,13 @@ public final class LyricsService: ObservableObject {
         // start and end, so a held note holds. Falls through when the song
         // isn't in the index or is only line-timed.
         if let wordTimed = await fetchWordTimed(for: track) {
-            print("[Lyrics] source: TTML (word-timed)")
+            MixLog.lyrics.debug("source: TTML (word-timed)")
             return wordTimed
         }
 
         // 4. Remote fetch from LRCLIB (silent on failure).
         if let remote = await fetchRemote(for: track) {
-            print("[Lyrics] source: LRCLIB/NetEase")
+            MixLog.lyrics.debug("source: LRCLIB/NetEase")
             return remote
         }
 
@@ -428,7 +429,7 @@ public final class LyricsService: ObservableObject {
         }
         guard let group = best else { return pool.first }
         if let exactPrint, group.key != exactPrint {
-            print("[Lyrics] consensus overruled the exact match (\(group.value.count) uploads vs \(groups[exactPrint]?.count ?? 0))")
+            MixLog.lyrics.debug("consensus overruled the exact match (\(group.value.count) uploads vs \(groups[exactPrint]?.count ?? 0))")
         }
         return group.value.sorted { a, b in
             let aSynced = (a.syncedLyrics?.isEmpty == false)
@@ -474,11 +475,11 @@ public final class LyricsService: ObservableObject {
         guard let url = components?.url else { return nil }
 
         guard let decoded: LRCLibResponse = await getJSON(url) else {
-            print("[Lyrics] get miss for \"\(track.title)\" — \(track.artistName)")
+            MixLog.lyrics.debug("get miss for \"\(track.title)\" — \(track.artistName)")
             return nil
         }
         guard Self.isSameSong(decoded, as: track) else {
-            print("[Lyrics] get returned \"\(decoded.trackName ?? "?")\" — \(decoded.artistName ?? "?"); rejected")
+            MixLog.lyrics.debug("get returned \"\(decoded.trackName ?? "?")\" — \(decoded.artistName ?? "?"); rejected")
             return nil
         }
         return decoded
@@ -516,7 +517,7 @@ public final class LyricsService: ObservableObject {
         guard let url = components?.url else { return [] }
 
         guard let results: [LRCLibResponse] = await getJSON(url), !results.isEmpty else {
-            print("[Lyrics] search miss for \"\(track.title)\" — \(track.artistName)")
+            MixLog.lyrics.debug("search miss for \"\(track.title)\" — \(track.artistName)")
             return []
         }
 
@@ -582,7 +583,7 @@ public final class LyricsService: ObservableObject {
 
         guard let decoded: NetEaseSearchResponse = await getJSON(url, referer: Self.neteaseReferer, userAgent: Self.neteaseUserAgent),
               let songs = decoded.result?.songs, !songs.isEmpty else {
-            print("[Lyrics] netease search miss for \"\(track.title)\" — \(track.artistName)")
+            MixLog.lyrics.debug("netease search miss for \"\(track.title)\" — \(track.artistName)")
             return []
         }
 
@@ -647,14 +648,14 @@ public final class LyricsService: ObservableObject {
         // A strongly-aligned re-skin is the best possible outcome: accurate,
         // uncensored words on NetEase's timestamps.
         if let best = bestReskinned, best.score >= reskinAcceptScore {
-            print("[Lyrics] netease hit (LRCLIB-reskinned, overlap \(String(format: "%.2f", best.score)))")
+            MixLog.lyrics.debug("netease hit (LRCLIB-reskinned, overlap \(String(format: "%.2f", best.score)))")
             return collapseEchoes(best.lyrics)
         }
         if let uncensored {
-            print("[Lyrics] netease hit (uncensored)")
+            MixLog.lyrics.debug("netease hit (uncensored)")
             return collapseEchoes(uncensored)
         }
-        print("[Lyrics] netease hit (censored fallback, synced)")
+        MixLog.lyrics.debug("netease hit (censored fallback, synced)")
         return collapseEchoes(candidates[0])
     }
 
@@ -892,7 +893,7 @@ public final class LyricsService: ObservableObject {
             }
             return try JSONDecoder().decode(T.self, from: data)
         } catch {
-            print("[Lyrics] request failed: \(error.localizedDescription)")
+            MixLog.lyrics.error("request failed: \(error.localizedDescription)")
             return nil
         }
     }
@@ -908,7 +909,7 @@ public final class LyricsService: ObservableObject {
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
             return String(data: data, encoding: .utf8)
         } catch {
-            print("[Lyrics] request failed: \(error.localizedDescription)")
+            MixLog.lyrics.error("request failed: \(error.localizedDescription)")
             return nil
         }
     }

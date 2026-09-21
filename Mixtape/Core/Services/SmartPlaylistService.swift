@@ -14,6 +14,7 @@
 import Foundation
 import SwiftData
 import Combine
+import OSLog
 
 @MainActor
 public final class SmartPlaylistService: ObservableObject {
@@ -66,7 +67,7 @@ public final class SmartPlaylistService: ObservableObject {
                 )
             }
         } catch {
-            print("[SmartPlaylistService] refresh failed: \(error)")
+            MixLog.library.error("[SmartPlaylistService] refresh failed: \(error)")
         }
     }
 

@@ -20,6 +20,7 @@ import PhotosUI
 #endif
 import SwiftUI
 import UniformTypeIdentifiers
+import OSLog
 
 struct ArtworkPickerView<Placeholder: View>: View {
 
@@ -75,7 +76,7 @@ struct ArtworkPickerView<Placeholder: View>: View {
             do {
                 data = Self.normalised(try Data(contentsOf: url))
             } catch {
-                print("[Artwork] Could not read \(url.lastPathComponent): \(error)")
+                MixLog.library.error("[Artwork] Could not read \(url.lastPathComponent): \(error)")
             }
         }
         #endif
