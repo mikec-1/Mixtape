@@ -291,7 +291,7 @@ public final class YTDLPService: TrackResolver {
     /// `[ExtractAudio]` line that marks the handoff to ffmpeg. Everything else
     /// yt-dlp prints — and it prints a lot — is deliberately ignored rather than
     /// guessed at.
-    static func progress(fromLine line: String) -> ResolveProgress? {
+    nonisolated static func progress(fromLine line: String) -> ResolveProgress? {
         if line.hasPrefix("[ExtractAudio]") || line.hasPrefix("[Merger]") {
             return ResolveProgress(phase: .converting, fraction: nil)
         }
@@ -400,7 +400,7 @@ public final class YTDLPService: TrackResolver {
             do {
                 _ = try await Self.run(executable: inv.executable, args: inv.prefix + args,
                                        onLine: onProgress.map { report in
-                                           { line in
+                                           { @Sendable line in
                                                if let step = Self.progress(fromLine: line) { report(step) }
                                            }
                                        })
@@ -988,7 +988,7 @@ public final class YTDLPService: TrackResolver {
     /// handler is installed, so a cancel can land before there is anything to
     /// kill. The box remembers that, and `adopt` reports it so the spawning side
     /// can tear the process down the instant it exists.
-    private final class ChildProcess: @unchecked Sendable {
+    nonisolated private final class ChildProcess: @unchecked Sendable {
         private let lock = NSLock()
         private var process: Process?
         private var cancelled = false

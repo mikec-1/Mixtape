@@ -128,7 +128,7 @@ public final class InviteNotifier {
 
     /// Must match the entry in Info.plist's `BGTaskSchedulerPermittedIdentifiers`;
     /// `submit` throws at runtime if it doesn't.
-    public static let backgroundTaskID = "com.mikey.Mixtape.invite-refresh"
+    nonisolated public static let backgroundTaskID = "com.mikey.Mixtape.invite-refresh"
 
     /// Asks iOS for a slice of background time to check the inbox.
     ///

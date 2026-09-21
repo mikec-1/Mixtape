@@ -17,7 +17,7 @@
 import Foundation
 import AVFoundation
 
-enum MP4MetadataWriter {
+nonisolated enum MP4MetadataWriter {
 
     enum WriteError: LocalizedError {
         case cannotConfigure

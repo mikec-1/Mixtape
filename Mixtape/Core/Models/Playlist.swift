@@ -62,10 +62,10 @@ public struct Playlist: Identifiable, Codable, Hashable, Sendable {
     // MARK: - Well-known IDs
 
     /// Stable UUID for the Favourites system playlist. Never changes across launches.
-    public static let favouritesID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+    nonisolated public static let favouritesID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
 
     /// Stable UUID for the All Songs system playlist. Contains every imported track automatically.
-    public static let allSongsID   = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+    nonisolated public static let allSongsID   = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
 
     // MARK: - Properties
 

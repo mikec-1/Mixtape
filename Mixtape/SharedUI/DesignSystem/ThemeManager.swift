@@ -61,7 +61,7 @@ public enum AppAppearance: String, CaseIterable, Identifiable, Sendable {
 // MARK: - Accent (fixed)
 
 /// The app's single brand accent. No longer user-selectable.
-public enum BrandAccent {
+public nonisolated enum BrandAccent {
     public static let hex     = "#FF6B00"
     public static let darkHex = "#E05C00"
     public static let color     = Color(hex: hex)

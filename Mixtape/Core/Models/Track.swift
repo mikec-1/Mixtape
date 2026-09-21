@@ -95,7 +95,7 @@ public struct Track: Identifiable, Codable, Hashable, Sendable {
     /// This is now a stored fact, not a guess about file fields — a saved
     /// Discover song stays `.online` whether it is a bare placeholder, cached
     /// for replay, or downloaded for offline use.
-    public var isOnline: Bool { file.origin == .online }
+    nonisolated public var isOnline: Bool { file.origin == .online }
 
     /// A song from a shared playlist that this library has no copy of *and no way
     /// to get one* — someone else's local file.
@@ -147,10 +147,10 @@ public struct Track: Identifiable, Codable, Hashable, Sendable {
     /// Display only. The stored `title` is untouched, because it is what the
     /// row was written with and what `identityTitle` reasons about — see there
     /// for why the stored spelling and the hashed one legitimately differ.
-    public var displayTitle: String { ImportService.bareTitle(title) }
+    nonisolated public var displayTitle: String { ImportService.bareTitle(title) }
 
     /// The printed credit: the stored artist plus whatever the title named.
-    public var displayArtistName: String {
+    nonisolated public var displayArtistName: String {
         ImportService.displayArtists(title: title, artistName: artistName)
             .joined(separator: ", ")
     }

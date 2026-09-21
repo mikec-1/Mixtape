@@ -18,12 +18,12 @@ import Supabase  // re-exports Auth (AuthLocalStorage)
 final class FileAuthLocalStorage: AuthLocalStorage {
 
     private let directory: URL
-    private let fileManager = FileManager.default
+    private var fileManager: FileManager { .default }
     // Serialize access so concurrent store/retrieve/remove can't race on disk.
     private let queue = DispatchQueue(label: "com.mixtape.fileauthstorage")
 
     init() {
-        let base = fileManager
+        let base = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         directory = base
             .appendingPathComponent("Mixtape", isDirectory: true)

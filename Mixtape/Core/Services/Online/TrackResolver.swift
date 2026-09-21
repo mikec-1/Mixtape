@@ -41,7 +41,7 @@ public struct StreamResolution: Sendable {
 /// server and answers once, so there is nothing to report from here but which
 /// step is running. A `nil` fraction means exactly that, and the bar drawn from
 /// it says "working" rather than inventing a number.
-public struct ResolveProgress: Sendable, Equatable {
+public nonisolated struct ResolveProgress: Sendable, Equatable {
 
     public enum Phase: Sendable, Equatable {
         /// Working out which upload this song is.

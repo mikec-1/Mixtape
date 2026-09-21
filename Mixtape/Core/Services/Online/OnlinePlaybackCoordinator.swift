@@ -761,7 +761,7 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
             // running and simply had nobody listening. `updatePreparing` drops
             // anything that isn't the song on screen, so the quiet cases stay
             // quiet.
-            let report: @Sendable (ResolveProgress) -> Void = { step in
+            let report: @Sendable (ResolveProgress) -> Void = { [weak self] step in
                 // The resolver reports from whatever thread it runs its child
                 // process (or URLSession) on; the bar reads this on the main actor.
                 Task { @MainActor [weak self] in self?.updatePreparing(trackID, step) }

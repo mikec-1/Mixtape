@@ -1360,7 +1360,7 @@ public final class PlaylistSharingService: ObservableObject {
     /// `artwork`, which is private and owner-scoped — see
     /// 20260808000000_public_playlist_covers.sql for why publishing one cover
     /// must not open a whole library.
-    static let coverBucket = "playlist-covers"
+    nonisolated static let coverBucket = "playlist-covers"
 
     static func coverPath(ownerID: UUID, sharedPlaylistID: UUID) -> String {
         "\(ownerID.uuidString.lowercased())/\(sharedPlaylistID.uuidString.lowercased()).jpg"

@@ -23,7 +23,7 @@ public struct OnlineTrack: Identifiable, Hashable, Sendable, Codable {
     /// doesn't carry contributors.
     public let contributors: [String]
 
-    public init(
+    nonisolated public init(
         title: String,
         artistName: String,
         albumTitle: String,

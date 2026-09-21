@@ -834,7 +834,7 @@ struct MacRootView: View {
 
     // MARK: - Drag import handler
 
-    private static let audioImportExtensions = Set(
+    nonisolated private static let audioImportExtensions = Set(
         ["mp3", "m4a", "aiff", "aif", "wav", "flac", "ogg", "opus"]
     )
 
@@ -858,8 +858,10 @@ struct MacRootView: View {
         for provider in providers {
             guard provider.hasItemConformingToTypeIdentifier(fileURLType) else { continue }
             willHandleAny = true
+            // Not marked Sendable, but built to be called again from its own callbacks.
+            nonisolated(unsafe) let provider = provider
 
-            provider.loadItem(forTypeIdentifier: fileURLType, options: nil) { item, _ in
+            provider.loadItem(forTypeIdentifier: fileURLType, options: nil) { [deps, appState] item, _ in
                 let resolved = Self.resolveFileURL(from: item)
                 if let resolved {
                     Self.importIfAudio(resolved, deps: deps, appState: appState)
@@ -878,7 +880,7 @@ struct MacRootView: View {
 
     /// Resolves a `public.file-url` item into a `URL`, handling the several concrete
     /// types `loadItem` can hand back: `URL`, `NSURL`, or `Data`.
-    private static func resolveFileURL(from item: NSSecureCoding?) -> URL? {
+    nonisolated private static func resolveFileURL(from item: NSSecureCoding?) -> URL? {
         switch item {
         case let url as URL:
             return url
@@ -901,7 +903,7 @@ struct MacRootView: View {
 
     /// Filters by audio extension, then runs the import on the main actor with
     /// security-scoped access so the sandboxed app can actually read the file.
-    private static func importIfAudio(
+    nonisolated private static func importIfAudio(
         _ url: URL,
         deps: AppDependencies,
         appState: MacAppState

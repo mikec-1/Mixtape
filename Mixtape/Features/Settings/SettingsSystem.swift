@@ -21,7 +21,7 @@ import ServiceManagement
 /// least interesting of the four: it's the only bucket the user chose to fill.
 /// The caches are where space goes missing without anyone asking, so they're
 /// measured separately and cleared separately.
-struct SettingsStorageReport: Equatable {
+nonisolated struct SettingsStorageReport: Equatable {
     /// Downloaded songs. Deleting these costs offline playback.
     var offline:  Int64 = 0
     /// Every song kept on disk so it starts faster next time — from the user's

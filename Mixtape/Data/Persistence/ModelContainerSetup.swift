@@ -106,13 +106,13 @@ public enum ModelContainerSetup {
 // SwiftData can't store [UUID] directly; we encode as JSON Data.
 
 extension Array where Element == UUID {
-    func toData() -> Data {
+    nonisolated func toData() -> Data {
         (try? JSONEncoder().encode(self)) ?? Data()
     }
 }
 
 extension Data {
-    func toUUIDArray() -> [UUID] {
+    nonisolated func toUUIDArray() -> [UUID] {
         (try? JSONDecoder().decode([UUID].self, from: self)) ?? []
     }
 }

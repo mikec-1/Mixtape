@@ -253,5 +253,5 @@ public final class AudioEqualizer: ObservableObject {
 
 extension Notification.Name {
     /// Posted when the signed-in account changes so per-account EQ can reload.
-    static let mixEQAccountDidChange = Notification.Name("mix.eq.accountDidChange")
+    nonisolated static let mixEQAccountDidChange = Notification.Name("mix.eq.accountDidChange")
 }

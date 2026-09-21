@@ -140,7 +140,7 @@ public final class ImportService {
     /// case-insensitively against the *whole* credit string before any splitting,
     /// so these stay as one artist. Not exhaustive — it can't be — but it covers
     /// the names that actually collide in practice.
-    private static let indivisibleActs: Set<String> = [
+    nonisolated private static let indivisibleActs: Set<String> = [
         "earth, wind & fire",
         "tyler, the creator",
         "crosby, stills & nash",
@@ -175,7 +175,7 @@ public final class ImportService {
     ///   "Drake feat. 21 Savage" → ["Drake", "21 Savage"]
     ///   "Simon & Garfunkel"   → ["Simon & Garfunkel"]
     ///   "Earth, Wind & Fire"  → ["Earth, Wind & Fire"]
-    public static func creditedArtists(from artistName: String) -> [String] {
+    public nonisolated static func creditedArtists(from artistName: String) -> [String] {
         let trimmed = artistName.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return [] }
         if indivisibleActs.contains(trimmed.lowercased()) { return [trimmed] }
@@ -229,7 +229,7 @@ public final class ImportService {
     ///
     /// A credit that already lists everybody (Spotify's import joins all of a
     /// track's artists) is returned untouched — the merge is case-insensitive.
-    public static func displayArtists(title: String, artistName: String) -> [String] {
+    public nonisolated static func displayArtists(title: String, artistName: String) -> [String] {
         var names = creditedArtists(from: artistName)
         var seen  = Set(names.map { $0.lowercased() })
         for name in featuredArtists(inTitle: title) {
@@ -296,7 +296,7 @@ public final class ImportService {
     ///
     /// Only what follows a feature marker is read. A title is not a credit
     /// string — everything else in it is the name of the song.
-    public static func featuredArtists(inTitle title: String) -> [String] {
+    public nonisolated static func featuredArtists(inTitle title: String) -> [String] {
         guard let marker = featureMarker(in: title) else { return [] }
         var segment = String(title[marker...])
         // A marker opened inside brackets ends with them, so "- REMIX" and
@@ -319,7 +319,7 @@ public final class ImportService {
 
     /// Where the featured names start, or nil. Markers only count at the start
     /// of a word — otherwise "Drift" and "Aftermath" would each open one.
-    private static func featureMarker(in title: String) -> String.Index? {
+    nonisolated private static func featureMarker(in title: String) -> String.Index? {
         // "with" only counts immediately inside brackets: Spotify writes
         // "(with Ariana Grande)", but plain "with" in a title is usually the
         // title ("Dancing With Myself").
@@ -346,7 +346,7 @@ public final class ImportService {
     /// Splits the inside of a feature credit. Unlike `creditedArtists`, "&" and
     /// "and" always split here: inside "feat. …" they join collaborators, and a
     /// band whose name contains one is far less likely than a second guest.
-    private static func splitFeatureCredit(_ segment: String) -> [String] {
+    nonisolated private static func splitFeatureCredit(_ segment: String) -> [String] {
         var parts = [segment]
         for sep in [",", " & ", " and ", " x ", " + ", "/"] {
             parts = parts.flatMap { part -> [String] in

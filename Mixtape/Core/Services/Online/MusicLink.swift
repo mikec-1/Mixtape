@@ -15,7 +15,7 @@
 
 import Foundation
 
-public enum MusicLink: Equatable, Sendable {
+public nonisolated enum MusicLink: Equatable, Sendable {
 
     /// `https://open.spotify.com/track/<id>` or `spotify:track:<id>`.
     case spotifyTrack(id: String)

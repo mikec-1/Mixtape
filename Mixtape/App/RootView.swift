@@ -221,7 +221,7 @@ public struct RootView: View {
     /// Codes are generated uppercase from a 32-character alphabet, but a link
     /// that's been through a chat app can arrive lowercased or with a stray
     /// trailing slash, and the RPC matches exactly.
-    private static func normalisedCode(_ raw: String) -> String? {
+    nonisolated private static func normalisedCode(_ raw: String) -> String? {
         let code = raw.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         return code.count >= 4 ? code : nil
     }

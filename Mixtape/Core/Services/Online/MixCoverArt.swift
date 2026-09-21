@@ -19,7 +19,7 @@ import ImageIO
 import UniformTypeIdentifiers
 import CoreText
 
-public enum MixCoverArt {
+public nonisolated enum MixCoverArt {
 
     /// Downloads up to four covers and composes them into one square JPEG.
     ///

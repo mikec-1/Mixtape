@@ -23,7 +23,7 @@ import Foundation
 /// get a different key each time the cover changes; nothing writes a playlist
 /// cover here on upload, since the stamp it would be filed under isn't known
 /// until the bucket reports one.
-enum ArtworkDiskCache {
+nonisolated enum ArtworkDiskCache {
 
     /// Roughly two full libraries of covers. Past this the oldest go.
     private static let budget = 250 * 1024 * 1024

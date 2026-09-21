@@ -198,6 +198,9 @@ public enum AudioTranscoder {
                              output: AVAssetReaderTrackOutput) async throws {
 
         let queue = DispatchQueue(label: "mix.transcode")
+        // None of these four is Sendable, but from here on they're only touched
+        // from `queue` and the `finishWriting` handler, one after the other.
+        nonisolated(unsafe) let reader = reader, writer = writer, input = input, output = output
         // `requestMediaDataWhenReady` calls back repeatedly and stops once the
         // input is marked finished, so in practice the flag flips once — but
         // resuming a continuation twice is a crash rather than a warning, and

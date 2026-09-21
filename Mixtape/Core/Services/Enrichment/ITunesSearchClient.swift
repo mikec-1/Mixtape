@@ -249,8 +249,8 @@ private struct DeezerAlbumSearchResponse: Decodable {
 /// `release_date` or `record_type`, and those two are the entire difference
 /// between "an album" and "a *new* album" — so New releases resolves its
 /// candidates one by one to get them.
-private struct DeezerAlbumDetail: Decodable {
-    struct Artist: Decodable { let id: Int?; let name: String }
+nonisolated private struct DeezerAlbumDetail: Decodable {
+    nonisolated struct Artist: Decodable { let id: Int?; let name: String }
     let id: Int
     let title: String
     let cover_xl: String?
@@ -290,18 +290,18 @@ private struct SearchResponse: Decodable {
     let results:     [ITunesTrackResult]
 }
 
-private struct ArtistItem: Decodable {
+nonisolated private struct ArtistItem: Decodable {
     let artistId:   Int
     let artistName: String
 }
 
-private struct ArtistSearchResponse: Decodable {
+nonisolated private struct ArtistSearchResponse: Decodable {
     let resultCount: Int
     let results:     [ArtistItem]
 }
 
 /// Flexible item used for Lookup API responses which mix artist + track records.
-private struct LookupItem: Decodable, Sendable {
+nonisolated private struct LookupItem: Decodable, Sendable {
     let wrapperType:      String
     let trackName:        String?
     let artistName:       String?
@@ -313,14 +313,14 @@ private struct LookupItem: Decodable, Sendable {
     let trackTimeMillis:  Int?
 }
 
-private struct LookupResponse: Decodable, Sendable {
+nonisolated private struct LookupResponse: Decodable, Sendable {
     let resultCount: Int
     let results:     [LookupItem]
 }
 
 /// Converts a raw lookup item to a track result.
-/// Free function (not a method/property) to avoid Swift 6 actor-isolation inference.
-private func trackResult(from item: LookupItem) -> ITunesTrackResult? {
+/// `nonisolated`: lookups are decoded off the main actor.
+nonisolated private func trackResult(from item: LookupItem) -> ITunesTrackResult? {
     guard item.wrapperType == "track",
           let trackName  = item.trackName,
           let artistName = item.artistName else { return nil }

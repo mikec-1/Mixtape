@@ -74,26 +74,22 @@ final class RemoteImageCache: @unchecked Sendable {
     func image(for url: URL) async -> PlatformImage? {
         if let hit = cache.object(forKey: url as NSURL) { return hit }
 
-        lock.lock()
-        if let running = inFlight[url] {
-            lock.unlock()
-            return await running.value
+        let (task, isNew) = lock.withLock { () -> (Task<PlatformImage?, Never>, Bool) in
+            if let running = inFlight[url] { return (running, false) }
+            let task = Task<PlatformImage?, Never> { [cache] in
+                guard let (data, response) = try? await URLSession.shared.data(from: url),
+                      (response as? HTTPURLResponse)?.statusCode ?? 200 == 200,
+                      let image = PlatformImage(data: data)
+                else { return nil }
+                cache.setObject(image, forKey: url as NSURL, cost: data.count)
+                return image
+            }
+            inFlight[url] = task
+            return (task, true)
         }
-        let task = Task<PlatformImage?, Never> { [cache] in
-            guard let (data, response) = try? await URLSession.shared.data(from: url),
-                  (response as? HTTPURLResponse)?.statusCode ?? 200 == 200,
-                  let image = PlatformImage(data: data)
-            else { return nil }
-            cache.setObject(image, forKey: url as NSURL, cost: data.count)
-            return image
-        }
-        inFlight[url] = task
-        lock.unlock()
 
         let image = await task.value
-        lock.lock()
-        inFlight[url] = nil
-        lock.unlock()
+        if isNew { lock.withLock { inFlight[url] = nil } }
         return image
     }
 }

@@ -29,7 +29,7 @@ public enum PlaybackCache {
 
     /// `Library/Caches/Music`. Purgeable by the OS, excluded from backup, and
     /// shared by both kinds of cached audio.
-    public static var directory: URL {
+    nonisolated public static var directory: URL {
         let dir = AudioPaths.cacheDirectory
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
@@ -37,7 +37,7 @@ public enum PlaybackCache {
 
     /// Where Discover audio used to live. Read on the way in and swept by
     /// `migrateLegacyOnlineCache()`; never written to again.
-    public static var legacyOnlineCacheDirectory: URL {
+    nonisolated public static var legacyOnlineCacheDirectory: URL {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("OnlineCache", isDirectory: true)
     }
@@ -69,7 +69,7 @@ public enum PlaybackCache {
     }
 
     /// Extensions worth probing when we know the stem but not the container.
-    private static let knownExtensions = ["m4a", "mp3", "opus", "webm", "aac", "flac", "wav"]
+    nonisolated private static let knownExtensions = ["m4a", "mp3", "opus", "webm", "aac", "flac", "wav"]
 
     // MARK: - Lookup
 
@@ -163,11 +163,11 @@ public enum PlaybackCache {
 
     // MARK: - Budget
 
-    static let budgetKey = "mix.playbackCacheBudgetBytes"
+    nonisolated static let budgetKey = "mix.playbackCacheBudgetBytes"
 
     /// How large the cache is allowed to get. User-set; the slider in Settings
     /// writes this.
-    public static var budgetBytes: Int64 {
+    nonisolated public static var budgetBytes: Int64 {
         get {
             let stored = UserDefaults.standard.object(forKey: budgetKey) as? NSNumber
             return stored?.int64Value ?? defaultBudgetBytes
@@ -177,17 +177,17 @@ public enum PlaybackCache {
         }
     }
 
-    public static let defaultBudgetBytes: Int64 = 2 * 1_024 * 1_024 * 1_024   // 2 GB
-    public static let minimumBudgetBytes: Int64 = 256 * 1_024 * 1_024         // 256 MB
+    nonisolated public static let defaultBudgetBytes: Int64 = 2 * 1_024 * 1_024 * 1_024   // 2 GB
+    nonisolated public static let minimumBudgetBytes: Int64 = 256 * 1_024 * 1_024         // 256 MB
     public static let maximumBudgetBytes: Int64 = 50 * 1_024 * 1_024 * 1_024  // 50 GB
 
     /// Total bytes currently cached, across both the current directory and the
     /// legacy Discover folder that hasn't been swept yet.
-    public static var totalBytes: Int64 {
+    nonisolated public static var totalBytes: Int64 {
         [directory, legacyOnlineCacheDirectory].reduce(0) { $0 + size(of: $1) }
     }
 
-    private static func size(of dir: URL) -> Int64 {
+    nonisolated private static func size(of dir: URL) -> Int64 {
         audioFiles(in: dir).reduce(0) { total, url in
             let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
             return total + Int64(size)
@@ -198,7 +198,7 @@ public enum PlaybackCache {
     /// keeps alongside these files is bookkeeping, not cached music: counting it
     /// would inflate the number in Settings and evicting it would lose the map
     /// of which upload each song resolved to.
-    private static func audioFiles(in dir: URL) -> [URL] {
+    nonisolated private static func audioFiles(in dir: URL) -> [URL] {
         let fm = FileManager.default
         guard let items = try? fm.contentsOfDirectory(
             at: dir,
@@ -212,7 +212,11 @@ public enum PlaybackCache {
     ///
     /// Pinned files are never candidates: evicting the track that is playing to
     /// make room for the track after it is how a cache turns into a stutter.
-    public static func enforceBudget() {
+    public static func enforceBudget() { enforceBudget(pinned: pinnedURLs) }
+
+    /// The same, off the main actor: `pinnedURLs` is the coordinator's, so a
+    /// background caller hands in a copy taken on main.
+    nonisolated public static func enforceBudget(pinned: Set<URL>) {
         let fm = FileManager.default
         let keys: [URLResourceKey] = [.fileSizeKey, .contentAccessDateKey, .contentModificationDateKey]
 
@@ -232,7 +236,7 @@ public enum PlaybackCache {
         // Coldest first, pinned never.
         for entry in entries.sorted(by: { $0.used < $1.used }) {
             guard total > budget else { break }
-            guard !pinnedURLs.contains(entry.url) else { continue }
+            guard !pinned.contains(entry.url) else { continue }
             if (try? fm.removeItem(at: entry.url)) != nil {
                 total -= entry.size
             }

@@ -30,7 +30,7 @@ import AppKit
 /// wrong cover; a hand-rolled digest key would have to be either slow or
 /// occasionally wrong, and "occasionally the wrong album art" is not a
 /// trade worth making for a decode.
-final class ArtworkDecodeCache: @unchecked Sendable {
+nonisolated final class ArtworkDecodeCache: @unchecked Sendable {
 
     static let shared = ArtworkDecodeCache()
 

@@ -735,8 +735,9 @@ struct StoragePane: View {
             // Lowering the limit should take effect now, not at the end of the
             // next download — otherwise the number above the slider disagrees
             // with the number in the row right beside it.
+            let pinned = PlaybackCache.pinnedURLs
             Task {
-                await Task.detached(priority: .utility) { PlaybackCache.enforceBudget() }.value
+                await Task.detached(priority: .utility) { PlaybackCache.enforceBudget(pinned: pinned) }.value
                 await measure()
             }
         }

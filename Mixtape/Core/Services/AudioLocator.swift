@@ -77,7 +77,7 @@ public enum UnavailableReason: Sendable, Equatable {
     /// The file the library points at is gone.
     case fileMissing
 
-    public func message(for title: String) -> String {
+    nonisolated public func message(for title: String) -> String {
         switch self {
         case .notUploadedYet:
             return "\"\(title)\" hasn't been uploaded yet. Open Mixtape on your Mac to sync."

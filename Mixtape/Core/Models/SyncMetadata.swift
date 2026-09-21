@@ -113,7 +113,7 @@ public struct SyncMetadata: Codable, Hashable {
 
 /// Additional sync metadata for entities backed by an audio file.
 /// Enables content-addressed deduplication and lazy remote download.
-public struct FileProvenance: Codable, Hashable {
+public nonisolated struct FileProvenance: Codable, Hashable, Sendable {
     /// SHA-256 hex digest of the raw audio file bytes.
     /// Used for deduplication: if the server already has this hash, no upload is needed.
     public var fileHash: String

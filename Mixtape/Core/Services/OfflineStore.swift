@@ -35,7 +35,7 @@ import Combine
 /// Split out from `OfflineStore` because the playback path resolves file URLs
 /// off the main thread, and the store itself is main-actor bound so its
 /// published state stays safe to read from view bodies.
-public enum OfflineStorePaths {
+public nonisolated enum OfflineStorePaths {
 
     /// `Application Support/Mixtape/Offline`, created on first use.
     public static let directory: URL = {

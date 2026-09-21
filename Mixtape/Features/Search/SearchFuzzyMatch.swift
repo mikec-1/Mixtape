@@ -7,7 +7,7 @@
 
 import Foundation
 
-enum SearchFuzzyMatch {
+nonisolated enum SearchFuzzyMatch {
 
     /// Returns a relevance score for `needle` against `haystack`, or `nil` when
     /// there is no reasonable match. Higher is better. Both inputs are expected

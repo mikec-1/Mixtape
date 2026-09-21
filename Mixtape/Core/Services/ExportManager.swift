@@ -174,7 +174,7 @@ public final class ExportManager: ObservableObject {
         // whose it was, when there is exactly one that isn't the current account.
         guard let path = UserDefaults.standard.string(forKey: "MixtapeLastGlobalExportPath"),
               let names = try? FileManager.default.contentsOfDirectory(atPath: path) else { return nil }
-        let mine = currentUsername.map(sanitizeFileName)
+        let mine = currentUsername.map(Self.sanitizeFileName)
         let others = names.filter { name in
             var isDir: ObjCBool = false
             return !name.hasPrefix(".") && name != mine
@@ -452,7 +452,7 @@ public final class ExportManager: ObservableObject {
         // Create a user-specific subfolder if logged in to prevent mixing songs from different accounts
         var finalDestDir = activeDestDir
         if let username = currentUsername, !username.isEmpty {
-            let sanitizedUsername = sanitizeFileName(username)
+            let sanitizedUsername = Self.sanitizeFileName(username)
             finalDestDir = activeDestDir.appendingPathComponent(sanitizedUsername, isDirectory: true)
         }
 
@@ -482,8 +482,8 @@ public final class ExportManager: ObservableObject {
         }
 
         let sourceExt    = sourceURL.pathExtension.isEmpty ? "mp3" : sourceURL.pathExtension
-        let safeTitle    = sanitizeFileName(track.title)
-        let safeArtist   = sanitizeFileName(track.artistName)
+        let safeTitle    = Self.sanitizeFileName(track.title)
+        let safeArtist   = Self.sanitizeFileName(track.artistName)
         let baseName     = "\(safeArtist) - \(safeTitle)"
 
         // Re-encoding is what the lower two settings *are*, so it follows the
@@ -575,33 +575,43 @@ public final class ExportManager: ObservableObject {
     }
 
     public func exportedURL(for track: Track) -> URL? {
-        // The recorded path first. A miss falls through to the probe below,
-        // which is what finds copies exported before this index existed.
-        if let path = exportIndex[track.id.uuidString] {
-            if FileManager.default.fileExists(atPath: path) {
-                return URL(fileURLWithPath: path)
-            }
-            // Recorded but gone — the user deleted or moved it. Drop the entry
-            // so it stops being consulted.
+        // Recorded but gone — the user deleted or moved it. Drop the entry so
+        // it stops being consulted.
+        if let path = exportIndex[track.id.uuidString], !FileManager.default.fileExists(atPath: path) {
             forgetExport(for: track.id)
         }
+        return Self.exportedURL(for: track, in: lookup())
+    }
 
-        let destDir: URL
-        if let existing = exportURL {
-            destDir = existing
-        } else if let resolved = try? resolveExportURL() {
-            destDir = resolved
-        } else {
-            return nil
+    /// Everything `exportedURL` reads from the manager, taken on the main actor
+    /// so the library scan can probe a whole library from a background thread.
+    nonisolated struct Lookup: Sendable {
+        let index: [String: String]
+        let root: URL?
+        let userFolder: String?
+    }
+
+    func lookup() -> Lookup {
+        let username = currentUsername.flatMap { $0.isEmpty ? nil : Self.sanitizeFileName($0) }
+        return Lookup(index: exportIndex,
+                      root: exportURL ?? (try? resolveExportURL()),
+                      userFolder: username)
+    }
+
+    nonisolated static func exportedURL(for track: Track, in lookup: Lookup) -> URL? {
+        // The recorded path first. A miss falls through to the probe below,
+        // which is what finds copies exported before this index existed.
+        if let path = lookup.index[track.id.uuidString], FileManager.default.fileExists(atPath: path) {
+            return URL(fileURLWithPath: path)
         }
+        guard let destDir = lookup.root else { return nil }
 
         let startAccess = destDir.startAccessingSecurityScopedResource()
         defer { if startAccess { destDir.stopAccessingSecurityScopedResource() } }
 
         var finalDestDir = destDir
-        if let username = currentUsername, !username.isEmpty {
-            let sanitizedUsername = sanitizeFileName(username)
-            finalDestDir = destDir.appendingPathComponent(sanitizedUsername, isDirectory: true)
+        if let userFolder = lookup.userFolder {
+            finalDestDir = destDir.appendingPathComponent(userFolder, isDirectory: true)
         }
 
         // Candidate extensions: the source's own extension first, but ALWAYS
@@ -616,8 +626,8 @@ public final class ExportManager: ObservableObject {
             extensions.append(fallback)
         }
         
-        let safeTitle = sanitizeFileName(track.title)
-        let safeArtist = sanitizeFileName(track.artistName)
+        let safeTitle = Self.sanitizeFileName(track.title)
+        let safeArtist = Self.sanitizeFileName(track.artistName)
         let baseName = "\(safeArtist) - \(safeTitle)"
 
         for ext in extensions {
@@ -671,7 +681,7 @@ public final class ExportManager: ObservableObject {
 
         var finalDestDir = destDir
         if let username = currentUsername, !username.isEmpty {
-            let sanitizedUsername = sanitizeFileName(username)
+            let sanitizedUsername = Self.sanitizeFileName(username)
             finalDestDir = destDir.appendingPathComponent(sanitizedUsername, isDirectory: true)
         }
 
@@ -684,8 +694,8 @@ public final class ExportManager: ObservableObject {
         for fallback in ["mp3", "m4a"] where !candidateExts.contains(fallback) {
             candidateExts.append(fallback)
         }
-        let safeOldTitle = sanitizeFileName(oldTitle)
-        let safeOldArtist = sanitizeFileName(oldArtist)
+        let safeOldTitle = Self.sanitizeFileName(oldTitle)
+        let safeOldArtist = Self.sanitizeFileName(oldArtist)
         let oldBaseName = "\(safeOldArtist) - \(safeOldTitle)"
 
         guard let (oldFileURL, ext) = candidateExts
@@ -693,8 +703,8 @@ public final class ExportManager: ObservableObject {
             .first(where: { FileManager.default.fileExists(atPath: $0.0.path) })
         else { return }
 
-        let safeNewTitle = sanitizeFileName(track.title)
-        let safeNewArtist = sanitizeFileName(track.artistName)
+        let safeNewTitle = Self.sanitizeFileName(track.title)
+        let safeNewArtist = Self.sanitizeFileName(track.artistName)
         let newBaseName = "\(safeNewArtist) - \(safeNewTitle)"
         
         var newFileURL = finalDestDir.appendingPathComponent("\(newBaseName).\(ext)")
@@ -758,7 +768,7 @@ public final class ExportManager: ObservableObject {
 
     /// Strips characters that are illegal in filenames on HFS+/APFS (iOS & macOS).
     /// Replaces them with hyphens and trims surrounding whitespace/dots.
-    public func sanitizeFileName(_ name: String) -> String {
+    nonisolated public static func sanitizeFileName(_ name: String) -> String {
         // Characters disallowed in HFS+/APFS filenames.
         // '/' is the path separator; ':' is the legacy Mac resource-fork separator
         // and causes "invalid name" errors on iOS even though APFS technically allows it.

@@ -559,7 +559,7 @@ LaunchTimeline.mark("deps/engine")
         // rides along behind it. The synchronous form held the main thread for
         // 3.1 s on the phone — the three bulk fetches alone were 1.4 s of it —
         // which is time the first window spends not existing.
-        Task { [weak self] in
+        Task { [weak self, libraryService] in
             await libraryService.refreshOffMain()
             // Needs the library to have been read once, and has no business
             // holding up the first window. See its own comment.

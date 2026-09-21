@@ -25,7 +25,7 @@
 
 import Foundation
 
-public enum AudioPaths {
+public nonisolated enum AudioPaths {
 
     // MARK: - Directories
 

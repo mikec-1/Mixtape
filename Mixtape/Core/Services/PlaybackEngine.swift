@@ -2363,13 +2363,13 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         let c = MPRemoteCommandCenter.shared()
 
         c.playCommand.addTarget            { [weak engine] _ in
-            Task { @MainActor in engine?.resume() };          return .success
+            Task { @MainActor [weak engine] in engine?.resume() };          return .success
         }
         c.pauseCommand.addTarget           { [weak engine] _ in
-            Task { @MainActor in engine?.pause() };           return .success
+            Task { @MainActor [weak engine] in engine?.pause() };           return .success
         }
         c.togglePlayPauseCommand.addTarget { [weak engine] _ in
-            Task { @MainActor in engine?.togglePlayPause() }; return .success
+            Task { @MainActor [weak engine] in engine?.togglePlayPause() }; return .success
         }
 
         c.nextTrackCommand.addTarget { [weak engine] _ in
@@ -2384,7 +2384,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         }
         c.changePlaybackPositionCommand.addTarget { [weak engine] event in
             if let e = event as? MPChangePlaybackPositionCommandEvent {
-                Task { @MainActor in engine?.seek(to: e.positionTime) }
+                Task { @MainActor [weak engine] in engine?.seek(to: e.positionTime) }
             }
             return .success
         }

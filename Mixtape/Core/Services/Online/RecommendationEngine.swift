@@ -144,7 +144,7 @@ public enum RecommendationEngine {
 
     /// Six is where the request cost stops paying for itself: past that the
     /// mixes start being built from artists you played twice.
-    public static let maxSeeds = 6
+    nonisolated public static let maxSeeds = 6
 
     /// Under three cards "Your mixes" reads as broken rather than sparse — one
     /// mosaic beside a hero looks like the row failed to load. When the seeds
@@ -154,7 +154,7 @@ public enum RecommendationEngine {
 
     /// Under this a mix isn't a mix, it's a shortfall — better to drop the card
     /// than to ship a "Mix" that ends after two songs.
-    private static let mixMinimumTracks = 8
+    nonisolated private static let mixMinimumTracks = 8
 
     /// How many songs a mix ships with. The radio is fetched deeper than this on
     /// purpose: the surplus is what lets a new edition be a genuinely different
@@ -252,7 +252,7 @@ public enum RecommendationEngine {
     /// behind sixty reservations and took half a minute to draw. Twelve of
     /// your most-played artists is what a radar is about anyway — the
     /// thirteenth was never going to be the reason you opened it.
-    public static let maxRadarSeeds = 12
+    nonisolated public static let maxRadarSeeds = 12
 
     /// Wider than the radar's list on purpose. Scenes are narrow — "uk drill",
     /// "german hip hop" — so a 2000-song library only shows its shape once
@@ -778,7 +778,7 @@ public enum RecommendationEngine {
         return result
     }
 
-    static func normalize(_ value: String) -> String {
+    nonisolated static func normalize(_ value: String) -> String {
         value.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: nil)
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }

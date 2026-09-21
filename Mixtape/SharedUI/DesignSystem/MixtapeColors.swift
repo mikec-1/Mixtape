@@ -16,7 +16,7 @@ import AppKit
 
 // MARK: - Dynamic (trait-aware) colour
 
-extension Color {
+nonisolated extension Color {
     /// A colour that resolves to `light` or `dark` based on the active
     /// interface style at draw time. Lets the whole token set follow the
     /// system / user appearance with no churn in consumers.
@@ -74,7 +74,7 @@ extension Color {
 
 // MARK: - Hex Initialiser
 
-extension Color {
+nonisolated extension Color {
     init(hex: String) {
         let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
         var int: UInt64 = 0
@@ -105,7 +105,7 @@ extension Color {
 
 // MARK: - Mixtape Palette
 
-extension Color {
+nonisolated extension Color {
 
     // MARK: Backgrounds — trait-aware (dark default #121212, light counterparts)
     /// Primary app background

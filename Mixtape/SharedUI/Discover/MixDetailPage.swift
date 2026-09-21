@@ -257,7 +257,7 @@ struct MixDetailPage: View {
     }
     #else
     private var page: some View {
-        let listing = self.listing   // updates the memo; `visibleRows` reads it
+        _ = self.listing   // updates the memo; `visibleRows` reads it
         let shown   = visibleRows
         return List {
             header

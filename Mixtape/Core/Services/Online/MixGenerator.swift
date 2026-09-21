@@ -334,7 +334,7 @@ public enum MixGenerator {
     /// A catalogue search hit as a playable row. `searchPopular` answers with
     /// the enrichment shape; everything downstream of a generated mix — saving
     /// it, playing it — speaks `OnlineTrack`.
-    private static func online(_ hit: ITunesTrackResult) -> OnlineTrack {
+    nonisolated private static func online(_ hit: ITunesTrackResult) -> OnlineTrack {
         OnlineTrack(title: hit.trackName,
                     artistName: hit.artistName,
                     albumTitle: hit.collectionName ?? "",

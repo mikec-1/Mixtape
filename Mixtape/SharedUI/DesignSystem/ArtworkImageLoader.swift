@@ -177,7 +177,7 @@ final class ArtworkImageLoader: ObservableObject {
     ///
     /// The distinction exists so the drawing can happen off the main actor —
     /// see `image(for:bucket:)`.
-    private enum ResolvedArtwork {
+    nonisolated private enum ResolvedArtwork {
         case ready(Data)
         case mosaic(tiles: [Data], fallback: Data)
 

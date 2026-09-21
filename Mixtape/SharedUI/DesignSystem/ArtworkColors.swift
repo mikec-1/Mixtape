@@ -17,7 +17,7 @@ import UIKit
 import AppKit
 #endif
 
-public enum ArtworkColors {
+public nonisolated enum ArtworkColors {
 
     /// Sensible fallback used when artwork is missing or unreadable.
     public static let fallback: [Color] = [

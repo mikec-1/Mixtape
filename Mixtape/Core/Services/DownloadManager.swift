@@ -134,7 +134,7 @@ public enum DownloadBlock: Equatable {
     /// There is no audio to fetch, for the reason given.
     case unavailable(UnavailableReason)
 
-    public func message(for title: String) -> String {
+    nonisolated public func message(for title: String) -> String {
         switch self {
         case .alreadyDownloaded:
             return "Already downloaded"
@@ -1365,8 +1365,9 @@ public final class DownloadManager: ObservableObject {
             processDownloadQueue()
         }
 
+        let exports = ExportManager.shared.lookup()
         Task {
-            let scan = await Self.scanFilesystem(tracks: tracks)
+            let scan = await Self.scanFilesystem(tracks: tracks, exports: exports)
             guard !Task.isCancelled else { return }
             self.localTrackIDs    = scan.0
             self.exportedTrackIDs = scan.1
@@ -1395,18 +1396,20 @@ public final class DownloadManager: ObservableObject {
     /// body. `nonisolated async` on its own is not enough under Swift 6.2 —
     /// SE-0461 made a `nonisolated async` function run on its **caller's**
     /// actor, so awaiting one from here put it straight back on the main thread.
-    nonisolated private static func scanFilesystem(tracks: [Track]) async -> (Set<UUID>, Set<UUID>) {
+    nonisolated private static func scanFilesystem(tracks: [Track],
+                                                   exports: ExportManager.Lookup) async -> (Set<UUID>, Set<UUID>) {
         await Task.detached(priority: .utility) {
-            scanFilesystemSynchronously(tracks: tracks)
+            scanFilesystemSynchronously(tracks: tracks, exports: exports)
         }.value
     }
 
-    nonisolated private static func scanFilesystemSynchronously(tracks: [Track]) -> (Set<UUID>, Set<UUID>) {
+    nonisolated private static func scanFilesystemSynchronously(tracks: [Track],
+                                                                exports: ExportManager.Lookup) -> (Set<UUID>, Set<UUID>) {
         var local    = Set<UUID>()
         var exported = Set<UUID>()
         for track in tracks {
             if hasImportedFile(track) { local.insert(track.id) }
-            if ExportManager.shared.exportedURL(for: track) != nil { exported.insert(track.id) }
+            if ExportManager.exportedURL(for: track, in: exports) != nil { exported.insert(track.id) }
         }
         return (local, exported)
     }

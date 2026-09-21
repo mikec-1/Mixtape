@@ -21,7 +21,7 @@
 import Foundation
 import OSLog
 
-public enum MixLog {
+public nonisolated enum MixLog {
 
     /// Matches the bundle identifier so Console's subsystem filter and the
     /// app's own identity are the same string.
