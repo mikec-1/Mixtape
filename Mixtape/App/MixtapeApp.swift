@@ -64,8 +64,11 @@ struct MixtapeApp: App {
         // visibility back, SwiftUI writes it into the setting, the write
         // rebuilds the scene, which sets the visibility again — a main-thread
         // loop from the first frame. Settings ▸ General still drives it.
-        MenuBarExtra("Mixtape", systemImage: "music.note", isInserted: .constant(showsMenuBarPlayer)) {
-            MacMenuBarPlayer(engine: dependencies.playbackEngine, queue: dependencies.playbackEngine.queue)
+        MenuBarExtra(isInserted: .constant(showsMenuBarPlayer)) {
+            MacMenuBarPlayer(engine: dependencies.playbackEngine, queue: dependencies.playbackEngine.queue,
+                             library: dependencies.libraryService)
+        } label: {
+            MacMenuBarLabel(queue: dependencies.playbackEngine.queue)
         }
         .menuBarExtraStyle(.window)
         #endif
