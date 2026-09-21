@@ -37,7 +37,22 @@ struct LocalMatchesSection: View {
 
     static let limit = 6
 
+    @EnvironmentObject private var deps: AppDependencies
+
+    /// Rows picked for the actions that take several songs: ⌘/⇧-click on the
+    /// Mac, the way the Playlists page picks playlists, and Select on iOS. Kept
+    /// here because a selection belongs to one set of results.
+    @State private var selected: Set<Track.ID> = []
+    #if os(macOS)
+    @State private var anchor: Track.ID?
+    #else
+    @State private var isSelecting = false
+    @State private var tracksForPlaylist: [Track] = []
+    #endif
+
     private var shown: [Track] { showsAll ? tracks : Array(tracks.prefix(Self.limit)) }
+    /// In screen order, which queueing and filing both follow.
+    private var selection: [Track] { shown.filter { selected.contains($0.id) } }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -54,19 +69,146 @@ struct LocalMatchesSection: View {
                             .foregroundStyle(Color.mixTextTertiary)
                     }
                     Spacer(minLength: 8)
+                    #if os(macOS)
+                    actions
+                    #endif
                     if let onShowAll, !showsAll, tracks.count > Self.limit {
                         MixPillButton(title: "Show all", action: onShowAll)
                     }
                 }
             }
+            #if os(iOS)
+            // A line of its own: a phone header has no room beside the title.
+            HStack(spacing: 8) { actions }
+            #endif
 
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 330), spacing: 10)],
                       alignment: .leading, spacing: 2) {
                 ForEach(shown) { track in
-                    LibrarySongRow(track: track) { onPlay(track, shown) }
+                    row(track)
                 }
             }
         }
+        .onChange(of: query) { _, _ in clearSelection() }
+        #if os(iOS)
+        .sheet(isPresented: Binding(get: { !tracksForPlaylist.isEmpty },
+                                    set: { if !$0 { tracksForPlaylist = [] } })) {
+            AddToPlaylistSheet(tracks: tracksForPlaylist)
+                .environmentObject(deps)
+        }
+        #endif
+    }
+
+    /// "Add All" files every match, not just the six on show: "all" is the
+    /// count the header states. These songs are already in the library, so a
+    /// playlist is the add that means something, and the picker's New Playlist
+    /// row makes one.
+    @ViewBuilder
+    private var actions: some View {
+        if selection.isEmpty {
+            MixPillButton(title: "Add All to Playlist", systemImage: "text.badge.plus") {
+                choosePlaylist(tracks)
+            }
+        } else {
+            Menu {
+                songMenu(selection)
+                Divider()
+                Button("Deselect All", action: clearSelection)
+            } label: {
+                HStack(spacing: 5) {
+                    Text("\(selection.count) Selected")
+                        .font(.system(size: MixFontScale.size(12), weight: .semibold))
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: MixFontScale.size(9), weight: .bold))
+                }
+                .foregroundStyle(Color.mixPrimary)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 6)
+                .background(Capsule().fill(Color.mixPrimary.opacity(0.14)))
+            }
+            #if os(macOS)
+            .menuStyle(.button)
+            .buttonStyle(.plain).mixHandCursor()
+            .menuIndicator(.hidden)
+            #endif
+            .fixedSize()
+        }
+        #if os(iOS)
+        MixPillButton(title: isSelecting ? "Done" : "Select") {
+            if isSelecting { clearSelection() } else { isSelecting = true }
+        }
+        #endif
+    }
+
+    private func row(_ track: Track) -> some View {
+        #if os(macOS)
+        LibrarySongRow(track: track, isSelected: selected.contains(track.id),
+                       onPlay: { tap(track) })
+            .overlay(ModifiedClickCatcher { select(track.id, modifiers: $0) })
+            // On the whole selection when the row is part of it, as in the
+            // Library's own table.
+            .contextMenu { songMenu(selected.contains(track.id) ? selection : [track]) }
+        #else
+        LibrarySongRow(track: track, isSelected: selected.contains(track.id),
+                       showsCheckmark: isSelecting, onPlay: { tap(track) })
+            .contextMenu { songMenu(selected.contains(track.id) ? selection : [track]) }
+        #endif
+    }
+
+    private func songMenu(_ targets: [Track]) -> some View {
+        LibrarySongMenu(targets: targets, onPlay: { play(targets) },
+                        onChoosePlaylist: choosePlaylist)
+    }
+
+    /// A plain click still plays, as it always has here, and as the online rows
+    /// right beside these do; picking is the modified click.
+    private func tap(_ track: Track) {
+        #if os(iOS)
+        if isSelecting { toggle(track.id); return }
+        #endif
+        clearSelection()
+        play([track])
+    }
+
+    /// One song plays in the results' order; a selection is its own list.
+    private func play(_ songs: [Track]) {
+        guard let first = songs.first else { return }
+        onPlay(first, songs.count > 1 ? songs : shown)
+    }
+
+    private func choosePlaylist(_ songs: [Track]) {
+        #if os(macOS)
+        deps.savedInPanel.show(tracks: songs, isSavedIn: false)
+        #else
+        tracksForPlaylist = songs
+        #endif
+    }
+
+    private func toggle(_ id: Track.ID) {
+        if selected.remove(id) == nil { selected.insert(id) }
+    }
+
+    #if os(macOS)
+    /// Finder's rules: ⌘ toggles, ⇧ extends from the last row picked.
+    private func select(_ id: Track.ID, modifiers: NSEvent.ModifierFlags) {
+        let ids = shown.map(\.id)
+        if modifiers.contains(.shift), let anchor,
+           let from = ids.firstIndex(of: anchor), let to = ids.firstIndex(of: id) {
+            selected = Set(ids[min(from, to) ... max(from, to)])
+            return
+        }
+        toggle(id)
+        anchor = id
+    }
+    #endif
+
+    private func clearSelection() {
+        selected = []
+        #if os(macOS)
+        anchor = nil
+        #else
+        isSelecting = false
+        #endif
     }
 
     /// The matcher, in one place so both platforms rank identically.
@@ -170,6 +312,9 @@ struct LibraryMatchesPage: View {
 struct LibrarySongRow: View {
 
     let track: Track
+    var isSelected = false
+    /// iOS's Select mode: a circle in place of the library badge.
+    var showsCheckmark = false
     let onPlay: () -> Void
 
     @State private var isHovered = false
@@ -212,22 +357,29 @@ struct LibrarySongRow: View {
 
             Spacer(minLength: 8)
 
-            Image(systemName: "internaldrive")
-                .font(.system(size: 10.5))
-                .foregroundStyle(Color.mixTextTertiary)
-                .help("In your library")
+            if showsCheckmark {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 20))
+                    .foregroundStyle(isSelected ? Color.mixPrimary : Color.mixTextTertiary)
+            } else {
+                Image(systemName: "internaldrive")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(Color.mixTextTertiary)
+                    .help("In your library")
+            }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(isHovered ? Color.primary.opacity(0.07) : .clear)
+                .fill(isSelected ? Color.mixPrimary.opacity(0.18)
+                                 : (isHovered ? Color.primary.opacity(0.07) : .clear))
         )
         .contentShape(Rectangle())
         .mixTapAction(onPlay)
-        // The same menu the song has on every other library surface.
-        .contextMenu { LibrarySongMenu(targets: [track], onPlay: onPlay) }
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
         .mixHoverCursor { isHovered = $0 }
         .mixAnimation(.easeOut(duration: 0.12), value: isHovered)
+        .mixAnimation(.easeOut(duration: 0.12), value: isSelected)
     }
 }
