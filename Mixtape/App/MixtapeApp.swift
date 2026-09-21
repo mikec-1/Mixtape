@@ -26,9 +26,14 @@ struct MixtapeApp: App {
         NSWindow.allowsAutomaticWindowTabbing = false
         MixSheetCorners.install()
         #endif
+        // Built here rather than on first use so a Siri launch, which may
+        // never get a window, still has something to play through.
+        let dependencies = AppDependencies()
+        _dependencies = StateObject(wrappedValue: dependencies)
+        MixtapeIntents.deps = dependencies
     }
 
-    @StateObject private var dependencies = AppDependencies()
+    @StateObject private var dependencies: AppDependencies
     @StateObject private var theme = MixtapeApp.makeTheme()
 
     /// Only here so the launch marks can see what the theme costs.

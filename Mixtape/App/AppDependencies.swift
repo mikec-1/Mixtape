@@ -6,6 +6,7 @@
 // To swap an implementation, change it here only.
 
 import Foundation
+import AppIntents
 import SwiftData
 import Supabase
 import Combine
@@ -580,6 +581,11 @@ LaunchTimeline.mark("deps/engine")
 
         LaunchTimeline.mark("deps/history-restored")
         wireResetObserver()
+        // Siri only knows the playlist names it's been told.
+        libraryService.$playlists.map { $0.map(\.name) }.removeDuplicates()
+            .debounce(for: .seconds(2), scheduler: DispatchQueue.main)
+            .sink { _ in MixtapeShortcuts.updateAppShortcutParameters() }
+            .store(in: &cancellables)
         wireAuthObserver()
         // Off the main actor, and the session restore that needs the library
         // rides along behind it. The synchronous form held the main thread for
