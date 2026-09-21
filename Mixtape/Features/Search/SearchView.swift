@@ -538,6 +538,16 @@ public struct SearchView: View {
                             },
                             showsHeader: false
                         )
+                        #if os(iOS)
+                        if matchingTracks.count > LocalMatchesSection.limit {
+                            NavigationLink(value: DiscoverDestination.librarySongs(query)) {
+                                Text("See all")
+                                    .font(.mixCaption.weight(.semibold))
+                                    .foregroundStyle(Color.mixAccent)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        #endif
                     }
 
                     if !matchingAlbums.isEmpty {
@@ -958,6 +968,8 @@ public struct SearchView: View {
             .miniPlayerSafeArea()
         case .likedSongs(let artist):
             DiscoverLikedSongsPage(artist: artist).miniPlayerSafeArea()
+        case .librarySongs(let query):
+            LibraryMatchesPage(query: query).miniPlayerSafeArea()
         case .genre(let genre):
             IOSDiscoverGenrePage(genre: genre) { discoverPath.append(DiscoverDestination.artist($0)) }
                 .miniPlayerSafeArea()

@@ -19,6 +19,8 @@ enum DiscoverDestination: Hashable {
     /// the stack. Carries the artist rather than the name so it can wear the
     /// same photo the page it was opened from does.
     case likedSongs(OnlineArtist)
+    /// Every library song matching a search — "See all" on the results.
+    case librarySongs(String)
     /// A personalized mix. Carries the whole thing, tracks included, because it
     /// was already fetched to draw the card — so the page opens instantly
     /// instead of spinning through a request the app has the answer to.

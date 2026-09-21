@@ -309,9 +309,6 @@ final class MacAppState: ObservableObject {
         set {
             guard searchStorage != newValue else { return }
             searchStorage = newValue
-            // A new query is a new search: back to searching everything rather
-            // than staying narrowed to whatever the last one narrowed to.
-            searchInLibrary = false
             // Typing is not asking for results — a new query gets the panel
             // under the field and nothing else until Return. An already
             // committed one stays committed, because there the typing is
@@ -320,23 +317,6 @@ final class MacAppState: ObservableObject {
             if newValue.isEmpty { searchCommitted = false }
         }
     }
-
-    /// Set only by Discover's "Show all in Library". The one case where a live
-    /// query should survive a section change, because there the section change
-    /// *is* the result the user asked for. Cleared by the next edit or the next
-    /// move to any other section.
-    ///
-    /// Show all borrows the Songs tab for the query. Ending the handoff gives
-    /// back the tab the user had, unless they picked another meanwhile — the tab
-    /// is remembered, so a borrowed Songs used to become the Library's new home.
-    @Published var searchInLibrary: Bool = false {
-        didSet {
-            guard oldValue, !searchInLibrary, let tab = tabBeforeShowAll else { return }
-            tabBeforeShowAll = nil
-            if libraryTab == .songs { libraryTab = tab }
-        }
-    }
-    private var tabBeforeShowAll: LibraryTab?
 
     /// Whether the query has been *asked for* — Return, or a row picked out of
     /// the suggestions panel — rather than merely typed.
@@ -374,22 +354,7 @@ final class MacAppState: ObservableObject {
     /// sections, and the album and playlist drill-downs, which set their targets
     /// directly and so never went through `goToSection`.
     func leaveSearch() {
-        if searchInLibrary { searchInLibrary = false }
         if searchCommitted { searchCommitted = false }
-    }
-
-    /// "Show all in Library" — hand the current query to the Library page's own
-    /// Songs list, which searches the whole library rather than the six rows
-    /// Discover has room to preview.
-    func showAllInLibrary() {
-        // Reached from the results, so it is already committed — but the Library
-        // page reads `activeSearchText` like everything else, and a query that
-        // stopped counting on the way over would arrive as no query at all.
-        searchCommitted = true
-        if !searchInLibrary { tabBeforeShowAll = libraryTab }
-        searchInLibrary = true
-        libraryTab      = .songs
-        selection       = .library
     }
 
     /// Return in the search field: show me the results.
@@ -422,13 +387,8 @@ final class MacAppState: ObservableObject {
     }
 
     /// Called from `selection`'s `didSet`. Clicking a sidebar row means "show me
-    /// that", not "show me that, filtered by whatever I was last looking for" —
-    /// except on the Show-all handoff, which is the one section change a query
-    /// is supposed to survive.
-    private func leaveSearchOnSectionChange() {
-        if searchInLibrary, selection == .library { return }
-        leaveSearch()
-    }
+    /// that", not "show me that, filtered by whatever I was last looking for".
+    private func leaveSearchOnSectionChange() { leaveSearch() }
 
     /// Bumped to ask the toolbar search field to take focus. The field owns its
     /// own `@FocusState`, so ⌘F can't just set a boolean here — it has to send
@@ -535,9 +495,10 @@ final class MacAppState: ObservableObject {
     /// Non-nil → MacContentRouter shows PlaylistDetailView.
     /// Setting this to nil returns to the playlists list.
     /// Smart playlist the user opened from Home's "Made by Mixtape" shelf.
-    /// Non-nil → MacContentRouter shows its page. Not captured in the
-    /// back/forward history; navigating anywhere clears it.
-    @Published var selectedSmartPlaylist: SmartPlaylist? = nil
+    /// Non-nil → MacContentRouter shows its page; navigating anywhere clears it.
+    @Published var selectedSmartPlaylist: SmartPlaylist? = nil {
+        didSet { scheduleHistoryCapture() }
+    }
 
     /// Open a smart playlist's page, clearing whatever the column was showing.
     func showSmartPlaylist(_ playlist: SmartPlaylist) {
@@ -587,6 +548,7 @@ final class MacAppState: ObservableObject {
         /// to them — it used to land on whatever section the search was drawn
         /// over, which for most people is Home.
         case search(String)
+        case smartPlaylist(SmartPlaylist)
 
         /// Identity, not equality — deliberately not `Equatable`.
         ///
@@ -602,6 +564,7 @@ final class MacAppState: ObservableObject {
             case let (.profile(a),        .profile(b)):        return a.id == b.id
             case let (.publicPlaylist(a), .publicPlaylist(b)): return a.id == b.id
             case (.account,               .account):           return true
+            case let (.smartPlaylist(a),  .smartPlaylist(b)):  return a.id == b.id
             // Refining a query is the same page asking a different question,
             // not a new one — see `captureHistory`, which refreshes the entry
             // rather than pushing one.
@@ -614,8 +577,14 @@ final class MacAppState: ObservableObject {
     /// Past and future. `@Published` so the toolbar's arrows enable and disable
     /// themselves — `canGoBack` is computed, and a computed property only
     /// refreshes a view when something it reads publishes.
-    @Published private(set) var backStack:    [MacDestination] = []
-    @Published private(set) var forwardStack: [MacDestination] = []
+    @Published private(set) var backStack:    [HistoryEntry] = []
+    @Published private(set) var forwardStack: [HistoryEntry] = []
+
+    /// A page plus the Discover drill-downs open on it. The path is one global
+    /// stack that Home and a search share, and leaving either clears it — so
+    /// without the copy, Back to a search landed on the results, not on the
+    /// artist or "In your library" page you had actually left.
+    typealias HistoryEntry = (destination: MacDestination, discoverPath: [DiscoverDestination])
 
     var canGoBack: Bool {
         lyricsCoverContent || (discoverOnScreen && discoverDepth > 0) || !backStack.isEmpty
@@ -664,10 +633,10 @@ final class MacAppState: ObservableObject {
         // the sidebar is still pointing at — so Back has to unwind it first.
         if discoverLinkActive { return true }
         guard selectedAlbum    == nil,
+              selectedSmartPlaylist == nil,
               selectedPlaylist == nil else { return false }
-        // The router hands the whole column to Discover while a query is live,
-        // unless the query was explicitly handed off to the Library page.
-        if isSearching { return !searchInLibrary }
+        // The router hands the whole column to Discover while a query is live.
+        if isSearching { return true }
         let section = selection ?? .home
         return section == .home || section == .discover
     }
@@ -686,6 +655,13 @@ final class MacAppState: ObservableObject {
             // the guard below because the commonest way to empty it is Back,
             // which sets `isRestoringDiscover`.
             if newDepth == 0, self.discoverDepth != 0 { self.discoverLinkActive = false }
+            // The stack belongs to the page it was opened on. Recorded only while
+            // that page is still the one on screen, so a navigation that clears
+            // it on the way out (Home, a new search) can't wipe the copy Back
+            // restores.
+            if !self.historyCaptureScheduled, self.resolvedDestination.matches(self.currentDestination) {
+                self.currentDiscoverPath = self.discoverOnScreen ? newPath : []
+            }
             guard !self.isRestoringDiscover, newDepth != self.discoverDepth else { return }
             // Same rule as the destination history: a turn the user takes
             // themselves discards the future they were no longer walking to.
@@ -705,6 +681,10 @@ final class MacAppState: ObservableObject {
     /// which is where we actually are — they differ for exactly as long as it
     /// takes a capture to run.
     private var currentDestination: MacDestination = .section(.home)
+    private var currentDiscoverPath: [DiscoverDestination] = []
+    private var liveDiscoverPath: [DiscoverDestination] {
+        discoverOnScreen ? DiscoverSessionStore.shared.path : []
+    }
 
     /// True while `apply` is writing the properties. Restoring a destination
     /// looks identical to navigating to it from the outside, so without this the
@@ -724,10 +704,10 @@ final class MacAppState: ObservableObject {
         if let profile = profileTarget        { return .profile(profile) }
         // Exactly where the router puts it: above the drill-downs, which in
         // practice can never both be set (opening one calls `leaveSearch`, and
-        // committing a query clears them). `searchInLibrary` is the handoff to
-        // the Library page, which is that section's own page.
-        if isSearching, !searchInLibrary      { return .search(activeSearchText) }
+        // committing a query clears them).
+        if isSearching                        { return .search(activeSearchText) }
         if let album = selectedAlbum          { return .album(album) }
+        if let smart = selectedSmartPlaylist  { return .smartPlaylist(smart) }
         if let playlist = selectedPlaylist    { return .playlist(playlist) }
         return .section(selection ?? .home)
     }
@@ -749,6 +729,7 @@ final class MacAppState: ObservableObject {
             // since it opened. No entry to push, but the one Back restores has
             // to be what is actually on screen.
             currentDestination = destination
+            currentDiscoverPath = liveDiscoverPath
             return
         }
 
@@ -758,13 +739,14 @@ final class MacAppState: ObservableObject {
         // every page you visit afterwards.
         clearTrackSelection()
 
-        backStack.append(currentDestination)
+        backStack.append((currentDestination, currentDiscoverPath))
         if backStack.count > Self.historyLimit { backStack.removeFirst() }
         // Same rule as a browser: taking a new turn discards the future you were
         // no longer walking towards.
         if !forwardStack.isEmpty { forwardStack.removeAll() }
         if !discoverForward.isEmpty { discoverForward.removeAll() }
         currentDestination = destination
+        currentDiscoverPath = liveDiscoverPath
     }
 
     func goBack() {
@@ -797,8 +779,8 @@ final class MacAppState: ObservableObject {
         }
 
         guard let previous = backStack.popLast() else { return }
-        forwardStack.append(currentDestination)
-        currentDestination = previous
+        forwardStack.append((currentDestination, currentDiscoverPath))
+        currentDestination = previous.destination
         apply(previous)
     }
 
@@ -814,14 +796,14 @@ final class MacAppState: ObservableObject {
             }
             return
         }
-        backStack.append(currentDestination)
-        currentDestination = next
+        backStack.append((currentDestination, currentDiscoverPath))
+        currentDestination = next.destination
         apply(next)
     }
 
     /// Every property is cleared before one is set, so a destination is restored
     /// exactly, not merged into whatever happened to be showing.
-    private func apply(_ destination: MacDestination) {
+    private func apply(_ entry: HistoryEntry) {
         isRestoringHistory = true
         defer { isRestoringHistory = false }
 
@@ -852,18 +834,26 @@ final class MacAppState: ObservableObject {
         // column is showing. The `.search` case below puts it back.
         searchCommitted      = false
 
-        switch destination {
+        switch entry.destination {
         case .section(let item):       selection            = item
         case .album(let album):        selectedAlbum        = album
         case .playlist(let playlist):  selectedPlaylist     = playlist
         case .profile(let profile):    profileTarget        = profile
         case .publicPlaylist(let t):   publicPlaylistTarget = t
         case .account:                 showingAccount       = true
+        case .smartPlaylist(let p):    selectedSmartPlaylist = p
         case .search(let query):
             searchStorage    = query
-            searchInLibrary  = false
             searchCommitted  = true
         }
+
+        // Last, because `discoverOnScreen` reads everything above. A stack on a
+        // page that isn't Discover's own was a linked page drawn over it.
+        isRestoringDiscover = true
+        DiscoverSessionStore.shared.path = entry.discoverPath
+        isRestoringDiscover = false
+        if !entry.discoverPath.isEmpty, !discoverOnScreen { discoverLinkActive = true }
+        currentDiscoverPath = entry.discoverPath
     }
 
     // MARK: Toolbar Delete Selection

@@ -79,6 +79,8 @@ struct IOSDiscoverView: View {
                         )
                     case .likedSongs(let artist):
                         DiscoverLikedSongsPage(artist: artist)
+                    case .librarySongs(let query):
+                        LibraryMatchesPage(query: query)
                     case .album(let album):
                         IOSDiscoverAlbumPage(
                             album: album,

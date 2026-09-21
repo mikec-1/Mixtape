@@ -337,9 +337,8 @@ public struct NowPlayingView: View {
                 }
             }
 
-            if let track = queueService.currentTrack,
-               let slot = deps.onlineCoordinator.reResolvableSlot(for: track) {
-                Button { Task { await deps.onlineCoordinator.reResolve(slot: slot) } } label: {
+            if let track = queueService.currentTrack, deps.onlineCoordinator.canReResolve(track) {
+                Button { Task { await deps.reResolve(track) } } label: {
                     Label("Wrong Version? Re-resolve", systemImage: "arrow.triangle.2.circlepath")
                 }
             }
@@ -1261,8 +1260,8 @@ private struct UpNextSheet: View {
                     }
                 } label: { Label("Add to Liked Songs", systemImage: "heart") }
             }
-            if let slot = deps.onlineCoordinator.reResolvableSlot(for: item.track, at: item.index) {
-                Button { Task { await deps.onlineCoordinator.reResolve(slot: slot) } } label: {
+            if deps.onlineCoordinator.canReResolve(item.track) {
+                Button { Task { await deps.reResolve(item.track, at: item.index) } } label: {
                     Label("Wrong Version? Re-resolve", systemImage: "arrow.triangle.2.circlepath")
                 }
             }

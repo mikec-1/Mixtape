@@ -27,9 +27,10 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
     @Published public private(set) var nowPlayingID: String? = nil
     /// Non-nil briefly when a play attempt fails. Auto-clears after 4 s.
     @Published public private(set) var errorMessage: String? = nil
-    /// Non-nil briefly to surface a non-error status (e.g. the result of a
-    /// "wrong version" re-resolve). Auto-clears after a few seconds.
-    @Published public private(set) var statusMessage: String? = nil
+    /// Where a non-error status goes (e.g. the result of a "wrong version"
+    /// re-resolve). The app toast, so it reaches whichever screen pressed it —
+    /// it used to be a banner only Mac Discover drew.
+    public var onStatus: ((String) -> Void)?
 
     /// The song the user is waiting on, and how far along it is.
     ///
@@ -396,7 +397,7 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
     }
 
     /// Record the resolved videoID for `trackID` and persist the index.
-    private func recordVideoID(_ videoID: String, for trackID: String) {
+    func recordVideoID(_ videoID: String, for trackID: String) {
         var idx = videoIDIndex
         idx[trackID] = videoID
         videoIDIndex = idx
@@ -462,32 +463,60 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
         await reResolve(result) { await self.playRespectingRejections(result, context: context) }
     }
 
-    /// The live-session slot a queue row or the playing song re-resolves
-    /// through. Nil outside an online session and for a slot playing from the
-    /// user's own file — there is no source there to swap.
-    public func reResolvableSlot(for track: Track, at index: Int? = nil) -> Int? {
-        guard hasActiveOnlineSession else { return nil }
-        let slot = [index, playingSlot].compactMap { $0 }.first {
-            contextDisplayTracks.indices.contains($0) && contextDisplayTracks[$0].id == track.id
-        }
-        guard let slot, context.indices.contains(slot),
-              localSubstitutes[context[slot].id] == nil else { return nil }
-        return slot
-    }
+    /// Whether "Wrong version" means anything for this row: only a song the
+    /// resolver found has a source to swap. The user's own files don't.
+    ///
+    /// Not gated on a Discover session any more. A library song that plays from
+    /// its cached or downloaded copy never starts one, so the row was missing
+    /// from exactly the queue and player where people hear a wrong version.
+    public func canReResolve(_ track: Track) -> Bool { track.sourceRef != nil }
 
     /// "Wrong version" from the queue or the player. The playing song is fetched
     /// again in place, so the queue around it stays; one further down forgets
-    /// its source and picks another when playback reaches it.
-    public func reResolve(slot: Int) async {
-        guard context.indices.contains(slot) else { return }
-        let result = context[slot]
-        guard slot == playingSlot else {
-            if let previous = videoIDIndex[result.id] { reject(previous, for: result.id) }
-            clearCache(for: result)
-            flashStatus("“\(result.title)” will use a different version when it comes up.")
+    /// its source and picks another when playback reaches it. A downloaded copy
+    /// is the caller's to drop first — see `AppDependencies.reResolve`.
+    public func reResolve(_ track: Track, at index: Int? = nil) async {
+        guard canReResolve(track) else { return }
+        if hasActiveOnlineSession,
+           let slot = [index, playingSlot].compactMap({ $0 }).first(where: {
+               contextDisplayTracks.indices.contains($0) && contextDisplayTracks[$0].id == track.id
+           }),
+           context.indices.contains(slot) {
+            // A library song standing in for this slot is the version being
+            // rejected, so the slot resolves like any other from here on.
+            localSubstitutes[context[slot].id] = nil
+            let result = context[slot]
+            guard slot == playingSlot else { return forgetSource(result) }
+            await reResolve(result) { await self.playFromContext(at: slot, skippingUnfindable: false) }
             return
         }
-        await reResolve(result) { await self.playFromContext(at: slot, skippingUnfindable: false) }
+
+        // Straight from the engine's own queue. Fetched into the cache and then
+        // reloaded rather than handed to a session: a session resets the queue
+        // to its own context, and the rest of the user's queue would go with it.
+        let result = Self.onlineForm(track)
+        guard engine.queue.currentTrack?.id == track.id,
+              index == nil || index == engine.queue.currentIndex else { return forgetSource(result) }
+        // ponytail: a copy downloaded before the pick was recorded has nothing to
+        // reject, so the first press can land on the same upload; the second walks on.
+        await reResolve(result) {
+            self.beginPreparing(result)
+            defer { self.endPreparing(result.id) }
+            let task = self.makeDownloadTask(for: result)
+            self.prefetchTasks[result.id] = task
+            let fetched = (try? await task.value) != nil
+            if self.prefetchTasks[result.id] == task { self.prefetchTasks[result.id] = nil }
+            guard fetched else { return }
+            await self.engine.reloadCurrent()
+        }
+    }
+
+    /// A song further down the queue: refuse its current upload now, pick
+    /// another when playback gets there.
+    private func forgetSource(_ result: OnlineTrack) {
+        if let previous = videoIDIndex[result.id] { reject(previous, for: result.id) }
+        clearCache(for: result)
+        flashStatus("“\(result.title)” will use a different version when it comes up.")
     }
 
     private func reResolve(_ result: OnlineTrack, replay: () async -> Void) async {
@@ -2379,9 +2408,8 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
         }
     }
 
-    /// Generation counters so a stale auto-clear task can't wipe a newer message.
+    /// Generation counter so a stale auto-clear task can't wipe a newer message.
     private var errorGeneration = 0
-    private var statusGeneration = 0
 
     // MARK: - Preparing state
 
@@ -2452,15 +2480,6 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
         }
     }
 
-    /// Briefly surface a non-error status message, then auto-clear it.
-    private func flashStatus(_ message: String) {
-        statusMessage = message
-        statusGeneration &+= 1
-        let generation = statusGeneration
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(4))
-            guard let self, self.statusGeneration == generation else { return }
-            self.statusMessage = nil
-        }
-    }
+    /// Surface a non-error status message.
+    private func flashStatus(_ message: String) { onStatus?(message) }
 }

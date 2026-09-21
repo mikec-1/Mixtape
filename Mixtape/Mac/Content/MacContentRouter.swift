@@ -55,14 +55,12 @@ struct MacContentRouter: View {
             MacPublicPlaylistPage(target: target)
         } else if let profile = appState.profileTarget {
             MacProfilePage(profile: profile)
-        } else if appState.isSearching, !appState.searchInLibrary {
+        } else if appState.isSearching {
             // Every search lands in Discover, whatever section you started
             // typing in. Discover puts your own matching songs above the online
             // ones, so this is a superset of what the old library-only results
             // page could show — and the only way to reach a song you don't
-            // already own. `searchInLibrary` is the deliberate exception: it's
-            // set by Discover's own "Show all in Library", so the query falls
-            // through to the Library page below.
+            // already own.
             OnlineDiscoverView()
                 .environmentObject(deps.onlineCoordinator)
         } else if appState.discoverLinkActive {

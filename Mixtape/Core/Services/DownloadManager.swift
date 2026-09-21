@@ -509,6 +509,10 @@ public final class DownloadManager: ObservableObject {
     /// more (see the note on `setupQueueObservation`).
     private let queueService:   QueueService
     private let trackResolver:  any TrackResolver
+    /// Where "Wrong version" keeps its picks and refusals. A download searches
+    /// the same way playback does, so without these it fetched the very upload
+    /// the user had just rejected. Set by AppDependencies; weak, it's created after.
+    weak var onlineCoordinator: OnlinePlaybackCoordinator?
 
     // MARK: - Private State
 
@@ -908,6 +912,21 @@ public final class DownloadManager: ObservableObject {
                 requalifying.remove(trackID)
             }
         }
+    }
+
+    /// Drop the downloaded file but not the wish to have it — "Wrong version" on
+    /// a downloaded song. Returns whether there was one; `refetch` brings it back.
+    public func discardOfflineCopy(of track: Track) -> Bool {
+        guard offlineTrackIDs.contains(track.id) else { return false }
+        OfflineStore.shared.remove(track.id)
+        offlineTrackIDs.remove(track.id)
+        return true
+    }
+
+    /// Download a song again after `discardOfflineCopy`, without adding a claim
+    /// of its own: it was kept by whatever kept it before.
+    public func refetch(_ track: Track) {
+        enqueueTrackDownload(track, force: true)
     }
 
     // MARK: - Playlist Offline State Management
@@ -1841,13 +1860,18 @@ public final class DownloadManager: ObservableObject {
             .appendingPathComponent(track.id.uuidString, isDirectory: true)
         try? FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
 
+        let ref = track.sourceRef
         let res = try await trackResolver.download(
             query: query,
             name: track.id.uuidString,
             to: staging,
             expectedDuration: track.duration,
-            preferExplicit: track.isExplicit
+            preferExplicit: track.isExplicit,
+            excluding: ref.flatMap { onlineCoordinator?.exclusions(for: $0) } ?? []
         )
+        // Recorded so a later "Wrong version" on the downloaded copy has
+        // something to refuse.
+        if let ref { onlineCoordinator?.recordVideoID(res.videoID, for: ref) }
 
         let landed = FileManager.default.fileExists(atPath: res.fileURL.path(percentEncoded: false))
             ? res.fileURL

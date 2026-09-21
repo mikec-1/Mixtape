@@ -70,13 +70,10 @@ struct OnlineDiscoverView: View {
             }
             if let error = coordinator.errorMessage {
                 banner(error, system: "exclamationmark.circle.fill")
-            } else if let status = coordinator.statusMessage {
-                banner(status, system: "arrow.triangle.2.circlepath", tint: Color.mixPrimary)
             }
             content
         }
         .mixAnimation(.spring(response: 0.35, dampingFraction: 0.85), value: coordinator.errorMessage)
-        .mixAnimation(.spring(response: 0.35, dampingFraction: 0.85), value: coordinator.statusMessage)
         .background(Color.mixBackground)
         // No cancel on disappear any more. The task belongs to the store, which
         // outlives this view, so letting a search that's already in the air
@@ -230,6 +227,7 @@ struct OnlineDiscoverView: View {
         // Same reason: the liked page writes "Liked Songs / By <artist>" across
         // its own hero, and it carries its own back button now.
         if case .likedSongs = path.last { return nil }
+        if case .librarySongs = path.last { return nil }
         guard path.isEmpty else { return pageTitle }
         return query.isEmpty ? "Discover" : nil
     }
@@ -279,6 +277,7 @@ struct OnlineDiscoverView: View {
         // the picture, so a band above it is a black bar pushing the page down.
         if case .artist = path.last { return true }
         if case .likedSongs = path.last { return true }
+        if case .librarySongs = path.last { return true }
         return path.isEmpty && headerTitle == nil && !isSearching
     }
 
@@ -287,6 +286,7 @@ struct OnlineDiscoverView: View {
         switch path.last {
         case .artist(let artist):     return artist.name
         case .likedSongs(let artist): return "Liked · \(artist.name)"
+        case .librarySongs:           return "In your library"
         case .album(let album):       return album.title
         case .genre(let genre):       return genre.name
         case .mix(let mix):           return mix.title
@@ -313,6 +313,8 @@ struct OnlineDiscoverView: View {
             )
         case .likedSongs(let artist):
             DiscoverLikedSongsPage(artist: artist, onBack: { path.removeLast() })
+        case .librarySongs(let query):
+            LibraryMatchesPage(query: query, onBack: { path.removeLast() })
         case .album(let album):
             DiscoverAlbumPage(
                 album: album,
@@ -1240,11 +1242,11 @@ struct OnlineDiscoverView: View {
             .foregroundStyle(Color.mixTextPrimary)
     }
 
-    private func banner(_ text: String, system: String, tint: Color = Color.mixDestructive) -> some View {
+    private func banner(_ text: String, system: String) -> some View {
         HStack(spacing: 10) {
             Image(systemName: system)
                 .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(tint)
+                .foregroundStyle(Color.mixDestructive)
             Text(text)
                 .font(.mixLabel)
                 .foregroundStyle(Color.mixTextPrimary)
@@ -1257,7 +1259,7 @@ struct OnlineDiscoverView: View {
         .background(Color.mixSurface2, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(tint.opacity(0.35), lineWidth: 1)
+                .strokeBorder(Color.mixDestructive.opacity(0.35), lineWidth: 1)
         )
         .mixShadow(color: .black.opacity(0.3), radius: 10, y: 3)
         .padding(.horizontal, 20)
@@ -1279,14 +1281,7 @@ struct OnlineDiscoverView: View {
                 query: query,
                 tracks: matches,
                 onPlay: { track, context in Task { await engine.play(track: track, in: context, source: .named("Discover")) } },
-                onShowAll: {
-                    // The Library page runs the same query against the whole
-                    // library, which is what "show all" has to mean. It's also
-                    // the one place a query is allowed to outlive the section
-                    // it was typed in, so it goes through `showAllInLibrary`
-                    // rather than setting the selection directly.
-                    appState.showAllInLibrary()
-                }
+                onShowAll: { path.append(.librarySongs(query)) }
             )
             .id("local")
         }
@@ -1392,6 +1387,8 @@ enum DiscoverDestination: Hashable {
     /// the stack. Carries the artist rather than the name so it can wear the
     /// same photo the page it was opened from does.
     case likedSongs(OnlineArtist)
+    /// Every library song matching a search — "Show all" on the results.
+    case librarySongs(String)
     /// A personalized mix. Carries the whole thing, tracks included, because it
     /// was already fetched to draw the card — so the page opens instantly
     /// instead of spinning through a request the app has the answer to.

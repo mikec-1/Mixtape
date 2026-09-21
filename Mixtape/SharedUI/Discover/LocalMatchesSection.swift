@@ -22,9 +22,11 @@ struct LocalMatchesSection: View {
     let query: String
     let tracks: [Track]
     let onPlay: (Track, [Track]) -> Void
-    /// "Show all in Library". Optional: the pages that have nowhere to send you
-    /// simply don't draw it.
+    /// "Show all" — opens `LibraryMatchesPage`. Optional: the pages that have
+    /// nowhere to send you simply don't draw it.
     var onShowAll: (() -> Void)? = nil
+    /// Every match rather than the first six — that page's own list.
+    var showsAll = false
 
     /// Six rows. Enough that the section is worth reading, few enough that it
     /// never pushes the online results off the screen — which would just be the
@@ -35,7 +37,7 @@ struct LocalMatchesSection: View {
 
     static let limit = 6
 
-    private var shown: [Track] { Array(tracks.prefix(Self.limit)) }
+    private var shown: [Track] { showsAll ? tracks : Array(tracks.prefix(Self.limit)) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -52,7 +54,7 @@ struct LocalMatchesSection: View {
                             .foregroundStyle(Color.mixTextTertiary)
                     }
                     Spacer(minLength: 8)
-                    if let onShowAll, tracks.count > Self.limit {
+                    if let onShowAll, !showsAll, tracks.count > Self.limit {
                         MixPillButton(title: "Show all", action: onShowAll)
                     }
                 }
@@ -116,6 +118,47 @@ struct LocalMatchesSection: View {
                     : lhs.element.tier < rhs.element.tier
             }
             .map(\.element.track)
+    }
+}
+
+// MARK: - Page
+
+/// Every library song matching a search — what "Show all" opens. Pushed onto
+/// the search's own stack rather than handing the query to the Library page,
+/// so it is a page of the results: Back returns to them, and the history can
+/// bring it back.
+struct LibraryMatchesPage: View {
+
+    let query: String
+    /// Pop, for a host that draws no chrome of its own (macOS).
+    var onBack: (() -> Void)? = nil
+
+    @EnvironmentObject private var deps:   AppDependencies
+    @EnvironmentObject private var engine: PlaybackEngine
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                if let onBack { BackButton(action: onBack) }
+                LocalMatchesSection(
+                    query: query,
+                    tracks: LocalMatchesSection.matches(for: query, in: deps.libraryService),
+                    onPlay: { track, context in
+                        Task { await engine.play(track: track, in: context, source: .named("Search results")) }
+                    },
+                    showsAll: true
+                )
+            }
+            #if os(macOS)
+            .padding(24)
+            #else
+            .padding(20)
+            #endif
+        }
+        #if os(iOS)
+        .navigationTitle(query)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
     }
 }
 

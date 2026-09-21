@@ -160,6 +160,13 @@ public struct MiniPlayerBar: View {
         .buttonStyle(.plain).mixHandCursor()
         .accessibilityHint("Opens Now Playing")
         #if os(iOS)
+        .contextMenu {
+            if let track = engine.queue.currentTrack, deps.onlineCoordinator.canReResolve(track) {
+                Button { Task { await deps.reResolve(track) } } label: {
+                    Label("Wrong Version? Re-resolve", systemImage: "arrow.triangle.2.circlepath")
+                }
+            }
+        }
         // The swipe is the only way to skip here, and VoiceOver can't swipe it.
         .accessibilityActions {
             if engine.queue.hasNext { Button("Next") { Task { await engine.playNext() } } }

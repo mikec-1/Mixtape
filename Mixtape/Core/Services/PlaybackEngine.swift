@@ -1223,6 +1223,14 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         }
     }
 
+    /// Load the current song again from whatever copy `AudioLocator` now finds,
+    /// keeping the queue around it. "Wrong version" on a library song swaps the
+    /// file underneath and calls this.
+    public func reloadCurrent() async {
+        guard let track = queue.currentTrack else { return }
+        await loadAndPlay(track: track)
+    }
+
     /// Load `track` and leave it paused at `position` seconds (resume-on-launch path).
     private func loadButPause(track: Track, at position: TimeInterval,
                               keepingQueue: Bool = false) async {

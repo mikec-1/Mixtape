@@ -36,6 +36,15 @@ public final class AppDependencies: ObservableObject {
         }
     }
 
+    /// "Wrong version" from a queue row or the player. A downloaded copy is
+    /// the rejected version too, so it goes first and is fetched again once the
+    /// coordinator has settled on another source.
+    public func reResolve(_ track: Track, at index: Int? = nil) async {
+        let wasDownloaded = downloadManager.discardOfflineCopy(of: track)
+        await onlineCoordinator.reResolve(track, at: index)
+        if wasDownloaded { downloadManager.refetch(track) }
+    }
+
     // MARK: - Saved-song Pill
 
     /// The small "Added to \u{2026}" pill that slides up at the bottom. Separate
@@ -689,6 +698,8 @@ LaunchTimeline.mark("deps/engine")
         onlineCoordinator.isOnline = { [weak self] in
             self?.downloadManager.isConnected ?? true
         }
+        onlineCoordinator.onStatus = { [weak self] in self?.showToast($0) }
+        downloadManager.onlineCoordinator = onlineCoordinator
         downloadManager.$isConnected
             .combineLatest(authService.$isOffline)
             .map { !$0 || $1 }
