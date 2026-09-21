@@ -12,6 +12,7 @@
 
 import SwiftUI
 import OSLog
+import CoreSpotlight
 
 public struct RootView: View {
 
@@ -133,6 +134,19 @@ public struct RootView: View {
         // which would otherwise hand a share code to client.auth.session(from:).
         // Everything else (email confirmation, password reset) shares the scheme
         // and goes through the SDK, which fires the matching authStateChanges event.
+        // A song picked from Spotlight — see `SpotlightIndex`. Played as if
+        // clicked in All Songs; a cold launch reads the library first.
+        .onContinueUserActivity(CSSearchableItemActionType) { activity in
+            guard let id = (activity.userInfo?[CSSearchableItemActivityIdentifier] as? String).flatMap(UUID.init)
+            else { return }
+            Task {
+                let library = deps.libraryService
+                if !library.hasLoaded { await library.loadForDisplay() }
+                guard let track = library.track(id: id) else { return }
+                await deps.playbackEngine.play(track: track, in: library.tracks,
+                                               source: .playlist(id: Playlist.allSongsID, name: "All Songs"))
+            }
+        }
         .onOpenURL { url in
             if let code = Self.inviteCode(from: url) {
                 Task { await redeemInvite(code) }

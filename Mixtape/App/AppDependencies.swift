@@ -586,6 +586,9 @@ LaunchTimeline.mark("deps/engine")
             .debounce(for: .seconds(2), scheduler: DispatchQueue.main)
             .sink { _ in MixtapeShortcuts.updateAppShortcutParameters() }
             .store(in: &cancellables)
+        libraryService.$tracks.debounce(for: .seconds(5), scheduler: DispatchQueue.main)
+            .sink { SpotlightIndex.update($0) }
+            .store(in: &cancellables)
         wireAuthObserver()
         // Off the main actor, and the session restore that needs the library
         // rides along behind it. The synchronous form held the main thread for
