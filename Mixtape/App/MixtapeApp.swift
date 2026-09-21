@@ -42,6 +42,7 @@ struct MixtapeApp: App {
     #if os(macOS)
     /// Only for the Dock tile menu, which SwiftUI can't declare.
     @NSApplicationDelegateAdaptor(MacDockMenu.self) private var dockMenu
+    @AppStorage(MacMenuBarPlayer.visibleKey) private var showsMenuBarPlayer = true
     @StateObject private var updater = MixtapeApp.makeUpdater()
 
     private static func makeUpdater() -> UpdaterController {
@@ -53,6 +54,12 @@ struct MixtapeApp: App {
 
     var body: some Scene {
         mainWindow
+        #if os(macOS)
+        MenuBarExtra("Mixtape", systemImage: "music.note", isInserted: $showsMenuBarPlayer) {
+            MacMenuBarPlayer(engine: dependencies.playbackEngine, queue: dependencies.playbackEngine.queue)
+        }
+        .menuBarExtraStyle(.window)
+        #endif
     }
 
     // MARK: - Main Window

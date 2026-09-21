@@ -210,6 +210,7 @@ struct GeneralPane: View {
     #endif
     #if os(macOS)
     @StateObject private var launchAtLogin = LaunchAtLogin.shared
+    @AppStorage(MacMenuBarPlayer.visibleKey) private var showsMenuBarPlayer = true
     #endif
     var body: some View {
         SettingsPage(title: "General") {
@@ -279,6 +280,13 @@ struct GeneralPane: View {
             #endif
 
             #if os(macOS)
+            SettingsGroup(title: "Menu Bar") {
+                SettingsToggleRow(id: "general.menuBarPlayer",
+                                  title: "Show Mini Player in Menu Bar",
+                                  icon: "menubar.rectangle",
+                                  isOn: $showsMenuBarPlayer)
+            }
+
             SettingsGroup(title: "Startup",
                           footer: launchAtLogin.failure.map {
                               "macOS refused the login item: \($0)"

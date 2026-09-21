@@ -147,6 +147,7 @@ enum SettingsReset {
         "haptics.enabled",
         "mix.stats.shared",
         "updates.receiveDevelopmentBuilds",
+        "mac.menuBarPlayer",
     ]
 
     /// Per-account preferences, stored as `key` for a signed-out user and

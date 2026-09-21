@@ -353,6 +353,8 @@ enum SettingsSearchIndex {
 
         #if os(macOS)
         entries += [
+            .init(id: "general.menuBarPlayer", title: "Show Mini Player in Menu Bar", category: .general,
+                  keywords: ["menu bar", "status bar", "tray", "controls", "now playing"]),
             .init(id: "general.launchAtLogin", title: "Open at Login", category: .general,
                   keywords: ["startup", "start up", "boot", "automatically", "launch"]),
             .init(id: "about.betaChannel", title: "Receive Development Builds", category: .about,
