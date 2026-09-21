@@ -127,6 +127,7 @@ public final class AppDependencies: ObservableObject {
     public func toggleFavourite(trackID: UUID) -> Bool {
         let favourited = libraryService.toggleFavourite(trackID: trackID)
         if favourited { showSavedToast(.favourites) }
+        playbackEngine.syncRemoteCommandState()
         return favourited
     }
 
@@ -509,6 +510,21 @@ LaunchTimeline.mark("deps/engine")
             itunes:      itunesClient,
             coordinator: onlineCoordinator
         )
+
+        // The remote heart means what the player bar's does: like a saved song,
+        // save an unsaved one (saving is liking).
+        self.playbackEngine.isLiked = { [weak self] in self?.libraryService.isFavourited(trackID: $0.id) ?? false }
+        self.playbackEngine.onRemoteLike = { [weak self] track in
+            guard let self else { return }
+            if self.libraryService.track(id: track.id) != nil {
+                _ = self.toggleFavourite(trackID: track.id)
+            } else if let online = self.onlineCoordinator.currentOnlineTrack {
+                await self.onlineCoordinator.addToLibrary(online)
+            } else {
+                await self.onlineCoordinator.addToLibrary(unsaved: track)
+                self.showSavedToast(.library)
+            }
+        }
 
         // Wire history persistence: save every new play to SwiftData.
         let deviceID = Self.deviceID

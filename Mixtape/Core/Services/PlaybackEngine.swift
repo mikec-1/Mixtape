@@ -107,6 +107,11 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     /// leaves the track. AppDependencies corrects the stored row with it.
     public var onPlaySecondsFinalised: ((UUID, TimeInterval) -> Void)?
 
+    /// The lock screen / CarPlay / Watch heart. The engine doesn't know the
+    /// library, so AppDependencies answers both.
+    public var isLiked:      ((Track) -> Bool)?
+    public var onRemoteLike: ((Track) async -> Void)?
+
     // MARK: - Online context routing (Discover)
     //
     // When the currently playing track is an online (Discover) stream, skip /
@@ -2102,7 +2107,10 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         // the remote-command registration only happens on the first call, the
         // artwork decode is only cold once, and the info-centre setter is an
         // XPC hop to mediaserverd that may be waiting for it to start up.
-        mixMainActivity("now-playing/remote-commands") { setupRemoteCommandsIfNeeded() }
+        mixMainActivity("now-playing/remote-commands") {
+            setupRemoteCommandsIfNeeded()
+            syncRemoteCommandState()
+        }
         var info: [String: Any] = [
             MPMediaItemPropertyTitle:                        track.title,
             MPMediaItemPropertyArtist:                       track.artistName,
@@ -2359,9 +2367,41 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         guard !remoteCommandsConfigured else { return }
         remoteCommandsConfigured = true
         Task { await Self.registerRemoteCommands(for: self) }
+        // Shuffle and repeat changed in the app rather than from a remote:
+        // CarPlay and the Watch draw them from the commands, so keep those
+        // current. Deferred a turn because @Published fires in willSet.
+        remoteStateObserver = queue.$shuffleEnabled.map { _ in () }
+            .merge(with: queue.$repeatMode.map { _ in () })
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] in self?.syncRemoteCommandState() }
     }
 
     private var remoteCommandsConfigured = false
+    private var remoteStateObserver: AnyCancellable?
+
+    /// Push shuffle, repeat and liked state out to the remote commands.
+    /// ponytail: a like that skips `deps.toggleFavourite` (multi-select) shows
+    /// at the next song; observe the library's favourites if that lag matters.
+    func syncRemoteCommandState() {
+        guard remoteCommandsConfigured else { return }
+        let shuffle: MPShuffleType = queue.shuffleEnabled ? .items : .off
+        let repeatType: MPRepeatType = switch queue.repeatMode {
+            case .off: .off
+            case .all: .all
+            case .one: .one
+        }
+        let liked = queue.currentTrack.map { isLiked?($0) ?? false } ?? false
+        // Off the main actor for the same reason as the registration below.
+        Task { await Self.applyRemoteCommandState(shuffle: shuffle, repeatType: repeatType, liked: liked) }
+    }
+
+    private nonisolated static func applyRemoteCommandState(shuffle: MPShuffleType, repeatType: MPRepeatType,
+                                                            liked: Bool) async {
+        let c = MPRemoteCommandCenter.shared()
+        c.changeShuffleModeCommand.currentShuffleType = shuffle
+        c.changeRepeatModeCommand.currentRepeatType   = repeatType
+        c.likeCommand.isActive = liked
+    }
 
     /// `nonisolated` + `async` is what actually gets this off the main actor: a
     /// non-isolated async function runs on the global executor even when an
@@ -2394,6 +2434,34 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         c.changePlaybackPositionCommand.addTarget { [weak engine] event in
             if let e = event as? MPChangePlaybackPositionCommandEvent {
                 Task { @MainActor [weak engine] in engine?.seek(to: e.positionTime) }
+            }
+            return .success
+        }
+
+        // No skipForward/Backward (±15s): enabling them swaps the lock screen's
+        // next/previous buttons for the interval ones, which is a podcast
+        // player. No dislike either until 4.3 gives it somewhere to go.
+        c.changeShuffleModeCommand.addTarget { [weak engine] event in
+            guard let e = event as? MPChangeShuffleModeCommandEvent else { return .commandFailed }
+            let on = e.shuffleType != .off
+            Task { @MainActor [weak engine] in engine?.queue.setShuffle(on) }
+            return .success
+        }
+        c.changeRepeatModeCommand.addTarget { [weak engine] event in
+            guard let e = event as? MPChangeRepeatModeCommandEvent else { return .commandFailed }
+            let type = e.repeatType
+            Task { @MainActor [weak engine] in
+                engine?.queue.setRepeat(type == .one ? .one : type == .all ? .all : .off)
+            }
+            return .success
+        }
+        c.likeCommand.localizedTitle      = "Add to Liked Songs"
+        c.likeCommand.localizedShortTitle = "Like"
+        c.likeCommand.addTarget { [weak engine] _ in
+            Task { @MainActor [weak engine] in
+                guard let engine, let track = engine.queue.currentTrack else { return }
+                await engine.onRemoteLike?(track)
+                engine.syncRemoteCommandState()
             }
             return .success
         }
