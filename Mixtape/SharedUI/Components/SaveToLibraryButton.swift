@@ -164,7 +164,7 @@ struct SaveToLibraryButton: View {
     }
 
     private var savedLabel: String {
-        saved ? "Where this song is saved" : "Add to Library"
+        saved ? "Where this song is saved" : "Add to Liked Songs"
     }
 
     /// This song's library row, by id if it has one and by name if it doesn't.

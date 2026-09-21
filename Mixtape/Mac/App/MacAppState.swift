@@ -1020,6 +1020,10 @@ final class MacAppState: ObservableObject {
     /// clearing it on dismiss is what brings the popover back up to date.
     @Published var lyricsEditorTrack: Track? = nil
 
+    /// Get Info's song. A sheet, not the Now Playing panel: that panel follows
+    /// playback, so Get Info on any other row showed the wrong song.
+    @Published var infoTrack: Track? = nil
+
     /// Karaoke: fullscreen lyrics with the rest of the app out of the way —
     /// no sidebar, no right panel, and chrome that fades until the mouse moves.
     ///
@@ -1362,7 +1366,7 @@ final class MacAppState: ObservableObject {
 
     // MARK: - Backward-compat shims (used by "Get Info" context menus)
 
-    func showInspector(for track: Track) { showNowPlaying(for: track) }
+    func showInspector(for track: Track) { infoTrack = track }
     func hideInspector()                 { closePanel() }
     func toggleInspector(for track: Track) { toggleNowPlaying(for: track) }
 

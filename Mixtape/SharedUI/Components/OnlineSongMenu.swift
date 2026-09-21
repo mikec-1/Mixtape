@@ -63,7 +63,7 @@ struct OnlineSongMenu: View {
         // the thing that keeps it. Offering both here would have been the same
         // action twice under two names.
         if saved == nil {
-            Button("Add to Library", systemImage: "plus.circle") {
+            Button("Add to Liked Songs", systemImage: "heart") {
                 Task { await coordinator.addToLibrary(song) }
                 // The + button says this itself; from a menu nothing else would.
                 deps.showSavedToast(.library)

@@ -391,6 +391,15 @@ struct MacRootView: View {
             LyricsEditorSheet(track: track)
                 .environmentObject(deps)
         }
+        // ── Get Info ──────────────────────────────────────────────────────
+        .sheet(item: $appState.infoTrack) { track in
+            GetInfoSheet(track: track,
+                         isOnline: deps.onlineCoordinator.hasActiveOnlineSession,
+                         followsPlayback: false)
+                .environmentObject(engine)
+                .environmentObject(deps)
+                .environmentObject(deps.queueService)
+        }
         // ── Library ▸ Merge Duplicate Songs ───────────────────────────────
         .sheet(isPresented: $showMergeDuplicates) {
             MergeDuplicatesSheet().environmentObject(deps)
@@ -932,7 +941,8 @@ struct MacRootView: View {
 //
 // Shortcuts:
 //   Space         → play / pause  (blocked when a text field is focused; under
-//                   Full Keyboard Access it presses the focused control first)
+//                   Full Keyboard Access it presses the focused control, but
+//                   only when Tab put focus there, not a click)
 //   Cmd+Right (⌘→) → next track
 //   Cmd+Left  (⌘←) → previous / restart
 
@@ -940,10 +950,17 @@ private final class KeyboardShortcutHandler: ObservableObject {
 
     private var monitor: Any?
 
+    /// Whether focus last moved by Tab rather than a click. A clicked control
+    /// keeps focus under Full Keyboard Access, so without this Space re-pressed
+    /// the row you'd just clicked — replaying the song instead of pausing it.
+    private var focusFromKeyboard = false
+
     func start(engine: PlaybackEngine) {
         guard monitor == nil else { return }
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak engine] event in
-            guard let engine else { return event }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown]) { [weak self, weak engine] event in
+            guard let self, let engine else { return event }
+            if event.type == .leftMouseDown { self.focusFromKeyboard = false; return event }
+            if event.keyCode == 48 { self.focusFromKeyboard = true }   // Tab / ⇧Tab
 
             // Never steal events from text input (search field, any NSTextField/NSTextView)
             let fr = NSApp.keyWindow?.firstResponder
@@ -957,7 +974,8 @@ private final class KeyboardShortcutHandler: ObservableObject {
                 // so let it through; `SpaceFallback` plays/pauses only if
                 // nothing took it. A focused table would spend it on
                 // type-select, so it keeps plain play/pause.
-                if NSApp.isFullKeyboardAccessEnabled, !(fr is NSTableView), let window = event.window {
+                if focusFromKeyboard, NSApp.isFullKeyboardAccessEnabled,
+                   !(fr is NSTableView), let window = event.window {
                     SpaceFallback.install(in: window, engine: engine)
                     return event
                 }

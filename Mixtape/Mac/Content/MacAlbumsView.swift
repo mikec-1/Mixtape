@@ -174,6 +174,8 @@ struct MacAlbumDetailView: View {
     @EnvironmentObject private var deps:     AppDependencies
 
     @State private var selectedIDs: Set<Track.ID> = []
+    /// Album order until a column header is clicked.
+    @State private var sort = TrackSort()
 
     private var tracks: [Track] {
         library.tracks(in: album)
@@ -240,6 +242,16 @@ struct MacAlbumDetailView: View {
                           onShuffle: { engine.queue.setShuffle(!engine.queue.shuffleEnabled) }) {
                 AlbumSaveButton(title: album.title, artistName: album.artistName)
                 AlbumDownloadButton(ids: album.trackIDs, downloads: deps.downloadManager, library: library)
+                ShareHeroButton(.album(album))
+                // Same overflow as the iPhone album page and the playlist page.
+                Menu { AlbumActionsMenu(album: album) } label: {
+                    HeroCircleLabel(systemImage: "ellipsis")
+                }
+                .menuStyle(.button)
+                .buttonStyle(.plain).mixHandCursor()
+                .menuIndicator(.hidden)
+                .frame(width: 40, height: 40)
+                .help("More actions for \u{201C}\(album.title)\u{201D}")
             }
         }
         .padding(.horizontal, 24)
@@ -253,7 +265,7 @@ struct MacAlbumDetailView: View {
 
     private var trackList: some View {
         NativeTrackTable(
-            tracks:             tracks,
+            tracks:             tracks.sorted(by: sort),
             currentTrackID:     engine.queue.currentTrack?.id,
             isPlaying:          engine.state.isPlaying,
             selectedIDs:        $selectedIDs,
@@ -286,6 +298,11 @@ struct MacAlbumDetailView: View {
             onLinkCopied:       { deps.showToast(ShareSheet.copiedMessage) },
             canDownload:         { deps.downloadManager.downloadUnavailableReason(for: $0) == nil },
             scale:              appState.uiScale,
+            // Rows arrive in album order; headers re-sort through `sort`.
+            sort:               $sort,
+            // Same row style as a playlist page.
+            metrics:            .roomy,
+            showsIndex:         true,
             resolvingIDs:       engine.routingTrackIDs
         )
         .background(Color.mixBackground)

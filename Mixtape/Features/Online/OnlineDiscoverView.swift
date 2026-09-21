@@ -1957,6 +1957,14 @@ private struct DiscoverArtistPage: View {
                 .buttonStyle(.plain).mixHandCursor()
             }
             ShareHeroButton(.artist(artist))
+            // The card's right-click menu, for anyone who's already on the page.
+            Menu { OnlineCollectionMenu(.artist(artist)) } label: {
+                HeroCircleLabel(systemImage: "ellipsis")
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain).mixHandCursor()
+            .menuIndicator(.hidden)
+            .frame(width: 40, height: 40)
         }
     }
 
@@ -2156,6 +2164,14 @@ private struct DiscoverAlbumPage: View {
                             }
                             .disabled(tracks.isEmpty)
                             ShareHeroButton(.album(album))
+                            // The card's right-click menu, for anyone who's already on the page.
+                            Menu { OnlineCollectionMenu(.album(album)) } label: {
+                                HeroCircleLabel(systemImage: "ellipsis")
+                            }
+                            .menuStyle(.button)
+                            .buttonStyle(.plain).mixHandCursor()
+                            .menuIndicator(.hidden)
+                            .frame(width: 40, height: 40)
                         }
                         .padding(.top, 4)
                     }

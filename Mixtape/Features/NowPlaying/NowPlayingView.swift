@@ -333,7 +333,7 @@ public struct NowPlayingView: View {
                         deps.showSavedToast(.library)
                     }
                 } label: {
-                    Label("Add to Library", systemImage: "plus.circle")
+                    Label("Add to Liked Songs", systemImage: "heart")
                 }
             }
 
@@ -1252,7 +1252,7 @@ private struct UpNextSheet: View {
                         await deps.onlineCoordinator.addToLibrary(unsaved: item.track)
                         deps.showSavedToast(.library)
                     }
-                } label: { Label("Add to Library", systemImage: "plus.circle") }
+                } label: { Label("Add to Liked Songs", systemImage: "heart") }
             }
             Button(role: .destructive) { removeRow(item) } label: {
                 Label("Remove from queue", systemImage: "minus.circle")

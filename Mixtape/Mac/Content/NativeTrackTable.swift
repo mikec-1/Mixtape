@@ -780,21 +780,8 @@ extension NativeTrackTable {
             let favItem  = menuItem(favTitle, action: #selector(menuToggleFavourite(_:)), tracks: targets)
             favItem.image = favIcon
             menu.addItem(favItem)
-
-            // "Add to Library", for a page of songs that aren't in it. Directly
-            // under the favourite because the two are the same kind of wish —
-            // keep this — and above the playlist submenu, which is where the
-            // wish gets more specific.
-            if parent.onAddToLibrary != nil {
-                let unsaved = targets.filter { !parent.isInLibrary($0.id) }
-                if !unsaved.isEmpty {
-                    let title = unsaved.count > 1 ? "Add \(unsaved.count) Songs to Library"
-                                                  : "Add to Library"
-                    let item = menuItem(title, action: #selector(menuAddToLibrary(_:)), tracks: unsaved)
-                    item.image = NSImage(systemSymbolName: "plus.circle", accessibilityDescription: nil)
-                    menu.addItem(item)
-                }
-            }
+            // No separate "Add to Library": saving a song *is* liking it, so on a
+            // page of unsaved songs the item above already does it.
 
             // A collaborator's song with no audio behind it: nothing here can
             // download it or copy it, but Discover can often find the same
@@ -1091,11 +1078,6 @@ extension NativeTrackTable {
             for track in targets where parent.isFavourited(track.id) != favouriting {
                 parent.onToggleFavourite(track)
             }
-        }
-
-        @objc func menuAddToLibrary(_ item: NSMenuItem) {
-            guard let tracks = item.representedObject as? [Track] else { return }
-            parent.onAddToLibrary?(tracks)
         }
 
         @objc func menuAddToPlaylist(_ item: NSMenuItem) {
@@ -2106,7 +2088,7 @@ fileprivate final class TrackRowActionCell: NSTableCellView {
             case .favourited:    return "Liked"
             case .notFavourited: return "Like"
             case .saved:         return "In your library"
-            case .notSaved:      return "Add to Library"
+            case .notSaved:      return "Add to Liked Songs"
             }
         }
     }

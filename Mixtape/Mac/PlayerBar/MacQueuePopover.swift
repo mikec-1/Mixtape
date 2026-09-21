@@ -19,6 +19,10 @@ struct MacQueuePanelView: View {
     /// it — which is what made pressing Repeat look like it took seconds.
     @EnvironmentObject private var queueService: QueueService
 
+    /// The row a drag is hovering over — a drop lands just above it, which is
+    /// where the line is drawn.
+    @State private var dropTarget: QueueService.Entry.ID?
+
     /// Everything after the current song — and the whole queue when nothing is
     /// playing yet. Rows, not tracks: each carries its own identity and its
     /// position, so the same song queued three times is three rows that can be
@@ -160,6 +164,18 @@ struct MacQueuePanelView: View {
                 guard let source = items.first.flatMap(Int.init) else { return false }
                 move(from: source, to: row.index)
                 return true
+            } isTargeted: { over in
+                if over { dropTarget = row.id } else if dropTarget == row.id { dropTarget = nil }
+            }
+            .overlay(alignment: .top) {
+                if dropTarget == row.id {
+                    Capsule()
+                        .fill(Color.mixAccent)
+                        .frame(height: 2)
+                        .padding(.horizontal, 10)
+                        .offset(y: -2)
+                        .allowsHitTesting(false)
+                }
             }
     }
 

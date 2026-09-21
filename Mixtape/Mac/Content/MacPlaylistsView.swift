@@ -136,6 +136,7 @@ struct MacPlaylistsView: View {
                     PlaylistRowItem(playlist: Playlist(id: album.id, name: album.title, trackIDs: album.trackIDs,
                                                               sync: SyncMetadata(serverID: nil, status: .localOnly, localModifiedAt: Date(), serverModifiedAt: nil, lastSyncedAt: nil, deviceID: "")),
                                     kind: "Album • \(album.artistName)",
+                                    album: album,
                                     onOpen: { appState.selectedAlbum = album })
                         .environmentObject(deps.downloadManager)
                         .contextMenu { AlbumActionsMenu(album: album) }
@@ -196,6 +197,9 @@ struct PlaylistRowItem: View {
     let playlist: Playlist
     /// The first word of the grey line — "Smart Playlist" for the Smart tab.
     var kind = "Playlist"
+    /// Set for an album row, which is dressed as a playlist but has no
+    /// playlist behind it for `PlaylistArtwork` to find a cover on.
+    var album: Album? = nil
     /// Whether this row is part of the current multi-selection — the picked
     /// look, distinct from hover, so a selection stays visible once the pointer
     /// moves off it.
@@ -308,7 +312,15 @@ struct PlaylistRowItem: View {
             // The same cover every other playlist surface draws, composed off
             // the render path — and the one a smart playlist can wear too,
             // since it isn't a library row `coverData` could look up.
-            PlaylistArtwork(playlist: playlist, size: 48, cornerRadius: 6)
+            if let album {
+                // The first song's cover, as the album page does: an album
+                // saved from Discover has no picture on the album row itself.
+                MacArtworkView(data: album.artworkData,
+                               artworkRef: album.trackIDs.first.map { .track($0) } ?? .album(album.id),
+                               size: 48, cornerRadius: 6)
+            } else {
+                PlaylistArtwork(playlist: playlist, size: 48, cornerRadius: 6)
+            }
 
             // Hover play — fires playback without opening the playlist.
             if isHovered, !playlist.trackIDs.isEmpty {

@@ -620,6 +620,10 @@ struct IOSDiscoverArtistPage: View {
                 .buttonStyle(.plain).mixHandCursor()
             }
             ShareHeroButton(.artist(artist))
+            // The card's long-press menu, for anyone who's already on the page.
+            Menu { OnlineCollectionMenu(.artist(artist)) } label: {
+                HeroCircleLabel(systemImage: "ellipsis")
+            }
         }
     }
 
@@ -784,6 +788,10 @@ struct IOSDiscoverAlbumPage: View {
                             }
                             .disabled(tracks.isEmpty)
                             ShareHeroButton(.album(album))
+                            // The card's long-press menu, for anyone who's already on the page.
+                            Menu { OnlineCollectionMenu(.album(album)) } label: {
+                                HeroCircleLabel(systemImage: "ellipsis")
+                            }
                         }
                         .padding(.top, 2)
                     }

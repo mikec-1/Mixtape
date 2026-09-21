@@ -152,7 +152,7 @@ struct LibrarySongMenu: View {
                     // In the library only because its album is saved. Same rule
                     // and same word as `OnlineSongMenu`: liking it is what
                     // promotes it out of the album, so this is one item, not two.
-                    Button("Add to Library", systemImage: MixtapeIcons.add) {
+                    Button("Add to Liked Songs", systemImage: "heart") {
                         deps.toggleFavourite(trackID: row.id)
                     }
                 } else {
@@ -166,7 +166,7 @@ struct LibrarySongMenu: View {
                 // A queue or history row: a display mirror of a Discover song
                 // that was played but never kept. A favourite is a flag on a
                 // library row, so there is nothing yet to flag.
-                Button("Add to Library", systemImage: MixtapeIcons.add) {
+                Button("Add to Liked Songs", systemImage: "heart") {
                     guard let onAddToLibrary else {
                         Task {
                             await coordinator.addToLibrary(unsaved: track)

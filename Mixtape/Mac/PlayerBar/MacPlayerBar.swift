@@ -231,7 +231,7 @@ struct MacPlayerBar: View {
                 Task { await coordinator.addToQueue(online) }
             }
             Divider()
-            Button("Add to Library", systemImage: "plus") {
+            Button("Add to Liked Songs", systemImage: "heart") {
                 Task { await coordinator.addToLibrary(online) }
             }
         } else {
