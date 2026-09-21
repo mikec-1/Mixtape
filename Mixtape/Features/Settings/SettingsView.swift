@@ -33,7 +33,10 @@ public struct SettingsView: View {
     /// The row search wants pointed at, cleared a few seconds after it lands.
     @State private var highlight: String?
     #if os(macOS)
-    @State private var selection: SettingsCategory = .general
+    private var selection: SettingsCategory {
+        get { route.category }
+        nonmutating set { route.category = newValue }
+    }
     #else
     @State private var path: [SettingsCategory] = []
     #endif

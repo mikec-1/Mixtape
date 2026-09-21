@@ -28,6 +28,10 @@ final class SettingsRoute: ObservableObject {
 
     static let shared = SettingsRoute()
 
+    /// The pane macOS shows. Here rather than in SettingsView's `@State` so the
+    /// window's back/forward history can record and restore it (MacAppState).
+    @Published var category: SettingsCategory = .general
+
     /// Bumped on every request, so asking for the same page twice still moves.
     @Published private(set) var request: Request?
 

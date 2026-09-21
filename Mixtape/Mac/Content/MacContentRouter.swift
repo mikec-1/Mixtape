@@ -30,11 +30,6 @@ struct MacContentRouter: View {
         // Clear any album/playlist/profile/account drill-down whenever the user
         // switches sections.
         .onChange(of: appState.selection) { _, newValue in
-            // Selecting one of the four old sections means "open the Library page
-            // on that tab". Done here rather than at each call site so nothing
-            // that already knew how to navigate to Songs had to learn a new way.
-            if let tab = newValue?.libraryTab { appState.libraryTab = tab }
-
             if newValue != nil {
                 appState.selectedAlbum = nil
                 appState.selectedPlaylist = nil

@@ -10,8 +10,8 @@
 // to) below the fold behind a button.
 //
 // Nothing became unreachable. `MacSidebarItem.songs` and friends still exist and
-// still work as destinations: MacContentRouter renders this page and hands the
-// matching tab straight to `appState.libraryTab`, so Home's quick links, the
+// still work as destinations: MacContentRouter renders this page and selecting
+// one sets the matching `appState.libraryTab`, so Home's quick links, the
 // "Go to Album" menus and the command palette all land exactly where they did.
 //
 // The tab lives on `MacAppState` rather than in `@State` here for that reason —

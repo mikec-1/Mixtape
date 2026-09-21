@@ -170,6 +170,10 @@ final class MacAppState: ObservableObject {
         didSet {
             guard libraryTab != oldValue else { return }
             UserDefaults.standard.set(libraryTab.rawValue, forKey: Self.libraryTabKey)
+            // Leaving the tab leaves the artist, as it did when this was the
+            // Artists view's own `@State`.
+            if libraryTab != .artists { libraryArtistID = nil }
+            scheduleHistoryCapture()
         }
     }
 
@@ -226,6 +230,9 @@ final class MacAppState: ObservableObject {
 
         loadSidebarLayout()
         observeDiscoverPath()
+        settingsObserver = SettingsRoute.shared.$category.dropFirst().sink { [weak self] _ in
+            self?.scheduleHistoryCapture()
+        }
         // Follows the account: a change made on the phone lands here the
         // moment the session refreshes. The `didSet` above pushes the other
         // way, and both sides stop on the equality guard.
@@ -270,7 +277,11 @@ final class MacAppState: ObservableObject {
             if oldValue != selection, lyricsPresented && lyricsFullscreen {
                 lyricsPresented = false
             }
-            if oldValue != selection { leaveSearchOnSectionChange() }
+            if oldValue != selection { leaveSearchOnSectionChange(); libraryArtistID = nil }
+            // The four old sections open the Library page on that tab. Set here,
+            // not in the router's `onChange`, so the history reads the tab in
+            // the same turn as the section.
+            if let tab = selection?.libraryTab { libraryTab = tab }
             scheduleHistoryCapture()
         }
     }
@@ -469,6 +480,8 @@ final class MacAppState: ObservableObject {
         selectedAlbum    = nil
         selectedPlaylist = nil
         selectedSmartPlaylist = nil
+        libraryArtistID  = nil
+        if item == .settings { SettingsRoute.shared.category = .general }
         if item.isLandingPage { DiscoverSessionStore.shared.path.removeAll() }
         selection = item
     }
@@ -486,10 +499,12 @@ final class MacAppState: ObservableObject {
         }
     }
 
-    /// Artist the user asked to view (e.g. by clicking the artist name in the
-    /// inspector). MacArtistsView consumes this on appear / change, selects the
-    /// matching row, then clears it back to nil.
-    @Published var pendingArtistID: Artist.ID? = nil
+    /// The artist open on the Library's Artists tab; nil shows the grid. Here
+    /// rather than in MacArtistsView so the history can record and restore it.
+    @Published var libraryArtistID: Artist.ID? = nil {
+        didSet { scheduleHistoryCapture() }
+    }
+    private var settingsObserver: AnyCancellable?
 
     /// Playlist the user drilled into from the Playlists view.
     /// Non-nil → MacContentRouter shows PlaylistDetailView.
@@ -549,6 +564,9 @@ final class MacAppState: ObservableObject {
         /// over, which for most people is Home.
         case search(String)
         case smartPlaylist(SmartPlaylist)
+        /// The Library page on a tab, and on Artists, the artist open on it.
+        case library(LibraryTab, artist: Artist.ID?)
+        case settings(SettingsCategory)
 
         /// Identity, not equality — deliberately not `Equatable`.
         ///
@@ -565,6 +583,8 @@ final class MacAppState: ObservableObject {
             case let (.publicPlaylist(a), .publicPlaylist(b)): return a.id == b.id
             case (.account,               .account):           return true
             case let (.smartPlaylist(a),  .smartPlaylist(b)):  return a.id == b.id
+            case let (.library(a, x),     .library(b, y)):     return a == b && x == y
+            case let (.settings(a),       .settings(b)):       return a == b
             // Refining a query is the same page asking a different question,
             // not a new one — see `captureHistory`, which refreshes the entry
             // rather than pushing one.
@@ -709,7 +729,12 @@ final class MacAppState: ObservableObject {
         if let album = selectedAlbum          { return .album(album) }
         if let smart = selectedSmartPlaylist  { return .smartPlaylist(smart) }
         if let playlist = selectedPlaylist    { return .playlist(playlist) }
-        return .section(selection ?? .home)
+        let section = selection ?? .home
+        if section == .library || section.libraryTab != nil {
+            return .library(libraryTab, artist: libraryTab == .artists ? libraryArtistID : nil)
+        }
+        if section == .settings               { return .settings(SettingsRoute.shared.category) }
+        return .section(section)
     }
 
     fileprivate func scheduleHistoryCapture() {
@@ -842,6 +867,13 @@ final class MacAppState: ObservableObject {
         case .publicPlaylist(let t):   publicPlaylistTarget = t
         case .account:                 showingAccount       = true
         case .smartPlaylist(let p):    selectedSmartPlaylist = p
+        case .library(let tab, let artist):
+            selection       = .library
+            libraryTab      = tab
+            libraryArtistID = artist
+        case .settings(let category):
+            selection = .settings
+            SettingsRoute.shared.category = category
         case .search(let query):
             searchStorage    = query
             searchCommitted  = true
@@ -1192,8 +1224,8 @@ final class MacAppState: ObservableObject {
         leaveFullscreenLyricsForNavigation()
         clearSearch()
         selectedAlbum   = nil
-        pendingArtistID = artist.id
         selection       = .artists
+        libraryArtistID = artist.id
     }
 
     /// A pending deep-link into the Discover section, consumed by

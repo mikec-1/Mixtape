@@ -30,7 +30,11 @@ struct MacArtistsView: View {
 
     let searchText: String
 
-    @State private var selectedArtistID: Artist.ID? = nil
+    /// On MacAppState so Back and Forward can bring an artist back.
+    private var selectedArtistID: Artist.ID? {
+        get { appState.libraryArtistID }
+        nonmutating set { appState.libraryArtistID = newValue }
+    }
 
     private var filteredArtists: [Artist] {
         guard !searchText.isEmpty else { return library.artists }
@@ -50,34 +54,13 @@ struct MacArtistsView: View {
             if library.artists.isEmpty {
                 MacEmptyLibraryView(context: .artists)
             } else if let artist = selectedArtist {
-                MacArtistDetailPanel(artist: artist) {
-                    selectedArtistID = nil
-                    // Belt and braces: a deep-link that hasn't been consumed
-                    // yet would otherwise re-select the artist we're leaving.
-                    appState.pendingArtistID = nil
-                }
+                MacArtistDetailPanel(artist: artist) { selectedArtistID = nil }
             } else {
                 artistGrid
             }
         }
         .navigationTitle(selectedArtist?.name ?? "Artists")
         .navigationSubtitle(navSubtitle)
-        .onAppear {
-            // Honour a pending drill-in request (e.g. from the inspector).
-            // Nothing is auto-selected otherwise: the grid *is* the landing
-            // page, so every artist is visible instead of one being picked at
-            // random and the rest hidden behind a scroll.
-            if let pending = appState.pendingArtistID {
-                selectedArtistID = pending
-                appState.pendingArtistID = nil
-            }
-        }
-        .onChange(of: appState.pendingArtistID) { _, pending in
-            if let pending {
-                selectedArtistID = pending
-                appState.pendingArtistID = nil
-            }
-        }
         // Typing in the toolbar search means the user wants to find someone
         // else, so drop back out to the grid.
         .onChange(of: searchText) { _, text in
