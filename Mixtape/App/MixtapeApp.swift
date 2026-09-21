@@ -60,7 +60,11 @@ struct MixtapeApp: App {
     var body: some Scene {
         mainWindow
         #if os(macOS)
-        MenuBarExtra("Mixtape", systemImage: "music.note", isInserted: $showsMenuBarPlayer) {
+        // One-way on purpose: with a real binding, macOS 26 reports the item's
+        // visibility back, SwiftUI writes it into the setting, the write
+        // rebuilds the scene, which sets the visibility again — a main-thread
+        // loop from the first frame. Settings ▸ General still drives it.
+        MenuBarExtra("Mixtape", systemImage: "music.note", isInserted: .constant(showsMenuBarPlayer)) {
             MacMenuBarPlayer(engine: dependencies.playbackEngine, queue: dependencies.playbackEngine.queue)
         }
         .menuBarExtraStyle(.window)
