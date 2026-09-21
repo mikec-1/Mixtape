@@ -1084,6 +1084,9 @@ private struct UpNextSheet: View {
     /// republish through it — shuffle and repeat have to be observed here or the
     /// buttons only catch up on the next unrelated engine publish.
     @EnvironmentObject private var queueService: QueueService
+    #if os(iOS)
+    @EnvironmentObject private var iosAppState: IOSAppState
+    #endif
 
     @State private var isEditing = false
 
@@ -1147,6 +1150,15 @@ private struct UpNextSheet: View {
             list.overlay(alignment: .bottom) { SkipNoticeBox() }
             tiles
         }
+        #if os(iOS)
+        // Get Info from a row's menu. The app hosts it for every other menu,
+        // but can't present over the player this sheet sits on.
+        .sheet(item: $iosAppState.infoTrack) { track in
+            GetInfoSheet(track: track,
+                         isOnline: deps.onlineCoordinator.hasActiveOnlineSession,
+                         followsPlayback: false)
+        }
+        #endif
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
         .presentationBackground(Color.mixSurface)
@@ -1248,25 +1260,18 @@ private struct UpNextSheet: View {
         .overlay(alignment: .bottom) {
             if isRepeatBoundary(item) { repeatDivider }
         }
+        // The shared song menu, as on the Mac queue: liking is the point of it
+        // here — the one place you're guaranteed to be hearing the song.
         .contextMenu {
-            Button { play(item) } label: { Label("Play", systemImage: MixtapeIcons.play) }
-            // A queue row is often a Discover song the library doesn't hold —
-            // the offer any menu makes for one of those. Mirrors the Mac queue.
-            if deps.libraryService.track(id: item.track.id) == nil {
-                Button {
-                    Task {
-                        await deps.onlineCoordinator.addToLibrary(unsaved: item.track)
-                        deps.showSavedToast(.library)
-                    }
-                } label: { Label("Add to Liked Songs", systemImage: "heart") }
-            }
+            LibrarySongMenu(targets: [item.track],
+                            onPlay: { play(item) },
+                            removeFrom: "Queue",
+                            onRemove: { _ in removeRow(item) })
             if deps.onlineCoordinator.canReResolve(item.track) {
+                Divider()
                 Button { Task { await deps.reResolve(item.track, at: item.index) } } label: {
                     Label("Wrong Version? Re-resolve", systemImage: "arrow.triangle.2.circlepath")
                 }
-            }
-            Button(role: .destructive) { removeRow(item) } label: {
-                Label("Remove from queue", systemImage: "minus.circle")
             }
         }
     }

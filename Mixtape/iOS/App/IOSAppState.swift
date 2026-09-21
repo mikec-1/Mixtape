@@ -17,7 +17,9 @@ final class IOSAppState: ObservableObject {
     /// MainTabView) so navigation requests originating outside a tab — e.g.
     /// tapping an artist in the mini player or now-playing sheet — can switch
     /// tabs programmatically.
-    @Published var selectedTab: AppTab = .home
+    /// Every jump to a tab closes the full player first — otherwise a menu in
+    /// the player's queue opens its page underneath, where nobody can see it.
+    @Published var selectedTab: AppTab = .home { didSet { showNowPlaying = false } }
 
     /// Bumped to ask the Home landing to raise its search field.
     ///

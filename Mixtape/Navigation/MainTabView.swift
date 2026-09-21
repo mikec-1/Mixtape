@@ -89,7 +89,9 @@ public struct MainTabView: View {
         // Get Info, for whichever row asked. Hosted here for the same reason the
         // player is: the menu it was picked from no longer exists by the time
         // the sheet would appear.
-        .sheet(item: $iosAppState.infoTrack) { track in
+        // Not while the player is up: the queue sheet over it hosts its own.
+        .sheet(item: Binding(get: { iosAppState.showNowPlaying ? nil : iosAppState.infoTrack },
+                             set: { iosAppState.infoTrack = $0 })) { track in
             GetInfoSheet(track: track,
                          isOnline: deps.onlineCoordinator.hasActiveOnlineSession,
                          followsPlayback: false)
