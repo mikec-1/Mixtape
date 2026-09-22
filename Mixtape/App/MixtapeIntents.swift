@@ -101,6 +101,15 @@ nonisolated struct MixtapeShortcuts: AppShortcutsProvider {
             "Play \(\.$playlist) on \(.applicationName)",
             "Play my \(\.$playlist) in \(.applicationName)",
             "Play \(.applicationName)",
+            // Siri's music domain claims anything that opens with "Play" before
+            // it looks at app shortcuts, and on macOS an app can't join that
+            // domain (INPlayMediaIntent is iOS-only). These don't sound like a
+            // music request, so they reach us.
+            "\(.applicationName) \(\.$playlist)",
+            "Open \(\.$playlist) in \(.applicationName)",
+            "Put on \(\.$playlist) in \(.applicationName)",
+            "Start \(\.$playlist) in \(.applicationName)",
+            "Start my \(\.$playlist) playlist in \(.applicationName)",
         ], shortTitle: "Play Playlist", systemImageName: "music.note.list")
         AppShortcut(intent: LikeCurrentSongIntent(), phrases: [
             "Like this song in \(.applicationName)",
