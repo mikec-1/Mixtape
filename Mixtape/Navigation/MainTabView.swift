@@ -62,6 +62,12 @@ public struct MainTabView: View {
         tabContent
         #if os(iOS)
         .environmentObject(iosAppState)
+        .onReceive(NotificationCenter.default.publisher(for: .mixSpotlightArtist)) { _ in
+            if let name = SpotlightIndex.takePendingArtist() { iosAppState.openOnlineArtist(name: name) }
+        }
+        .onAppear {
+            if let name = SpotlightIndex.takePendingArtist() { iosAppState.openOnlineArtist(name: name) }
+        }
         .onChange(of: settingsRoute.request) { _, request in
             if request != nil { showSettings = true }
         }

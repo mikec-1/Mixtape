@@ -586,8 +586,14 @@ LaunchTimeline.mark("deps/engine")
             .debounce(for: .seconds(2), scheduler: DispatchQueue.main)
             .sink { _ in MixtapeShortcuts.updateAppShortcutParameters() }
             .store(in: &cancellables)
-        libraryService.$tracks.debounce(for: .seconds(5), scheduler: DispatchQueue.main)
-            .sink { SpotlightIndex.update($0) }
+        // Not before the first load: the empty launch value would read as
+        // "every song was deleted" and cost a full rebuild of the index.
+        libraryService.$tracks.combineLatest(libraryService.$artists).dropFirst()
+            .debounce(for: .seconds(5), scheduler: DispatchQueue.main)
+            .sink { [weak self] tracks, artists in
+                guard self?.libraryService.hasLoaded == true else { return }
+                SpotlightIndex.update(tracks: tracks, artists: artists)
+            }
             .store(in: &cancellables)
         wireAuthObserver()
         // Off the main actor, and the session restore that needs the library

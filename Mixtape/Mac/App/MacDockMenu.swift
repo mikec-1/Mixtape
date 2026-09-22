@@ -44,6 +44,13 @@ final class MacDockMenu: NSObject, NSApplicationDelegate {
         return menu
     }
 
+    /// A Spotlight hit. SwiftUI's `onContinueUserActivity` doesn't reliably
+    /// see these on macOS; the delegate does.
+    func application(_ application: NSApplication, continue userActivity: NSUserActivity,
+                     restorationHandler: @escaping ([any NSUserActivityRestoring]) -> Void) -> Bool {
+        SpotlightIndex.open(userActivity)
+    }
+
     private func item(_ title: String, _ action: Selector) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
         item.target = self

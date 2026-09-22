@@ -130,6 +130,13 @@ public final class ArtworkProvider {
         return data
     }
 
+    /// A cover for a bulk job (the Spotlight index), read without filling the
+    /// cache the visible rows draw from.
+    public func uncachedData(for ref: ArtworkRef) -> Data? {
+        defer { recycleIfNeeded() }
+        return fetch(ref)
+    }
+
     /// Live track ids that do have a cover. The set a playlist borrows from,
     /// answered without reading a single blob — the store can evaluate the
     /// nil-check itself, and only `id` comes back.

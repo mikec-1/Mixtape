@@ -410,6 +410,12 @@ struct MacRootView: View {
         // ⌃⌘S. It used to be NavigationSplitView's own menu item; the column is
         // hand-rolled now, so the View menu gets one of ours (see MixtapeApp)
         // and it arrives here.
+        .onReceive(NotificationCenter.default.publisher(for: .mixSpotlightArtist)) { _ in
+            if let name = SpotlightIndex.takePendingArtist() { appState.openDiscoverArtist(named: name) }
+        }
+        .onAppear {
+            if let name = SpotlightIndex.takePendingArtist() { appState.openDiscoverArtist(named: name) }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .mixToggleSidebar)) { _ in
             appState.toggleSidebar()
         }
