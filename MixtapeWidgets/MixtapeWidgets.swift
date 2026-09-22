@@ -207,9 +207,20 @@ struct NowPlayingWidgetView: View {
             HStack(spacing: 14) {
                 Cover(data: song.artwork, size: 118)
                 VStack(alignment: .leading, spacing: 6) {
-                    Titles(song: song)
-                    TimedBar(song: song)
+                    // A one-line title leaves room for the album under it; a
+                    // two-line one doesn't. Either way the text sits at the top
+                    // and the bar rides on the buttons, not on the text.
+                    ViewThatFits(in: .vertical) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Titles(song: song)
+                            if !song.album.isEmpty, song.album != song.title {
+                                Text(song.album).font(.caption).lineLimit(1).opacity(0.6).foregroundStyle(.white)
+                            }
+                        }
+                        Titles(song: song)
+                    }
                     Spacer(minLength: 0)
+                    TimedBar(song: song)
                     HStack(spacing: 22) {
                         Button(intent: PreviousTrackIntent()) { Image(systemName: "backward.fill") }
                         PlayButton(isPlaying: song.isPlaying, size: 38)
@@ -230,48 +241,48 @@ struct NowPlayingWidgetView: View {
 struct NowPlayingLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: NowPlayingAttributes.self) { context in
-            // Read at draw time: the app saves the snapshot before it updates the
-            // activity, and a cover is far past the activity's 4 KB state limit.
-            let art = context.state.hasArtwork ? NowPlayingSnapshot.load()?.artwork : nil
+            let state = shown(context)
+            let art = cover(state)
             VStack(spacing: 10) {
                 HStack(spacing: 12) {
                     Cover(data: art, size: 56)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(context.state.title).font(.headline).lineLimit(2)
-                        Text(context.state.artist).font(.subheadline).lineLimit(1).opacity(0.75)
+                        Text(state.title).font(.headline).lineLimit(2)
+                        Text(state.artist).font(.subheadline).lineLimit(1).opacity(0.75)
                     }
                     Spacer(minLength: 0)
                     HStack(spacing: 16) {
                         Button(intent: PreviousTrackIntent()) { Image(systemName: "backward.fill") }
-                        PlayButton(isPlaying: context.state.isPlaying, size: 38)
+                        PlayButton(isPlaying: state.isPlaying, size: 38)
                         Button(intent: NextTrackIntent()) { Image(systemName: "forward.fill") }
                     }
                     .buttonStyle(.plain)
                 }
-                StateBar(state: context.state)
+                StateBar(state: state)
             }
             .padding(14)
-            .activityBackgroundTint(tint(context.state).opacity(0.85))
+            .activityBackgroundTint(tint(state).opacity(0.85))
             .activitySystemActionForegroundColor(.white)
             .foregroundStyle(.white)
         } dynamicIsland: { context in
-            let art = context.state.hasArtwork ? NowPlayingSnapshot.load()?.artwork : nil
+            let state = shown(context)
+            let art = cover(state)
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) { Cover(data: art, size: 52) }
                 DynamicIslandExpandedRegion(.trailing) {
-                    PlayButton(isPlaying: context.state.isPlaying, size: 40)
+                    PlayButton(isPlaying: state.isPlaying, size: 40)
                 }
                 DynamicIslandExpandedRegion(.center) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(context.state.title).font(.headline).lineLimit(1)
-                        Text(context.state.artist).font(.subheadline).lineLimit(1).opacity(0.75)
+                        Text(state.title).font(.headline).lineLimit(1)
+                        Text(state.artist).font(.subheadline).lineLimit(1).opacity(0.75)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     HStack(spacing: 14) {
                         Button(intent: PreviousTrackIntent()) { Image(systemName: "backward.fill") }
-                        StateBar(state: context.state)
+                        StateBar(state: state)
                         Button(intent: NextTrackIntent()) { Image(systemName: "forward.fill") }
                     }
                     .buttonStyle(.plain)
@@ -288,6 +299,22 @@ struct NowPlayingLiveActivity: Widget {
                 EmptyView()
             }
         }
+    }
+
+    /// Past its stale date the app has gone (see `NowPlayingSurfaces`), so
+    /// draw it stopped instead of still counting.
+    private func shown(_ context: ActivityViewContext<NowPlayingAttributes>) -> NowPlayingAttributes.ContentState {
+        var state = context.state
+        if context.isStale { state.isPlaying = false; state.elapsed = state.duration }
+        return state
+    }
+
+    /// Read at draw time: the app saves the snapshot before it updates the
+    /// activity, and a cover is far past the activity's 4 KB state limit. Only
+    /// if it's still this song — a stranded activity must not wear the next one's.
+    private func cover(_ state: NowPlayingAttributes.ContentState) -> Data? {
+        guard state.hasArtwork, let saved = NowPlayingSnapshot.load(), saved.title == state.title else { return nil }
+        return saved.artwork
     }
 
     private func tint(_ state: NowPlayingAttributes.ContentState) -> Color {

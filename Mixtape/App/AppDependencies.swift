@@ -251,7 +251,7 @@ public final class AppDependencies: ObservableObject {
 
     private var cancellables = Set<AnyCancellable>()
     #if os(iOS)
-    private var nowPlayingSurfaces: NowPlayingSurfaces?
+    private(set) var nowPlayingSurfaces: NowPlayingSurfaces?
     #endif
 
     /// One-shot artwork shrink. Held so it can be cancelled and re-run.

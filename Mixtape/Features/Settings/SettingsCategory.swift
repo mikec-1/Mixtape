@@ -207,6 +207,8 @@ enum SettingsSearchIndex {
                   keywords: ["gapless", "transition", "blend", "mix", "fade"]),
             .init(id: "playback.crossfadeLength", title: "Crossfade Length", category: .playback,
                   keywords: ["seconds", "duration", "overlap"]),
+            .init(id: "playback.crossfadeOnSkip", title: "Crossfade on Skip", category: .playback,
+                  keywords: ["skip", "next", "mid song", "blend", "fade"]),
             .init(id: "playback.speed", title: "Playback Speed", category: .playback,
                   keywords: ["rate", "tempo", "faster", "slower", "pitch"]),
             .init(id: "playback.preferCensored", title: "Prefer Censored Versions", category: .playback,

@@ -331,6 +331,7 @@ struct PlaybackPane: View {
     // value after every change.
     @ObservedObject var engine:    PlaybackEngine
     @ObservedObject var equalizer: AudioEqualizer
+    @AppStorage("playback.crossfadeOnSkip") private var crossfadeOnSkip = false
 
     #if os(iOS)
     @State private var showEqualizer = false
@@ -379,6 +380,11 @@ struct PlaybackPane: View {
                                       ),
                                       range: 2...12,
                                       step: 1) { "\(Int($0))s" }
+                    SettingsToggleRow(id: "playback.crossfadeOnSkip",
+                                      title: "Crossfade on Skip",
+                                      subtitle: "Blend into the next song when you skip mid-song, too",
+                                      icon: "forward.end",
+                                      isOn: $crossfadeOnSkip)
                 }
             }
 

@@ -19,6 +19,7 @@ nonisolated struct TogglePlaybackIntent: AudioPlaybackIntent {
     @MainActor func perform() async throws -> some IntentResult {
         #if !WIDGET_EXTENSION
         MixtapeIntents.deps?.playbackEngine.togglePlayPause()
+        await MixtapeIntents.refreshWidgets()
         #endif
         return .result()
     }
@@ -30,6 +31,7 @@ nonisolated struct NextTrackIntent: AudioPlaybackIntent {
     @MainActor func perform() async throws -> some IntentResult {
         #if !WIDGET_EXTENSION
         await MixtapeIntents.deps?.playbackEngine.playNext()
+        await MixtapeIntents.refreshWidgets()
         #endif
         return .result()
     }
@@ -41,6 +43,7 @@ nonisolated struct PreviousTrackIntent: AudioPlaybackIntent {
     @MainActor func perform() async throws -> some IntentResult {
         #if !WIDGET_EXTENSION
         await MixtapeIntents.deps?.playbackEngine.playPrevious()
+        await MixtapeIntents.refreshWidgets()
         #endif
         return .result()
     }
@@ -60,6 +63,7 @@ nonisolated struct ToggleLikeIntent: LiveActivityIntent {
             await engine.onRemoteLike?(track)
             engine.syncRemoteCommandState()
         }
+        await MixtapeIntents.refreshWidgets()
         #endif
         return .result()
     }
@@ -71,6 +75,7 @@ nonisolated struct ToggleShuffleIntent: AudioPlaybackIntent {
     @MainActor func perform() async throws -> some IntentResult {
         #if !WIDGET_EXTENSION
         MixtapeIntents.deps?.playbackEngine.queue.toggleShuffle()
+        await MixtapeIntents.refreshWidgets()
         #endif
         return .result()
     }

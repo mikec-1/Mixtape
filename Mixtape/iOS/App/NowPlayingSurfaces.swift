@@ -48,6 +48,20 @@ final class NowPlayingSurfaces {
                 }
             }
             .store(in: &cancellables)
+        // Swiped away: an activity outlives its app and would keep counting a
+        // song that has stopped. A background-audio app gets a moment here.
+        NotificationCenter.default.publisher(for: UIApplication.willTerminateNotification)
+            .sink { _ in
+                let done = DispatchSemaphore(value: 0)
+                Task.detached {
+                    for activity in Activity<NowPlayingAttributes>.activities {
+                        await activity.end(nil, dismissalPolicy: .immediate)
+                    }
+                    done.signal()
+                }
+                _ = done.wait(timeout: .now() + 1)
+            }
+            .store(in: &cancellables)
         NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
@@ -58,6 +72,15 @@ final class NowPlayingSurfaces {
                 self.publish()
             }
             .store(in: &cancellables)
+    }
+
+    /// Publishes now, skipping the debounce, and waits for the write. For the
+    /// widget buttons: the system reloads the widget the moment the intent
+    /// returns, and one that reads the old snapshot keeps the old button —
+    /// a pause that looked like it hadn't happened.
+    func flush() async {
+        publish()
+        await writing?.value
     }
 
     private func publish() {
@@ -106,16 +129,19 @@ final class NowPlayingSurfaces {
         let state = NowPlayingAttributes.ContentState(
             title: s.title, artist: s.artist, isPlaying: s.isPlaying, elapsed: s.elapsed,
             duration: s.duration, startedAt: s.startedAt, tint: s.tint, hasArtwork: s.artwork != nil)
+        // Every song change and seek moves this, so passing it means the app
+        // died mid-song (a crash, jetsam): the activity then draws as stopped.
+        let staleDate = s.isPlaying && s.duration > 0 ? s.startedAt.addingTimeInterval(s.duration + 5) : nil
         let wanted = liveActivityOn && engine.state.isActive && ActivityAuthorizationInfo().areActivitiesEnabled
         if !wanted {
             if let activity { Task { await activity.end(nil, dismissalPolicy: .immediate) } }
             activity = nil
         } else if let activity {
-            Task { await activity.update(ActivityContent(state: state, staleDate: nil)) }
+            Task { await activity.update(ActivityContent(state: state, staleDate: staleDate)) }
         } else if s.isPlaying {
             // Only succeeds while the app is in front; the next foreground play retries.
             activity = try? Activity.request(attributes: NowPlayingAttributes(),
-                                             content: ActivityContent(state: state, staleDate: nil))
+                                             content: ActivityContent(state: state, staleDate: staleDate))
         }
     }
 

@@ -385,6 +385,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         static let lastPosition      = "playback.lastPosition"
         static let crossfadeMode     = "playback.crossfadeMode"
         static let crossfadeDuration = "playback.crossfadeDuration"
+        static let crossfadeOnSkip   = "playback.crossfadeOnSkip"
         static let queueSnapshot     = "playback.queueSnapshot"
     }
 
@@ -2063,7 +2064,10 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     /// plus the seek offset. Falls back to the last known `currentTime` if the
     /// node isn't currently rendering (e.g. paused).
     private func currentPlaybackTime() -> TimeInterval {
-        guard fileSampleRate > 0 else { return currentTime }
+        // A streamed song never attaches the player nodes (the graph is lazy),
+        // and asking an unattached node for its time is an ObjC exception —
+        // the crash on swiping the app away mid-stream.
+        guard fileSampleRate > 0, playbackSource == .engine, graphConfigured else { return currentTime }
         guard
             let nodeTime   = playerNode.lastRenderTime,
             let playerTime = playerNode.playerTime(forNodeTime: nodeTime)
@@ -2194,16 +2198,18 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     /// is untouched; returns false when it can't, leaving the normal advance to
     /// run.
     ///
-    /// The overlap is capped at a second regardless of the setting: a six-second
-    /// tail argues with the user who just pressed skip.
+    /// Opt-in (Settings → Playback → Crossfade on Skip), and only in `.crossfade`
+    /// mode: a skip is a hard cut unless the user asked for the overlap, and then
+    /// it uses their length.
     private func beginSkipCrossfade() -> Bool {
-        guard crossfadeMode != .off, !isTransitioning, state == .playing else { return false }
+        guard crossfadeMode == .crossfade, UserDefaults.standard.bool(forKey: DefaultsKey.crossfadeOnSkip),
+              !isTransitioning, state == .playing else { return false }
         guard let next = queue.peekNext() else { return false }
         // Leave the unfindable ones to the walk below — that's where the badge
         // and the line of explanation live.
         if UnavailableTracks.shared.contains(next), !canPlayLocally(next) { return false }
         guard let url = fileStorage.localURL(for: next) else { return false }
-        beginCrossfade(to: next, url: url, fade: min(effectiveFade, 1))
+        beginCrossfade(to: next, url: url, fade: effectiveFade)
         return true
     }
 

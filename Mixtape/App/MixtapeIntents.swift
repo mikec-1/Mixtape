@@ -9,6 +9,14 @@ import AppIntents
 enum MixtapeIntents {
     static weak var deps: AppDependencies?
 
+    /// Widget buttons call this last, so the reload that follows `perform`
+    /// draws the new state instead of the one from before the press.
+    @MainActor static func refreshWidgets() async {
+        #if os(iOS)
+        await deps?.nowPlayingSurfaces?.flush()
+        #endif
+    }
+
     /// A cold background launch hasn't read the library yet.
     static func library() async throws -> LibraryService {
         guard let library = deps?.libraryService else { throw MixtapeIntentError.notReady }
