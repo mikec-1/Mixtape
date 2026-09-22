@@ -346,6 +346,8 @@ enum SettingsSearchIndex {
         entries += [
             .init(id: "general.haptics", title: "Haptic Feedback", category: .general,
                   keywords: ["vibration", "taptic", "buzz"]),
+            .init(id: "general.liveActivity", title: "Live Activity", category: .general,
+                  keywords: ["lock screen", "dynamic island", "widget", "now playing"]),
             .init(id: "connections.streaming", title: "Streaming Server", category: .connections,
                   keywords: ["resolver", "discover", "connection", "test", "online"]),
         ]

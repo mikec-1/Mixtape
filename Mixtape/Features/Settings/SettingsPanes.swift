@@ -207,6 +207,7 @@ struct GeneralPane: View {
     @ObservedObject private var meta = PlaylistMetadataService.shared
     #if os(iOS)
     @AppStorage("haptics.enabled") private var hapticsEnabled = true
+    @AppStorage(NowPlayingSurfaces.liveActivityKey) private var liveActivity = false
     #endif
     #if os(macOS)
     @StateObject private var launchAtLogin = LaunchAtLogin.shared
@@ -276,6 +277,15 @@ struct GeneralPane: View {
                                   title: "Haptic Feedback",
                                   icon: "hand.tap",
                                   isOn: $hapticsEnabled)
+            }
+
+            SettingsGroup(title: "Lock Screen",
+                          footer: "iOS already shows the song on the Lock Screen and in the Dynamic Island. "
+                                + "The Live Activity adds Mixtape's own tile beside it.") {
+                SettingsToggleRow(id: "general.liveActivity",
+                                  title: "Live Activity",
+                                  icon: "platter.filled.bottom.iphone",
+                                  isOn: $liveActivity)
             }
             #endif
 

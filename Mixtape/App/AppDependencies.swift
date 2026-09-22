@@ -250,6 +250,9 @@ public final class AppDependencies: ObservableObject {
     // MARK: - Private
 
     private var cancellables = Set<AnyCancellable>()
+    #if os(iOS)
+    private var nowPlayingSurfaces: NowPlayingSurfaces?
+    #endif
 
     /// One-shot artwork shrink. Held so it can be cancelled and re-run.
     public let artworkCompaction: ArtworkCompaction
@@ -595,6 +598,9 @@ LaunchTimeline.mark("deps/engine")
                 SpotlightIndex.update(tracks: tracks, artists: artists)
             }
             .store(in: &cancellables)
+        #if os(iOS)
+        nowPlayingSurfaces = NowPlayingSurfaces(engine: playbackEngine)
+        #endif
         wireAuthObserver()
         // Off the main actor, and the session restore that needs the library
         // rides along behind it. The synchronous form held the main thread for

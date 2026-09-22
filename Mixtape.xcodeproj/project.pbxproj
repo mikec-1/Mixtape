@@ -9,10 +9,36 @@
 /* Begin PBXBuildFile section */
 		277381152FDF935F005192E6 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; platformFilters = (macos, ); productRef = 277381142FDF935F005192E6 /* Sparkle */; };
 		27BE1FAD2FD8D3A50008511A /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = 27BE1FAC2FD8D3A50008511A /* Supabase */; };
+		55C1A990B05C4D3DAC81C097 /* MixtapeWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = D1E8B13A02A4478DBAEFD6D7 /* MixtapeWidgets.appex */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		C546679FCBEC4EFFB0AD8D72 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 27BE1F292FD8C92A0008511A /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A6342B69D79047F385359F1B;
+			remoteInfo = MixtapeWidgets;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		2EF866FE84944072AA39498B /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				55C1A990B05C4D3DAC81C097 /* MixtapeWidgets.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		27BE1F312FD8C92A0008511A /* Mixtape.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Mixtape.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		D1E8B13A02A4478DBAEFD6D7 /* MixtapeWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = MixtapeWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -23,15 +49,35 @@
 			);
 			target = 27BE1F302FD8C92A0008511A /* Mixtape */;
 		};
+		F918486496CA4A0C85B64392 /* Exceptions for "MixtapeWidgets" folder in "MixtapeWidgets" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = A6342B69D79047F385359F1B /* MixtapeWidgets */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		1C71536518FD421BB6453A3D /* MixtapeWidgets */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				F918486496CA4A0C85B64392 /* Exceptions for "MixtapeWidgets" folder in "MixtapeWidgets" target */,
+			);
+			path = MixtapeWidgets;
+			sourceTree = "<group>";
+		};
 		27BE1F332FD8C92A0008511A /* Mixtape */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
 				27BE1FC02FD8E1B00008511A /* Exceptions for "Mixtape" folder in "Mixtape" target */,
 			);
 			path = Mixtape;
+			sourceTree = "<group>";
+		};
+		BAFBA2C3CD1D4D16891CABDB /* Shared */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Shared;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -46,6 +92,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		FEAC7D555E0E4A019D4795E5 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -53,6 +106,8 @@
 			isa = PBXGroup;
 			children = (
 				27BE1F332FD8C92A0008511A /* Mixtape */,
+				BAFBA2C3CD1D4D16891CABDB /* Shared */,
+				1C71536518FD421BB6453A3D /* MixtapeWidgets */,
 				27BE1FAB2FD8D3A50008511A /* Frameworks */,
 				27BE1F322FD8C92A0008511A /* Products */,
 			);
@@ -62,6 +117,7 @@
 			isa = PBXGroup;
 			children = (
 				27BE1F312FD8C92A0008511A /* Mixtape.app */,
+				D1E8B13A02A4478DBAEFD6D7 /* MixtapeWidgets.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -83,13 +139,16 @@
 				27BE1F2D2FD8C92A0008511A /* Sources */,
 				27BE1F2E2FD8C92A0008511A /* Frameworks */,
 				27BE1F2F2FD8C92A0008511A /* Resources */,
+				2EF866FE84944072AA39498B /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				DA9CBD7594E94E2AB72AE8A1 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				27BE1F332FD8C92A0008511A /* Mixtape */,
+				BAFBA2C3CD1D4D16891CABDB /* Shared */,
 			);
 			name = Mixtape;
 			packageProductDependencies = (
@@ -99,6 +158,27 @@
 			productName = Mixtape;
 			productReference = 27BE1F312FD8C92A0008511A /* Mixtape.app */;
 			productType = "com.apple.product-type.application";
+		};
+		A6342B69D79047F385359F1B /* MixtapeWidgets */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D9AF18E3783D48EEAC64EEAE /* Build configuration list for PBXNativeTarget "MixtapeWidgets" */;
+			buildPhases = (
+				275E24128618469090340DAB /* Sources */,
+				FEAC7D555E0E4A019D4795E5 /* Frameworks */,
+				725D8E700768463BB106A5B5 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				1C71536518FD421BB6453A3D /* MixtapeWidgets */,
+				BAFBA2C3CD1D4D16891CABDB /* Shared */,
+			);
+			name = MixtapeWidgets;
+			productName = MixtapeWidgets;
+			productReference = D1E8B13A02A4478DBAEFD6D7 /* MixtapeWidgets.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -111,6 +191,9 @@
 				LastUpgradeCheck = 2650;
 				TargetAttributes = {
 					27BE1F302FD8C92A0008511A = {
+						CreatedOnToolsVersion = 26.5;
+					};
+					A6342B69D79047F385359F1B = {
 						CreatedOnToolsVersion = 26.5;
 					};
 				};
@@ -134,6 +217,7 @@
 			projectRoot = "";
 			targets = (
 				27BE1F302FD8C92A0008511A /* Mixtape */,
+				A6342B69D79047F385359F1B /* MixtapeWidgets */,
 			);
 		};
 /* End PBXProject section */
@@ -146,9 +230,23 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		725D8E700768463BB106A5B5 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		275E24128618469090340DAB /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		27BE1F2D2FD8C92A0008511A /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -157,6 +255,15 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		DA9CBD7594E94E2AB72AE8A1 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			platformFilter = ios;
+			target = A6342B69D79047F385359F1B /* MixtapeWidgets */;
+			targetProxy = C546679FCBEC4EFFB0AD8D72 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		27BE1F3A2FD8C92C0008511A /* Debug */ = {
@@ -280,6 +387,8 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = MixtapeiOS.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = "MixtapeiOS-Simulator.entitlements";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 9;
@@ -302,8 +411,6 @@
 				INFOPLIST_FILE = Mixtape/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Mixtape;
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
-				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
-				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphoneos*]" = YES;
@@ -338,6 +445,8 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = MixtapeiOS.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = "MixtapeiOS-Simulator.entitlements";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 9;
@@ -360,8 +469,6 @@
 				INFOPLIST_FILE = Mixtape/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Mixtape;
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
-				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
-				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphoneos*]" = YES;
@@ -391,6 +498,66 @@
 			};
 			name = Release;
 		};
+		4A26214256EB42ADA3F2428E /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = MixtapeWidgets.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 9;
+				DEVELOPMENT_TEAM = AG9N987UCK;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = MixtapeWidgets/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Mixtape;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 2.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mikey.Mixtape.Widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) WIDGET_EXTENSION";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		EB26743C75AB4E0EB6752FC2 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = MixtapeWidgets.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 9;
+				DEVELOPMENT_TEAM = AG9N987UCK;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = MixtapeWidgets/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Mixtape;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 2.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mikey.Mixtape.Widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) WIDGET_EXTENSION";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -408,6 +575,15 @@
 			buildConfigurations = (
 				27BE1F3D2FD8C92C0008511A /* Debug */,
 				27BE1F3E2FD8C92C0008511A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		D9AF18E3783D48EEAC64EEAE /* Build configuration list for PBXNativeTarget "MixtapeWidgets" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				EB26743C75AB4E0EB6752FC2 /* Debug */,
+				4A26214256EB42ADA3F2428E /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

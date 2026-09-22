@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- The widgets read the now-playing snapshot from this group (no App Group
+	     on a personal team). See Shared/NowPlayingShared.swift. -->
+	<key>keychain-access-groups</key>
+	<array>
+		<!-- First on purpose: the first group is where un-grouped keychain writes
+		     land, and the app has always written to its own. -->
+		<string>$(AppIdentifierPrefix)com.mikey.Mixtape</string>
+		<string>$(AppIdentifierPrefix)com.mikey.Mixtape.shared</string>
+	</array>
+</dict>
+</plist>

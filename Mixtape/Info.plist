@@ -61,5 +61,29 @@
 	<string>Mixtape saves share cards to your photo library.</string>
 	<key>UIFileSharingEnabled</key>
 	<true/>
+	<!-- The opt-in Live Activity (Settings ▸ General ▸ Lock Screen). -->
+	<key>NSSupportsLiveActivities</key>
+	<true/>
+	<!-- Only the CarPlay scene is declared; the phone's window scene stays
+	     SwiftUI's own. macOS ignores both keys. -->
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<true/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>CPTemplateApplicationSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneClassName</key>
+					<string>CPTemplateApplicationScene</string>
+					<key>UISceneConfigurationName</key>
+					<string>CarPlay</string>
+					<key>UISceneDelegateClassName</key>
+					<string>$(PRODUCT_MODULE_NAME).CarPlaySceneDelegate</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
 </dict>
 </plist>
