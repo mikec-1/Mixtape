@@ -47,6 +47,35 @@ nonisolated struct PreviousTrackIntent: AudioPlaybackIntent {
 }
 
 #if os(iOS)
+/// Adds the playing song to Liked Songs, or takes it out — the heart on the
+/// large widget. A `LiveActivityIntent` so it runs in the app's process, like
+/// the playback buttons do; a plain intent would run in the extension, which
+/// can't reach the library.
+nonisolated struct ToggleLikeIntent: LiveActivityIntent {
+    static var title: LocalizedStringResource { "Like Song" }
+    static var description: IntentDescription { "Adds the playing song to Liked Songs, or takes it out." }
+    @MainActor func perform() async throws -> some IntentResult {
+        #if !WIDGET_EXTENSION
+        if let engine = MixtapeIntents.deps?.playbackEngine, let track = engine.queue.currentTrack {
+            await engine.onRemoteLike?(track)
+            engine.syncRemoteCommandState()
+        }
+        #endif
+        return .result()
+    }
+}
+
+nonisolated struct ToggleShuffleIntent: AudioPlaybackIntent {
+    static var title: LocalizedStringResource { "Shuffle" }
+    static var description: IntentDescription { "Turns shuffle on or off in Mixtape." }
+    @MainActor func perform() async throws -> some IntentResult {
+        #if !WIDGET_EXTENSION
+        MixtapeIntents.deps?.playbackEngine.queue.toggleShuffle()
+        #endif
+        return .result()
+    }
+}
+
 /// The song the widgets draw: the app writes it, the extension reads it.
 ///
 /// Through the keychain because there is no App Group — a personal team can't
@@ -55,10 +84,22 @@ nonisolated struct PreviousTrackIntent: AudioPlaybackIntent {
 /// their entitlements; the team prefix is spelled out because an extension
 /// has no way to look it up.
 nonisolated struct NowPlayingSnapshot: Codable, Sendable {
+    struct Song: Codable, Sendable {
+        var title: String
+        var artist: String
+        var artwork: Data?          // thumbnail, see NowPlayingSurfaces
+    }
+
     var title: String
     var artist: String
+    var album = ""
+    var source: String?             // "Playing from …"
     var isPlaying: Bool
+    var isLiked = false
+    var shuffle = false
     var artwork: Data?              // small JPEG, see NowPlayingSurfaces
+    var tint: [Double] = []         // r, g, b from the artwork; empty for none
+    var upNext: [Song] = []
     var elapsed: TimeInterval
     var duration: TimeInterval
     var at: Date                    // when `elapsed` was read
@@ -105,6 +146,9 @@ nonisolated struct NowPlayingAttributes: ActivityAttributes {
         var duration: TimeInterval
         var startedAt: Date
         var tint: [Double]          // r, g, b from the artwork; empty for none
+        /// The cover is read from the snapshot when the activity draws, so a
+        /// cover arriving late has to change the state or nothing redraws.
+        var hasArtwork: Bool
     }
 }
 #endif

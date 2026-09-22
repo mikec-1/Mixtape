@@ -18,16 +18,22 @@ final class NowPlayingSurfaces {
     private let engine: PlaybackEngine
     private var cancellables = Set<AnyCancellable>()
     private var activity: Activity<NowPlayingAttributes>?
-    private var last: NowPlayingSnapshot?
+    /// What the surfaces were last told, for the seek and late-cover checks.
+    private var shown: (startedAt: Date, isPlaying: Bool, hasArt: Bool)?
+    private var tint: (key: String, rgb: [Double]) = ("", [])
+    /// Writes run one after another, so an older song can't land last.
+    private var writing: Task<Void, Never>?
     private var liveActivityOn = UserDefaults.standard.bool(forKey: liveActivityKey)
 
-    init(engine: PlaybackEngine) {
+    init(engine: PlaybackEngine, library: LibraryService) {
         self.engine = engine
         // Whatever a previous run left behind is showing a song we don't own any more.
         for stale in Activity<NowPlayingAttributes>.activities {
             Task { await stale.end(nil, dismissalPolicy: .immediate) }
         }
+        // `playlists` moves when a song is liked — Liked Songs is a playlist.
         engine.$state.combineLatest(engine.queue.$currentIndex, engine.queue.$queue, engine.$duration)
+            .combineLatest(library.$playlists, engine.queue.$shuffleEnabled)
             .debounce(for: .milliseconds(300), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in self?.publish() }
             .store(in: &cancellables)
@@ -35,9 +41,9 @@ final class NowPlayingSurfaces {
         engine.clock.$currentTime
             .throttle(for: .seconds(1), scheduler: DispatchQueue.main, latest: true)
             .sink { [weak self] _ in
-                guard let self, let last = self.last, engine.state.isActive else { return }
-                let drift = abs(Date().addingTimeInterval(-engine.currentTime).timeIntervalSince(last.startedAt))
-                if (last.isPlaying && drift > 2) || (last.artwork == nil && engine.queue.currentTrack?.displayArtwork != nil) {
+                guard let self, let shown = self.shown, engine.state.isActive else { return }
+                let drift = abs(Date().addingTimeInterval(-engine.currentTime).timeIntervalSince(shown.startedAt))
+                if (shown.isPlaying && drift > 2) || (!shown.hasArt && engine.queue.currentTrack?.displayArtwork != nil) {
                     self.publish()
                 }
             }
@@ -58,26 +64,48 @@ final class NowPlayingSurfaces {
         // Stopped keeps the last song on the widget, paused — a "last played" tile.
         guard let track = engine.queue.currentTrack else { return }
         let art = track.displayArtwork
+        let key = "\(track.id)|\(art?.count ?? 0)"
+        if key != tint.key { tint = (key, Self.tint(art)) }
         let playing = engine.state.isPlaying && engine.state.isActive
         let snapshot = NowPlayingSnapshot(
-            title: track.displayTitle, artist: track.displayArtistName, isPlaying: playing,
-            artwork: art.flatMap { ImageDownsampler.downsampledJPEG(from: $0, maxDimension: 200, compressionQuality: 0.7) },
+            title: track.displayTitle, artist: track.displayArtistName, album: track.albumTitle,
+            source: engine.queue.source.displayName, isPlaying: playing,
+            isLiked: engine.isLiked?(track) ?? false, shuffle: engine.queue.shuffleEnabled,
+            artwork: art, tint: tint.rgb,
+            upNext: engine.queue.upcomingRows.prefix(5).map {
+                .init(title: $0.track.displayTitle, artist: $0.track.displayArtistName, artwork: $0.track.displayArtwork)
+            },
             elapsed: engine.currentTime, duration: engine.duration > 0 ? engine.duration : track.duration, at: Date())
-        let artChanged = (last?.artwork == nil) != (snapshot.artwork == nil) || last?.title != snapshot.title
-        last = snapshot
-        Task { await Self.write(snapshot) }
-        updateActivity(snapshot, tint: artChanged || activity == nil ? Self.tint(art) : activity?.content.state.tint ?? [])
+        shown = (snapshot.startedAt, playing, art != nil)
+        // Saved before the activity moves: the activity reads its cover from
+        // the saved snapshot, and one drawn first shows the placeholder.
+        let previous = writing
+        writing = Task { [weak self] in
+            await previous?.value
+            let saved = await Self.write(snapshot)
+            self?.updateActivity(saved)
+        }
     }
 
-    @concurrent private static func write(_ snapshot: NowPlayingSnapshot) async {
-        snapshot.save()
+    /// Covers shrunk here, off the main thread: the whole snapshot has to stay
+    /// small enough for the extension to decode on every redraw.
+    @concurrent private static func write(_ raw: NowPlayingSnapshot) async -> NowPlayingSnapshot {
+        var s = raw
+        s.artwork = raw.artwork.flatMap { ImageDownsampler.downsampledJPEG(from: $0, maxDimension: 360, compressionQuality: 0.75) }
+        for i in s.upNext.indices {
+            s.upNext[i].artwork = raw.upNext[i].artwork.flatMap {
+                ImageDownsampler.downsampledJPEG(from: $0, maxDimension: 96, compressionQuality: 0.7)
+            }
+        }
+        s.save()
         WidgetCenter.shared.reloadAllTimelines()
+        return s
     }
 
-    private func updateActivity(_ s: NowPlayingSnapshot, tint: [Double]) {
+    private func updateActivity(_ s: NowPlayingSnapshot) {
         let state = NowPlayingAttributes.ContentState(
             title: s.title, artist: s.artist, isPlaying: s.isPlaying, elapsed: s.elapsed,
-            duration: s.duration, startedAt: s.startedAt, tint: tint)
+            duration: s.duration, startedAt: s.startedAt, tint: s.tint, hasArtwork: s.artwork != nil)
         let wanted = liveActivityOn && engine.state.isActive && ActivityAuthorizationInfo().areActivitiesEnabled
         if !wanted {
             if let activity { Task { await activity.end(nil, dismissalPolicy: .immediate) } }

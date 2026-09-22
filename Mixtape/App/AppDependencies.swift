@@ -599,7 +599,7 @@ LaunchTimeline.mark("deps/engine")
             }
             .store(in: &cancellables)
         #if os(iOS)
-        nowPlayingSurfaces = NowPlayingSurfaces(engine: playbackEngine)
+        nowPlayingSurfaces = NowPlayingSurfaces(engine: playbackEngine, library: libraryService)
         #endif
         wireAuthObserver()
         // Off the main actor, and the session restore that needs the library
