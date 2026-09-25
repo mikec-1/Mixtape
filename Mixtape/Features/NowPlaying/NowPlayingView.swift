@@ -1593,6 +1593,9 @@ struct GetInfoSheet: View {
     #endif
     @Environment(\.dismiss) private var dismiss
 
+    /// This song's own history. Loaded in `.task`, since ranking the artist reads the log.
+    @State private var standing: SongStanding?
+
     /// Always reflect the currently playing track; fall back to the opening
     /// track when playback has stopped.
     private var currentTrack: Track {
@@ -1621,6 +1624,7 @@ struct GetInfoSheet: View {
             }
             #endif
         }
+        .task(id: track.id) { standing = deps.statsService.songStanding(for: track) }
     }
 
     private func details(_ track: Track) -> some View {
@@ -1637,18 +1641,39 @@ struct GetInfoSheet: View {
                 row("Source", isOnline ? "Streaming (Discover)" : "Library")
             }
 
-            if let (format, size) = fileInfo(track) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("FILE")
-                        .font(.system(size: MixFontScale.size(10.5), weight: .semibold))
-                        .foregroundStyle(Color.mixTextTertiary)
-                        .tracking(0.8)
-                    infoGroup {
-                        row("Format", format)
-                        if let size { row("Size", size) }
+            if let standing, standing.hasData {
+                labelledGroup("LISTENING") {
+                    row("Plays", "\(standing.plays)")
+                    if let first = standing.firstPlay {
+                        row("First played", first.formatted(.dateTime.month(.wide).year()))
+                    }
+                    if let last = standing.lastPlay {
+                        row("Last played", last.formatted(.relative(presentation: .named)))
+                    }
+                    if let artist = standing.artist, let rank = artist.rank {
+                        row("Artist rank", "#\(rank) \(artist.period.sentenceSuffix)")
                     }
                 }
             }
+
+            if let (format, size) = fileInfo(track) {
+                labelledGroup("FILE") {
+                    row("Format", format)
+                    if let size { row("Size", size) }
+                }
+            }
+        }
+    }
+
+    /// An `infoGroup` under a small caps heading.
+    private func labelledGroup<C: View>(_ title: String,
+                                        @ViewBuilder _ rows: () -> C) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.system(size: MixFontScale.size(10.5), weight: .semibold))
+                .foregroundStyle(Color.mixTextTertiary)
+                .tracking(0.8)
+            infoGroup(rows)
         }
     }
 

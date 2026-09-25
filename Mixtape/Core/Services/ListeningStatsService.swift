@@ -26,6 +26,15 @@ public enum StatsPeriod: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
+    /// Tail of a sentence: "your #3 artist **this year**".
+    var sentenceSuffix: String {
+        switch self {
+        case .last30Days: return "of the last 30 days"
+        case .thisYear:   return "this year"
+        case .allTime:    return "of all time"
+        }
+    }
+
     /// Lower bound for the query, or nil for all-time.
     func startDate(now: Date = Date(), calendar: Calendar = .current) -> Date? {
         switch self {
@@ -52,6 +61,33 @@ public struct TrackStat: Identifiable, Sendable {
     public var id: UUID { track.id }
     public let track: Track
     public let playCount: Int
+}
+
+/// Where one artist sits in the account's own listening. About the user, not the
+/// catalogue: `plays` is how often *they* played this artist.
+public struct ArtistStanding: Sendable {
+    public let plays: Int
+    /// 1-based place among every artist played in the period. Nil once it's too deep
+    /// down the list to mean anything.
+    public let rank: Int?
+    public let period: StatsPeriod
+
+    /// "Played 412 times · your #3 artist this year". One phrasing for every page.
+    public var summary: String {
+        let times = "Played \(plays) time\(plays == 1 ? "" : "s")"
+        guard let rank else { return times }
+        return times + " \u{00B7} your #\(rank) artist \(period.sentenceSuffix)"
+    }
+}
+
+/// One song's history: how often, when it started, when it was last on.
+public struct SongStanding: Sendable {
+    public let plays: Int
+    public let firstPlay: Date?
+    public let lastPlay: Date?
+    public let artist: ArtistStanding?
+
+    public var hasData: Bool { plays > 0 || artist != nil }
 }
 
 public struct ListeningStats: Sendable {
@@ -84,6 +120,13 @@ public final class ListeningStatsService {
     private let snapshots: PlayedTrackSnapshotRepository?
     private let calendar: Calendar
 
+    /// Folded artist name -> plays for one period. Ranking an artist means scanning the
+    /// whole log, and every Get Info sheet asks, so the scan is kept for `standingTTL`.
+    private var artistPlaysCache: (period: StatsPeriod, at: Date, plays: [String: Int])?
+    private let standingTTL: TimeInterval = 120
+    /// Past this place a rank stops meaning anything, so it isn't shown.
+    private let rankDepth = 50
+
     /// Wipes the account's play history on the server too. Set by
     /// `AppDependencies` once the sync service exists — without it, a reset is
     /// undone the next time another device pushes the plays it still holds.
@@ -95,6 +138,13 @@ public final class ListeningStatsService {
         self.library = library
         self.snapshots = snapshots
         self.calendar = calendar
+        // A wipe delivered by sync doesn't come through `resetHistory`, and clearing the
+        // library changes which artists a play resolves to. Either invalidates the scan.
+        NotificationCenter.default.addObserver(
+            forName: .mixUserDataReset, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.artistPlaysCache = nil }
+        }
     }
 
     /// Erases everything the stats are computed from: the play log, and the
@@ -106,6 +156,7 @@ public final class ListeningStatsService {
     /// can still report top artists, which is only ever what someone wants when
     /// they asked for it explicitly.
     public func resetHistory() {
+        artistPlaysCache = nil
         do { try history.deleteAll() } catch {
             MixLog.library.error("[ListeningStats] history wipe failed: \(error)")
         }
@@ -209,5 +260,60 @@ public final class ListeningStatsService {
             playsByHour: playsByHour,
             firstPlay: plays.last?.playedAt   // plays sorted newest-first
         )
+    }
+
+    // MARK: - Standings
+
+    /// Play count, first and last play for one song, plus where its artist stands.
+    /// Called when a sheet opens, not in a view body: the artist half scans history.
+    public func songStanding(for track: Track, period: StatsPeriod = .thisYear,
+                             now: Date = Date()) -> SongStanding {
+        let plays = (try? history.plays(of: track.id)) ?? .none
+        // The lead credit, so a feature doesn't rank the guest artist.
+        let lead = ImportService.creditedArtists(from: track.artistName).first ?? track.artistName
+        return SongStanding(plays: plays.count,
+                            firstPlay: plays.first,
+                            lastPlay: plays.last,
+                            artist: artistStanding(for: lead, period: period, now: now))
+    }
+
+    /// Where `name` sits in the account's own listening, or nil if never played.
+    public func artistStanding(for name: String, period: StatsPeriod = .thisYear,
+                               now: Date = Date()) -> ArtistStanding? {
+        let plays = artistPlays(period: period, now: now)
+        guard !plays.isEmpty else { return nil }
+        // Every spelling of the artist is the same artist. See `ArtistAliases`.
+        guard let place = ArtistRanking.place(of: ArtistAliases.spellings(of: name), in: plays)
+        else { return nil }
+        return ArtistStanding(plays: place.plays,
+                              rank: place.rank <= rankDepth ? place.rank : nil,
+                              period: period)
+    }
+
+    /// Plays per credited artist for the period, cached. Shares `computeBody`'s rules:
+    /// snapshots fill in Discover plays, and every credited artist counts separately.
+    private func artistPlays(period: StatsPeriod, now: Date) -> [String: Int] {
+        if let cache = artistPlaysCache, cache.period == period,
+           now.timeIntervalSince(cache.at) < standingTTL { return cache.plays }
+
+        let plays = mixMainActivity("stats-artist-plays") { () -> [String: Int] in
+            let rows = (try? history.fetchAllPlays(since: period.startDate(now: now, calendar: calendar))) ?? []
+            guard !rows.isEmpty else { return [:] }
+            let snapshotMap = (try? snapshots?.fetchAll()) ?? [:]
+
+            var countByTrack: [UUID: Int] = [:]
+            for row in rows { countByTrack[row.trackID, default: 0] += 1 }
+
+            var out: [String: Int] = [:]
+            for (id, count) in countByTrack {
+                guard let track = library.track(id: id) ?? snapshotMap[id] else { continue }
+                for name in ImportService.creditedArtists(from: track.artistName) {
+                    out[ArtistAliases.fold(name), default: 0] += count
+                }
+            }
+            return out
+        }
+        artistPlaysCache = (period, now, plays)
+        return plays
     }
 }

@@ -59,6 +59,34 @@ public final class PlayHistoryRepository {
         }
     }
 
+    /// How often one track was played, and when it was first and last played.
+    public struct TrackPlays: Sendable {
+        public let count: Int
+        public let first: Date?
+        public let last: Date?
+
+        public static let none = TrackPlays(count: 0, first: nil, last: nil)
+    }
+
+    /// Counts and bounds for one track. A count plus two single-row fetches, so it
+    /// stays cheap enough to run when a sheet opens.
+    public func plays(of trackID: UUID) throws -> TrackPlays {
+        let count = try context.fetchCount(
+            FetchDescriptor<PlayHistoryEntity>(predicate: #Predicate { $0.trackID == trackID })
+        )
+        guard count > 0 else { return .none }
+
+        func edge(_ order: SortOrder) throws -> Date? {
+            var desc = FetchDescriptor<PlayHistoryEntity>(
+                predicate: #Predicate { $0.trackID == trackID },
+                sortBy: [SortDescriptor(\.playedAt, order: order)]
+            )
+            desc.fetchLimit = 1
+            return try context.fetch(desc).first?.playedAt
+        }
+        return TrackPlays(count: count, first: try edge(.forward), last: try edge(.reverse))
+    }
+
     // MARK: - Mutate
 
     /// Records a newly played track and prunes old entries beyond the history

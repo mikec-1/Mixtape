@@ -236,6 +236,8 @@ private struct MacArtistDetailPanel: View {
     /// all 81 views that hold `deps` on every status transition. The views that
     /// actually draw download state say so themselves now.
     @State private var downloadTick = 0
+    /// How much *you* played this artist. Loaded in `.task`: it reads play history.
+    @State private var standing: ArtistStanding?
 
     var body: some View {
         bodyContent
@@ -264,6 +266,7 @@ private struct MacArtistDetailPanel: View {
         // that follows doesn't pay for the resolve.
         .task(id: artist.id) {
             deps.onlineCoordinator.prefetchResolvable(artistTracks)
+            standing = deps.statsService.artistStanding(for: artist.name)
         }
         .pageBack("All artists", action: onBack)
     }
@@ -300,8 +303,10 @@ private struct MacArtistDetailPanel: View {
 
                     let albums = artistAlbums.count
                     let songs  = artistTracks.count
+                    // Lowercased: the standing joins a counts line, not a sentence of its own.
                     Text(
                         "\(albums) album\(albums == 1 ? "" : "s") · \(songs) song\(songs == 1 ? "" : "s")"
+                        + (standing.map { " · " + $0.summary.lowercased() } ?? "")
                     )
                     .font(.system(size: 12))
                     .foregroundStyle(Color.mixTextSecondary)

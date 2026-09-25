@@ -35,6 +35,8 @@ public struct ArtistDetailView: View {
     /// all 81 views that hold `deps` on every status transition. The views that
     /// actually draw download state say so themselves now.
     @State private var downloadTick = 0
+    /// How much *you* played this artist. Loaded in `.task`: it reads play history.
+    @State private var standing: ArtistStanding?
 
     public var body: some View {
         bodyContent
@@ -63,6 +65,7 @@ public struct ArtistDetailView: View {
         // top of it is the likeliest next tap.
         .task(id: artist.id) {
             deps.onlineCoordinator.prefetchResolvable(tracks)
+            standing = deps.statsService.artistStanding(for: artist.name)
         }
         .navigationTitle(artist.name)
         #if os(iOS)
@@ -147,6 +150,8 @@ public struct ArtistDetailView: View {
         var parts: [String] = []
         if !albums.isEmpty { parts.append("\(albums.count) album\(albums.count == 1 ? "" : "s")") }
         if !tracks.isEmpty { parts.append("\(tracks.count) song\(tracks.count == 1 ? "" : "s")") }
+        // Lowercased: it joins a counts line, not a sentence of its own.
+        if let standing { parts.append(standing.summary.lowercased()) }
         return parts.joined(separator: " · ")
     }
 

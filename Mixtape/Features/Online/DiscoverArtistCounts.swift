@@ -38,6 +38,8 @@ struct DiscoverArtistCounts: View {
     /// browsing. It only changes when the favourites do, so it's recomputed on
     /// that and nothing else.
     @State private var liked: String?
+    /// How much *you* played this artist. Loaded once per artist: it reads play history.
+    @State private var standing: ArtistStanding?
 
     private var favouritesFingerprint: String {
         let count = deps.libraryService.playlists.first(where: \.isFavourites)?.trackIDs.count ?? 0
@@ -49,6 +51,13 @@ struct DiscoverArtistCounts: View {
             Text(catalogueLine)
                 .font(.system(size: MixFontScale.size(12)))
                 .foregroundStyle(Color.mixTextSecondary)
+
+            // Hidden until you've played them.
+            if let standing {
+                Text(standing.summary)
+                    .font(.system(size: MixFontScale.size(12)))
+                    .foregroundStyle(Color.mixTextSecondary)
+            }
 
             // Absent entirely when nothing is liked: "0 liked songs" is noise on
             // the artist pages you have never touched, which is most of them.
@@ -63,6 +72,7 @@ struct DiscoverArtistCounts: View {
             }
         }
         .task(id: favouritesFingerprint) { liked = likedSummary }
+        .task(id: artistName) { standing = deps.statsService.artistStanding(for: artistName) }
     }
 
     /// "412 songs · 40 releases". The song half is dropped when it's zero —
