@@ -367,6 +367,9 @@ public struct HomeSections: View {
     typealias SmartEntry = (playlist: SmartPlaylist, tracks: [Track])
     @State private var allSmartLists: [SmartEntry] = []
     @State private var showsSmartEditor = false
+    @State private var showsTapes = false
+    /// The tape picked in the archive, opened once its sheet has gone.
+    @State private var pendingTape: SmartPlaylist? = nil
 
     /// Spotify-sourced artist profile images for "Recent artists", keyed by
     /// lowercased name. Discover-only artists have no library `Artist` row, so we
@@ -662,6 +665,13 @@ public struct HomeSections: View {
             SmartPlaylistEditorView(service: smartService)
                 .environmentObject(deps)
         }
+        .sheet(isPresented: $showsTapes, onDismiss: {
+            if let tape = pendingTape { pendingTape = nil; openSmart(tape) }
+        }) {
+            TapeArchiveView(service: smartService) { pendingTape = $0 }
+                .environmentObject(engine)
+                .environmentObject(library)
+        }
         .task(id: prefetchKey) {
             guard bands.contains(.top) else { return }
             deps.onlineCoordinator.prefetchResolvable(Array(recentlyPlayed.prefix(6)))
@@ -784,7 +794,10 @@ public struct HomeSections: View {
     // page, so they belong on it: one shelf, tap to play, same grammar as the
     // song cards beside them.
 
-    private var smartShelf: some View { smartShelf(title: "Made by Mixtape", entries: smartLists) }
+    private var smartShelf: some View {
+        smartShelf(title: "Made by Mixtape", entries: smartLists,
+                   allTapes: smartService.playlists.contains { $0.rule.tapeStart != nil } ? { showsTapes = true } : nil)
+    }
 
     /// The user's own rules, kept off the shelf above: a card named "lol" sitting
     /// between Hidden Gems and On Repeat reads as something the app generated.
@@ -803,9 +816,24 @@ public struct HomeSections: View {
     }
     private var mySmartLists: [SmartEntry] { allSmartLists.filter { !SmartPlaylistService.isBuiltIn($0.playlist) } }
 
-    private func smartShelf(title: String, entries: [SmartEntry], showsCreate: Bool = false) -> some View {
+    private func smartShelf(title: String, entries: [SmartEntry], showsCreate: Bool = false,
+                            allTapes: (() -> Void)? = nil) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            SectionHeader(title: title)
+            HStack {
+                SectionHeader(title: title)
+                Spacer()
+                if let allTapes {
+                    Button {
+                        Haptics.play(.light)
+                        allTapes()
+                    } label: {
+                        Text("All tapes")
+                            .font(.mixLabel)
+                            .foregroundStyle(Color.mixPrimary)
+                    }
+                    .buttonStyle(.plain).mixHandCursor()
+                }
+            }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(alignment: .top, spacing: 14) {
                     ForEach(entries, id: \.playlist.id) { entry in
