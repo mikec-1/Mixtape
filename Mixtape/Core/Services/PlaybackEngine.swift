@@ -120,7 +120,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     /// Called whenever a track is prepended to `recentlyPlayed`, with the
     /// listen time that crossed the threshold.
     /// AppDependencies uses this to persist the entry via PlayHistoryRepository.
-    public var onTrackAddedToHistory: ((Track, TimeInterval) -> Void)?
+    public var onTrackAddedToHistory: ((Track, TimeInterval, QueueSource) -> Void)?
 
     /// Final listen time for a play already in the history table, once the user
     /// leaves the track. AppDependencies corrects the stored row with it.
@@ -2013,7 +2013,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         recentlyPlayed.insert(track, at: 0)
         if recentlyPlayed.count > 50 { recentlyPlayed.removeLast() }
         MixLog.playback.debug("[history] RECORDED '\(track.title)' id=\(track.id) online=\(track.isOnline) recentlyPlayed.count=\(self.recentlyPlayed.count)")
-        onTrackAddedToHistory?(track, loggedPlaySeconds)
+        onTrackAddedToHistory?(track, loggedPlaySeconds, queue.source)
     }
 
     /// Records the current track once it's been listened to for at least 30s (or

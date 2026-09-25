@@ -518,6 +518,8 @@ nonisolated struct PlayHistoryRow: Codable, Sendable {
     var trackID:       UUID
     var playedAt:      Date
     var secondsPlayed: Double
+    var sourceKind:    String?
+    var sourceID:      String?
     var syncDeviceID:  String
     var updatedAt:     Date
     var isDeleted:     Bool
@@ -528,6 +530,8 @@ nonisolated struct PlayHistoryRow: Codable, Sendable {
         case trackID       = "track_id"
         case playedAt      = "played_at"
         case secondsPlayed = "seconds_played"
+        case sourceKind    = "source_kind"
+        case sourceID      = "source_id"
         case syncDeviceID  = "sync_device_id"
         case updatedAt     = "updated_at"
         case isDeleted     = "is_deleted"
@@ -539,6 +543,8 @@ nonisolated struct PlayHistoryRow: Codable, Sendable {
         self.trackID       = entity.trackID
         self.playedAt      = entity.playedAt
         self.secondsPlayed = entity.secondsPlayed
+        self.sourceKind    = entity.sourceKind
+        self.sourceID      = entity.sourceID
         self.syncDeviceID  = entity.syncDeviceID
         self.updatedAt     = entity.syncLocalModifiedAt
         self.isDeleted     = false
@@ -550,6 +556,8 @@ nonisolated struct PlayHistoryRow: Codable, Sendable {
             trackID:             trackID,
             playedAt:            playedAt,
             secondsPlayed:       secondsPlayed,
+            sourceKind:          sourceKind,
+            sourceID:            sourceID,
             syncStatus:          SyncStatus.synced.rawValue,
             syncDeviceID:        syncDeviceID,
             syncLocalModifiedAt: updatedAt,

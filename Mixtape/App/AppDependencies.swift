@@ -532,8 +532,9 @@ LaunchTimeline.mark("deps/engine")
 
         // Wire history persistence: save every new play to SwiftData.
         let deviceID = Self.deviceID
-        self.playbackEngine.onTrackAddedToHistory = { track, seconds in
-            do { try historyRepo.record(trackID: track.id, deviceID: deviceID, secondsPlayed: seconds) }
+        self.playbackEngine.onTrackAddedToHistory = { track, seconds, source in
+            do { try historyRepo.record(trackID: track.id, deviceID: deviceID, secondsPlayed: seconds,
+                                        source: source) }
             catch { MixLog.playback.error("[history] persist FAILED: \(error)") }
             // Online (Discover) tracks have no library row — persist a lightweight
             // snapshot so they survive relaunch on Home and resolve in stats.

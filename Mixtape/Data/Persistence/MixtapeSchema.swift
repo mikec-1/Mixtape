@@ -374,6 +374,10 @@ public final class PlayHistoryEntity {
     public var trackID: UUID
     public var playedAt: Date
     public var secondsPlayed: TimeInterval
+    /// Where the play came from: "playlist" with a uuid, or "name" with a display
+    /// name (album, artist, search, mix). Nil on plays recorded before 2.0.
+    public var sourceKind: String? = nil
+    public var sourceID: String? = nil
 
     // Sync
     public var syncStatus: String
@@ -388,6 +392,8 @@ public final class PlayHistoryEntity {
         trackID: UUID,
         playedAt: Date = Date(),
         secondsPlayed: TimeInterval = 0,
+        sourceKind: String? = nil,
+        sourceID: String? = nil,
         syncStatus: String = SyncStatus.localOnly.rawValue,
         syncServerID: String? = nil,
         syncDeviceID: String,
@@ -399,6 +405,8 @@ public final class PlayHistoryEntity {
         self.trackID              = trackID
         self.playedAt             = playedAt
         self.secondsPlayed        = secondsPlayed
+        self.sourceKind           = sourceKind
+        self.sourceID             = sourceID
         self.syncStatus           = syncStatus
         self.syncServerID         = syncServerID
         self.syncDeviceID         = syncDeviceID

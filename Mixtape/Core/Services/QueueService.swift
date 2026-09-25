@@ -103,6 +103,19 @@ public enum QueueSource: Equatable, Sendable {
         if case .playlist(let id, _) = self { return id }
         return nil
     }
+
+    /// How a play row remembers where it came from. A playlist keeps its id;
+    /// everything else (album, artist, search, mix) has only a display name, so
+    /// that is the handle. Nil means there is no source worth recording.
+    public var historyRef: (kind: String, id: String)? {
+        switch self {
+        case .none: return nil
+        case .playlist(let id, _): return ("playlist", id.uuidString)
+        case .named(let name):
+            let trimmed = name.trimmingCharacters(in: .whitespaces)
+            return trimmed.isEmpty ? nil : ("name", trimmed)
+        }
+    }
 }
 
 // MARK: - Queue Service

@@ -43,6 +43,9 @@ public final class PlayHistoryRepository {
         /// engine started reporting it, and on plays the app never got to
         /// finalise (quit mid-song) — callers should fall back to track duration.
         public let secondsPlayed: TimeInterval
+        /// Where the play came from. See `QueueSource.historyRef`.
+        public let sourceKind: String?
+        public let sourceID: String?
     }
 
     /// Returns every retained play event (newest first), for listening-stats
@@ -55,7 +58,8 @@ public final class PlayHistoryRepository {
             desc.predicate = #Predicate { $0.playedAt >= since }
         }
         return try context.fetch(desc).map {
-            PlayRecord(trackID: $0.trackID, playedAt: $0.playedAt, secondsPlayed: $0.secondsPlayed)
+            PlayRecord(trackID: $0.trackID, playedAt: $0.playedAt, secondsPlayed: $0.secondsPlayed,
+                       sourceKind: $0.sourceKind, sourceID: $0.sourceID)
         }
     }
 
@@ -93,11 +97,15 @@ public final class PlayHistoryRepository {
     /// limit. `secondsPlayed` is the listen so far — the threshold the engine
     /// crossed to call this — and is corrected by `finaliseLatestPlay` once the
     /// user leaves the track.
-    public func record(trackID: UUID, deviceID: String, secondsPlayed: TimeInterval) throws {
+    public func record(trackID: UUID, deviceID: String, secondsPlayed: TimeInterval,
+                       source: QueueSource = .none) throws {
+        let ref = source.historyRef
         let entry = PlayHistoryEntity(
             trackID:          trackID,
             playedAt:         Date(),
             secondsPlayed:    secondsPlayed,
+            sourceKind:       ref?.kind,
+            sourceID:         ref?.id,
             syncStatus:       SyncStatus.localOnly.rawValue,
             syncDeviceID:     deviceID,
             syncLocalModifiedAt: Date()
