@@ -63,6 +63,20 @@ public final class PlayHistoryRepository {
         }
     }
 
+    /// One page of plays, newest first. A browsable list doesn't need the whole log,
+    /// which is what `fetchAllPlays` loads.
+    public func fetchPlays(limit: Int, offset: Int = 0) throws -> [PlayRecord] {
+        var desc = FetchDescriptor<PlayHistoryEntity>(
+            sortBy: [SortDescriptor(\.playedAt, order: .reverse)]
+        )
+        desc.fetchLimit = limit
+        desc.fetchOffset = offset
+        return try context.fetch(desc).map {
+            PlayRecord(trackID: $0.trackID, playedAt: $0.playedAt, secondsPlayed: $0.secondsPlayed,
+                       sourceKind: $0.sourceKind, sourceID: $0.sourceID)
+        }
+    }
+
     /// How often one track was played, and when it was first and last played.
     public struct TrackPlays: Sendable {
         public let count: Int

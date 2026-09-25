@@ -13,6 +13,7 @@ public struct ListeningStatsView: View {
     @EnvironmentObject private var engine: PlaybackEngine
     @State private var period: StatsPeriod = .allTime
     @State private var stats: ListeningStats = .empty
+    @State private var showHistory = false
 
     public init() {}
 
@@ -26,6 +27,12 @@ public struct ListeningStatsView: View {
         .onChange(of: period) { _, _ in
             Haptics.play(.selection)
             recompute()
+        }
+        // Recomputed on the way back: the history page can clear the log.
+        .sheet(isPresented: $showHistory, onDismiss: recompute) {
+            ListeningHistoryView()
+                .environmentObject(deps)
+                .environmentObject(engine)
         }
     }
 
@@ -48,6 +55,7 @@ public struct ListeningStatsView: View {
                 }
                 if !stats.topTracks.isEmpty { topTracksSection }
                 if !stats.topArtists.isEmpty { topArtistsSection }
+                historyLink
             } else {
                 EmptyStateView(
                     icon: "chart.bar.xaxis",
@@ -230,5 +238,37 @@ public struct ListeningStatsView: View {
         }
         .padding(.vertical, 4)
         .contentShape(Rectangle())
+    }
+
+    // MARK: History
+
+    /// The log itself, one level down: this page is the summary, not the list.
+    private var historyLink: some View {
+        Button {
+            Haptics.play(.light)
+            showHistory = true
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: MixtapeIcons.clock)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Color.mixPrimary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Listening history")
+                        .font(.mixBodyBold)
+                        .foregroundStyle(Color.mixTextPrimary)
+                    Text("Every play, newest first")
+                        .font(.mixLabel)
+                        .foregroundStyle(Color.mixTextSecondary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.mixLabel)
+                    .foregroundStyle(Color.mixTextTertiary)
+            }
+            .padding(16)
+            .background(Color.mixSurface,
+                        in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .buttonStyle(.plain).mixHandCursor()
     }
 }

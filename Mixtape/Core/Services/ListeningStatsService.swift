@@ -90,6 +90,17 @@ public struct SongStanding: Sendable {
     public var hasData: Bool { plays > 0 || artist != nil }
 }
 
+/// One play in the log, resolved to the song it played.
+public struct HistoryPlay: Identifiable, Sendable {
+    /// The same song appears many times; the moment it played is what separates them.
+    public var id: String { "\(track.id)-\(playedAt.timeIntervalSince1970)" }
+    public let track: Track
+    public let playedAt: Date
+    /// Where it was played from: a playlist, album, artist or mix name. Nil for plays
+    /// recorded before 2.0, which didn't keep one.
+    public let source: String?
+}
+
 public struct ListeningStats: Sendable {
     public let period: StatsPeriod
     public let totalPlays: Int
@@ -132,6 +143,10 @@ public final class ListeningStatsService {
     /// undone the next time another device pushes the plays it still holds.
     public var remoteWipe: (() -> Void)?
 
+    /// What has to follow a wipe the user asked for: rebuild derived state, republish the
+    /// profile. Set by AppDependencies, which owns the services that do both.
+    public var afterClear: (@MainActor () async -> Void)?
+
     public init(history: PlayHistoryRepository, library: LibraryService,
                 snapshots: PlayedTrackSnapshotRepository? = nil, calendar: Calendar = .current) {
         self.history = history
@@ -164,6 +179,14 @@ public final class ListeningStatsService {
         do { try snapshots?.deleteAll() } catch {
             MixLog.library.error("[ListeningStats] snapshot wipe failed: \(error)")
         }
+    }
+
+    /// Clearing history from a page: the wipe plus everything that has to follow it, so
+    /// every Clear button has the same consequences. `resetHistory` is the mechanical
+    /// half, for callers that announce their own reset.
+    public func clearHistory() async {
+        resetHistory()
+        await afterClear?()
     }
 
     public func compute(period: StatsPeriod, now: Date = Date()) -> ListeningStats {
@@ -315,5 +338,35 @@ public final class ListeningStatsService {
         }
         artistPlaysCache = (period, now, plays)
         return plays
+    }
+
+    // MARK: - Log
+
+    /// One page of the log, newest first, resolved to songs. `rows` is how many plays the
+    /// page held before songs that are gone were dropped, so a short page isn't
+    /// necessarily the last one.
+    public func historyPage(limit: Int = 100, offset: Int = 0) -> (plays: [HistoryPlay], rows: Int) {
+        let rows = (try? history.fetchPlays(limit: limit, offset: offset)) ?? []
+        guard !rows.isEmpty else { return ([], 0) }
+        // Same fallback as `computeBody`, so Discover plays resolve too.
+        let snapshotMap = (try? snapshots?.fetchAll()) ?? [:]
+        // A playlist recorded its id, so the name is read now and follows a rename.
+        let names = Dictionary(library.playlists.map { ($0.id.uuidString, $0.name) },
+                               uniquingKeysWith: { first, _ in first })
+
+        let plays: [HistoryPlay] = rows.compactMap { row in
+            guard let track = library.track(id: row.trackID) ?? snapshotMap[row.trackID]
+            else { return nil }
+            let source: String?
+            switch row.sourceKind {
+            // ponytail: a smart playlist isn't in `playlists`, so it reads as no source
+            // rather than as a uuid. Naming it needs the smart list in the lookup.
+            case "playlist": source = row.sourceID.flatMap { names[$0] }
+            case "name":     source = row.sourceID
+            default:         source = nil
+            }
+            return HistoryPlay(track: track, playedAt: row.playedAt, source: source)
+        }
+        return (plays, rows.count)
     }
 }

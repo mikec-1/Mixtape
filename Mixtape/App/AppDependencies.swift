@@ -364,6 +364,16 @@ public final class AppDependencies: ObservableObject {
         self.statsService.remoteWipe = {
             Task { try? await syncRef.deleteAllServerPlayHistory() }
         }
+        // Clearing from the history page has to do what Settings does: rebuild anything
+        // derived from the log, and republish the profile's numbers from the empty one.
+        // Without the republish the wipe is local only, and the old top artists stay
+        // visible to everyone else.
+        let profileStats = self.profileStatsService
+        self.statsService.afterClear = {
+            UserDataReset.announce(UserDataReset(clearedLibrary: false, clearedHistory: true))
+            guard let userID = auth.currentUser?.id else { return }
+            await profileStats.publishMyStats(userID: userID)
+        }
         self.importService.onSyncNeeded = {
             try? await syncRef.sync()
         }

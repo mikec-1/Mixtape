@@ -310,19 +310,10 @@ public final class SettingsViewModel: ObservableObject {
         resetStatsError = nil
         defer { isResettingStats = false }
 
-        statsService.resetHistory()
-
-        // The mixes, the seeds and every "because you listened to…" claim were
-        // built from the log that just went away. See `UserDataReset`.
-        UserDataReset.announce(UserDataReset(clearedLibrary: false, clearedHistory: true))
-
-        // Republishing now computes from an empty log, so the server row — and
-        // therefore the profile page — goes to zero. Without this the wipe is
-        // local only and the old top artists stay visible to everyone else.
-        if let userID = currentUser?.id {
-            await profileStats.publishMyStats(userID: userID)
-        }
-        MixLog.library.debug("[Settings] ✅ Listening history reset")
+        // Announcing the reset and republishing the profile are `clearHistory`'s job now,
+        // so the history page's own Clear button has the same consequences as this one.
+        await statsService.clearHistory()
+        MixLog.library.debug("[Settings] Listening history reset")
     }
 
     /// Deletes ALL data for this user from the Supabase database and Storage,
