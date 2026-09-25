@@ -215,6 +215,8 @@ enum SettingsSearchIndex {
                   keywords: ["silence", "dead air", "padding", "skip silence", "end"]),
             .init(id: "playback.autoplay", title: "Autoplay", category: .playback,
                   keywords: ["radio", "suggestions", "keep playing", "queue", "endless"]),
+            .init(id: "playback.smartShuffle", title: "Smart Shuffle", category: .playback,
+                  keywords: ["shuffle", "smart", "mix in", "random", "recommendations"]),
             .init(id: "playback.suggestionFeedback", title: "Show These Again", category: .playback,
                   keywords: ["hidden", "hide song", "blocked artist", "don't suggest", "unhide"]),
             .init(id: "playback.privateSession", title: "Private Session", category: .playback,

@@ -51,6 +51,19 @@ public final class QueueSuggestionService: ObservableObject {
         queue.$queue
             .sink { [weak self] _ in self?.scheduleReplenishIfNeeded() }
             .store(in: &cancellables)
+
+        // Smart shuffle mixes songs in when shuffle comes on. Taking them back
+        // out is the queue's own job (`setShuffle`), so this only listens for
+        // the switch-on.
+        queue.$shuffleEnabled
+            .removeDuplicates()
+            .sink { [weak self] on in
+                guard on else { return }
+                // Next tick: `setShuffle` publishes before it reshuffles, and
+                // rows mixed in first would be scattered by that shuffle.
+                Task { self?.mixInSmartPicks() }
+            }
+            .store(in: &cancellables)
     }
 
     // MARK: - Trigger
@@ -91,6 +104,36 @@ public final class QueueSuggestionService: ObservableObject {
     }
 
     private var pendingDepth: Int { queue.remainingRecommendationCount }
+
+    /// Settings ▸ Playback ▸ Smart Shuffle. Off by default: it changes what a
+    /// shuffle of the user's own playlist contains, so it is opt-in.
+    public static var smartShuffleEnabled: Bool {
+        UserDefaults.standard.bool(forKey: "playback.smartShuffle")
+    }
+
+    /// One mixed-in song after every this many of the list's own.
+    private let smartEvery = 4
+
+    // MARK: - Smart shuffle
+
+    /// Mix library songs that aren't in this list into the shuffled run.
+    ///
+    /// Library picks only: they are genre-coherent with what is playing, they
+    /// carry their artwork, and they play with no resolve step — a row that has
+    /// to be fetched from the internet mid-playlist is not what "shuffle" should
+    /// hand you.
+    /// ponytail: Deezer picks would need the coordinator's device id and artwork
+    /// prefetch made public; add them if the library turns out too thin to draw from.
+    private func mixInSmartPicks() {
+        guard Self.smartShuffleEnabled, queue.shuffleEnabled, !engine.hasOnlineContext else { return }
+        guard let seed = queue.currentTrack else { return }
+        let ahead = queue.remainingContextCount
+        guard ahead >= smartEvery else { return }   // too short a run to mix into
+        let seen  = Set(queue.queue.map(Self.key))
+        let picks = Array(localSuggestions(for: seed, excluding: seen).prefix(ahead / smartEvery))
+        guard !picks.isEmpty else { return }
+        queue.interleaveSmart(picks, every: smartEvery)
+    }
 
     /// Settings ▸ Playback ▸ Autoplay. On unless the user turned it off, which is
     /// the same default every other player ships.

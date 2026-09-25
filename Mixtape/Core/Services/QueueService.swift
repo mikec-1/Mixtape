@@ -413,6 +413,7 @@ public final class QueueService: ObservableObject {
         entryIDs             = []
         origins              = [:]
         contextOrderIDs      = []
+        smartRowIDs          = []
         currentIndex         = -1
         source               = .none
         repeatBoundaryID     = nil
@@ -818,7 +819,7 @@ public final class QueueService: ObservableObject {
         guard on != shuffleEnabled else { return }
         shuffleEnabled = on
         alignEntryIDs()
-        if shuffleEnabled { reshuffleContext() } else { restoreContextOrder() }
+        if shuffleEnabled { reshuffleContext() } else { removeSmartRows(); restoreContextOrder() }
     }
 
     /// Reorder the upcoming context rows at random, in place.
@@ -838,6 +839,47 @@ public final class QueueService: ObservableObject {
         let rank = Dictionary(uniqueKeysWithValues: contextOrderIDs.enumerated().map { ($1, $0) })
         reorderUpcoming(in: shuffleLane) { ids in
             ids.sorted { (rank[$0] ?? Int.max) < (rank[$1] ?? Int.max) }
+        }
+    }
+
+    // MARK: - Smart shuffle
+
+    /// The rows a smart shuffle mixed into the list.
+    ///
+    /// They are tagged `.context`, not `.recommendation`: the lane order is what
+    /// lets them sit *between* the list's own songs, and a recommendation row can
+    /// only ever go after every context row there is. Tracked here so switching
+    /// smart shuffle — or shuffle — off takes back out exactly the rows it added.
+    @Published public private(set) var smartRowIDs: Set<UUID> = []
+
+    /// Mix `tracks` in, one after every `every` of the list's own upcoming rows.
+    public func interleaveSmart(_ tracks: [Track], every: Int = 4) {
+        guard !tracks.isEmpty, every > 0 else { return }
+        alignEntryIDs()
+        var pool = tracks
+        var run  = 0
+        var i    = max(currentIndex + 1, 0)
+        while i < queue.count, !pool.isEmpty {
+            defer { i += 1 }
+            guard origin(at: i) == .context, !smartRowIDs.contains(entryIDs[i]) else { continue }
+            run += 1
+            guard run == every else { continue }
+            run = 0
+            insert([pool.removeFirst()], at: i + 1, lane: .context)
+            if let id = entryID(at: i + 1) { smartRowIDs.insert(id) }
+            i += 1   // step over the row just inserted
+        }
+    }
+
+    /// Take the mixed-in rows back out, leaving the list exactly as it was.
+    public func removeSmartRows() {
+        guard !smartRowIDs.isEmpty else { return }
+        alignEntryIDs()
+        // `remove(at:)` refuses the playing row, which is the behaviour wanted
+        // here too: a song you are listening to isn't yanked out from under you.
+        // It also prunes `smartRowIDs` as each row goes.
+        for slot in entryIDs.indices.reversed() where smartRowIDs.contains(entryIDs[slot]) {
+            remove(at: slot)
         }
     }
 
@@ -894,6 +936,7 @@ public final class QueueService: ObservableObject {
         let live = Set(entryIDs)
         origins  = origins.filter { live.contains($0.key) }
         contextOrderIDs.removeAll { !live.contains($0) }
+        if !smartRowIDs.isSubset(of: live) { smartRowIDs.formIntersection(live) }
     }
 
     /// Bring the canonical context order back in line with the queue after a

@@ -335,6 +335,7 @@ struct PlaybackPane: View {
     @AppStorage("playback.normalizeVolume") private var normalizeVolume = true
     @AppStorage("playback.trimPadding")     private var trimPadding = true
     @AppStorage("playback.autoplay")        private var autoplay = true
+    @AppStorage("playback.smartShuffle")    private var smartShuffle = false
 
     /// Counted on appear rather than observed: both lists are written from a
     /// context menu somewhere else in the app, and nothing else in Settings cares.
@@ -435,6 +436,11 @@ struct PlaybackPane: View {
                                   subtitle: "When a list ends, keep going with songs like the ones you were playing",
                                   icon: "infinity",
                                   isOn: $autoplay)
+                SettingsToggleRow(id: "playback.smartShuffle",
+                                  title: "Smart Shuffle",
+                                  subtitle: "Mix songs from your library that aren\u{2019}t in the list into a shuffled playlist",
+                                  icon: "shuffle.circle",
+                                  isOn: $smartShuffle)
             }
 
             // Hidden only when there is nothing hidden: a row whose whole subject
@@ -509,6 +515,7 @@ struct PlaybackPane: View {
         }
         .onChange(of: privateSession) { _, on in PrivateSession.set(on) }
         .onChange(of: normalizeVolume) { _, _ in engine.reapplyNormalization() }
+        .onChange(of: smartShuffle) { _, on in if !on { engine.queue.removeSmartRows() } }
         .onAppear {
             privateSession = PrivateSession.isActive
             hiddenCount  = SuggestionFeedback.hiddenSongs.count
