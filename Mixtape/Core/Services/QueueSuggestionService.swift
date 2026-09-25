@@ -80,6 +80,7 @@ public final class QueueSuggestionService: ObservableObject {
     /// going with songs like it. Repeat does suppress it, because repeat is
     /// already an answer to "what plays after the last song".
     private var shouldReplenish: Bool {
+        guard Self.autoplayEnabled else { return false }
         guard !isReplenishing else { return false }
         guard let playing = queue.currentTrack else { return false }   // nothing playing
         // The user cleared the queue while this song was playing: don't undo it.
@@ -90,6 +91,12 @@ public final class QueueSuggestionService: ObservableObject {
     }
 
     private var pendingDepth: Int { queue.remainingRecommendationCount }
+
+    /// Settings ▸ Playback ▸ Autoplay. On unless the user turned it off, which is
+    /// the same default every other player ships.
+    public static var autoplayEnabled: Bool {
+        UserDefaults.standard.object(forKey: "playback.autoplay") as? Bool ?? true
+    }
 
     // MARK: - Replenish
 

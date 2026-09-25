@@ -24,6 +24,22 @@ public enum EqualizerPreset: String, CaseIterable, Identifiable {
     case rock        = "Rock"
     case electronic  = "Electronic"
     case rap         = "Rap"
+    case acoustic      = "Acoustic"
+    case bassReducer   = "Bass Reducer"
+    case classical     = "Classical"
+    case dance         = "Dance"
+    case deep          = "Deep"
+    case jazz          = "Jazz"
+    case latin         = "Latin"
+    case lateNight     = "Late Night"
+    case loudness      = "Loudness"
+    case lounge        = "Lounge"
+    case piano         = "Piano"
+    case pop           = "Pop"
+    case rnb           = "R&B"
+    case smallSpeakers = "Small Speakers"
+    case spokenWord    = "Spoken Word"
+    case trebleReducer = "Treble Reducer"
     case custom      = "Custom"
 
     public var id: String { rawValue }
@@ -40,6 +56,22 @@ public enum EqualizerPreset: String, CaseIterable, Identifiable {
         case .rock:        return [  4,    3,    1,   -1,   -1,    0,    1,    2,    3,    4 ]
         case .electronic:  return [  5,    4,    1,    0,   -2,    1,    0,    1,    3,    5 ]
         case .rap:         return [  6,    5,    2,    0,   -1,    1,    3,    3,    2,    1 ]
+        case .acoustic:      return [  4,    4,    3,    1,    2,    2,    3,    3,    2,    1 ]
+        case .bassReducer:   return [ -6,   -5,   -4,   -2,    0,    0,    0,    0,    0,    0 ]
+        case .classical:     return [  4,    3,    2,    1,   -1,   -1,    0,    2,    3,    4 ]
+        case .dance:         return [  5,    6,    4,    0,    2,    3,    4,    3,    2,    0 ]
+        case .deep:          return [  6,    5,    3,    1,    2,    1,    0,   -2,   -4,   -5 ]
+        case .jazz:          return [  4,    3,    1,    2,   -1,   -1,    0,    1,    3,    4 ]
+        case .latin:         return [  5,    4,    1,    0,   -1,   -1,   -1,    1,    3,    5 ]
+        case .lateNight:     return [ -5,   -4,   -1,    2,    4,    5,    4,    3,    1,    0 ]
+        case .loudness:      return [  6,    5,    0,    0,   -2,    0,   -1,   -4,    5,    2 ]
+        case .lounge:        return [ -3,   -1,    0,    1,    4,    2,    0,   -1,    2,    1 ]
+        case .piano:         return [  2,    1,    0,    2,    3,    1,    2,    4,    3,    2 ]
+        case .pop:           return [ -1,   -1,    0,    2,    4,    4,    2,    0,   -1,   -1 ]
+        case .rnb:           return [  6,    5,    3,   -1,   -2,    2,    3,    3,    4,    5 ]
+        case .smallSpeakers: return [  6,    5,    4,    2,    0,   -1,   -1,    0,    1,    2 ]
+        case .spokenWord:    return [ -4,   -3,    0,    2,    4,    5,    5,    4,    1,   -1 ]
+        case .trebleReducer: return [  0,    0,    0,    0,    0,   -1,   -2,   -4,   -5,   -6 ]
         case .custom:      return nil
         }
     }

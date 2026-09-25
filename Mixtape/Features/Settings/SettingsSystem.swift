@@ -165,6 +165,9 @@ enum SettingsReset {
         "playback.crossfadeMode",
         "playback.crossfadeDuration",
         "playback.crossfadeOnSkip",
+        "playback.normalizeVolume",
+        "playback.trimPadding",
+        "playback.autoplay",
     ]
 
     /// Everything this deliberately leaves alone. Kept as a list because the

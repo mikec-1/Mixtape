@@ -332,6 +332,13 @@ struct PlaybackPane: View {
     @ObservedObject var engine:    PlaybackEngine
     @ObservedObject var equalizer: AudioEqualizer
     @AppStorage("playback.crossfadeOnSkip") private var crossfadeOnSkip = false
+    @AppStorage("playback.normalizeVolume") private var normalizeVolume = true
+    @AppStorage("playback.trimPadding")     private var trimPadding = true
+    @AppStorage("playback.autoplay")        private var autoplay = true
+
+    /// Not `@AppStorage`: a private session is stored as an expiry, so the switch
+    /// reflects "is one running" rather than a saved Bool.
+    @State private var privateSession = PrivateSession.isActive
 
     #if os(iOS)
     @State private var showEqualizer = false
@@ -356,6 +363,13 @@ struct PlaybackPane: View {
             },
             set: { engine.setRate(Float($0.value)) }
         )
+    }
+
+    private var privateSessionSubtitle: String {
+        guard privateSession, let ends = PrivateSession.expiry else {
+            return "Play without it counting toward your history, stats or mixes"
+        }
+        return "Nothing is being logged. Ends at \(ends.formatted(date: .omitted, time: .shortened))."
     }
 
     var body: some View {
@@ -386,6 +400,36 @@ struct PlaybackPane: View {
                                       icon: "forward.end",
                                       isOn: $crossfadeOnSkip)
                 }
+            }
+
+            SettingsGroup(title: "Sound") {
+                SettingsToggleRow(id: "playback.normalizeVolume",
+                                  title: "Normalize Volume",
+                                  subtitle: "Even out the level between songs, so one loud rip doesn't jump out of the queue",
+                                  icon: "waveform",
+                                  isOn: $normalizeVolume)
+                SettingsToggleRow(id: "playback.trimPadding",
+                                  title: "Trim Trailing Silence",
+                                  subtitle: "Skip the dead air some uploads leave after the song has finished",
+                                  icon: "scissors",
+                                  isOn: $trimPadding)
+            }
+
+            SettingsGroup(title: "Queue") {
+                SettingsToggleRow(id: "playback.autoplay",
+                                  title: "Autoplay",
+                                  subtitle: "When a list ends, keep going with songs like the ones you were playing",
+                                  icon: "infinity",
+                                  isOn: $autoplay)
+            }
+
+            SettingsGroup(title: "Privacy",
+                          footer: "A private session ends on its own after six hours.") {
+                SettingsToggleRow(id: "playback.privateSession",
+                                  title: "Private Session",
+                                  subtitle: privateSessionSubtitle,
+                                  icon: "eye.slash",
+                                  isOn: $privateSession)
             }
 
             SettingsGroup(title: "Speed") {
@@ -433,6 +477,9 @@ struct PlaybackPane: View {
             }
             #endif
         }
+        .onChange(of: privateSession) { _, on in PrivateSession.set(on) }
+        .onChange(of: normalizeVolume) { _, _ in engine.reapplyNormalization() }
+        .onAppear { privateSession = PrivateSession.isActive }
         #if os(iOS)
         .sheet(isPresented: $showEqualizer) {
             MixSheet(title: "Equalizer",

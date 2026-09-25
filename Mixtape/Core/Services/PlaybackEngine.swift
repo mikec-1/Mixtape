@@ -65,6 +65,25 @@ public enum CrossfadeMode: String, CaseIterable, Identifiable, Sendable {
 
 // MARK: - Engine
 
+/// Listening that shapes nothing: no play log, no recently played, no scrobble.
+///
+/// Stored as an expiry rather than a flag so it can't quietly swallow a month of
+/// history after being switched on once — the same self-ending window every other
+/// player's private session has.
+public enum PrivateSession {
+    private static let key = "playback.privateSessionUntil"
+    public static let window: TimeInterval = 6 * 3600
+
+    public static var expiry: Date? { UserDefaults.standard.object(forKey: key) as? Date }
+    public static var isActive: Bool { (expiry ?? .distantPast) > Date() }
+
+    public static func set(_ on: Bool) {
+        let defaults = UserDefaults.standard
+        if on { defaults.set(Date().addingTimeInterval(window), forKey: key) }
+        else  { defaults.removeObject(forKey: key) }
+    }
+}
+
 @MainActor
 public final class PlaybackEngine: NSObject, ObservableObject {
 
@@ -386,6 +405,8 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         static let crossfadeMode     = "playback.crossfadeMode"
         static let crossfadeDuration = "playback.crossfadeDuration"
         static let crossfadeOnSkip   = "playback.crossfadeOnSkip"
+        static let trimPadding       = "playback.trimPadding"
+        static let normalizeVolume   = "playback.normalizeVolume"
         static let queueSnapshot     = "playback.queueSnapshot"
     }
 
@@ -450,6 +471,9 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     /// otherwise unchanged. Keeps a couple of seconds of the overrun so a track
     /// whose real ending runs slightly long isn't clipped mid-note.
     private static func trimmed(_ seconds: TimeInterval, canonical: TimeInterval) -> TimeInterval {
+        // Opt-out: a catalogue length can itself be wrong, and when it is, the
+        // trim is what cuts the song short. Defaults to on.
+        guard UserDefaults.standard.object(forKey: DefaultsKey.trimPadding) as? Bool ?? true else { return seconds }
         guard canonical > 30, seconds > canonical + paddingSlack else { return seconds }
         return canonical + 2
     }
@@ -591,7 +615,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     /// at the ramp's current gain, and a ramp step re-applies at the user's current
     /// ceiling.
     private func applyVolume() {
-        let level = volume * fadeGain
+        let level = volume * fadeGain * normalizationGain
         // Before the graph exists, naming `mainMixerNode` would build it — which
         // is the launch cost this lazy path is here to avoid. The value is not
         // lost: `configureGraphIfNeeded` calls this again once there is a mixer.
@@ -600,6 +624,55 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         }
         // Mirror to the remote player so the volume slider also works while streaming.
         remotePlayer?.volume = level
+    }
+
+    // MARK: - Volume normalization
+
+    /// Per-song level correction, linear and never above 1. Meets the user's
+    /// volume and the pause ramp in `applyVolume`.
+    private var normalizationGain: Float = 1
+
+    private static var normalizesVolume: Bool {
+        UserDefaults.standard.object(forKey: DefaultsKey.normalizeVolume) as? Bool ?? true
+    }
+
+    /// ponytail: attenuation only — `outputVolume` and `AVPlayer.volume` both stop
+    /// at 1, so a song quieter than the target stays quiet. Boosting would need a
+    /// limiter on the output, and almost everything in a rip library is *louder*
+    /// than the target, not quieter.
+    private static func attenuation(_ db: Float) -> Float { db >= 0 ? 1 : pow(10, db / 20) }
+
+    /// Point the output at `url`'s measured level. A file nobody has measured yet
+    /// — and a stream, which has no file at all — starts at the library's typical
+    /// correction so the first second isn't a step, and gets measured in the
+    /// background for next time.
+    private func normalize(to url: URL?) {
+        guard Self.normalizesVolume else {
+            normalizationGain = 1
+            applyVolume()
+            return
+        }
+        if let url, let db = LoudnessAnalyzer.cachedGainDB(for: url) {
+            normalizationGain = Self.attenuation(db)
+            applyVolume()
+            return
+        }
+        normalizationGain = Self.attenuation(LoudnessAnalyzer.typicalGainDB)
+        applyVolume()
+        guard let url else { return }
+        let generation = loadGeneration
+        Task { [weak self] in
+            guard let db = await LoudnessAnalyzer.measureGainDB(for: url) else { return }
+            guard let self, self.loadGeneration == generation else { return }
+            self.normalizationGain = Self.attenuation(db)
+            self.applyVolume()
+        }
+    }
+
+    /// Re-read the setting for whatever is playing now, so the Settings switch is
+    /// heard on the current song rather than the next one.
+    public func reapplyNormalization() {
+        normalize(to: playbackSource == .engine ? audioFile?.url : nil)
     }
 
     // MARK: - Public Controls
@@ -823,6 +896,12 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         pausedWhileLoading = false
         state = .playing
         updateNowPlayingRate(playbackRate)
+        // A song that arrived paused (launch restore, or paused mid-fetch) was
+        // never announced, so it would never scrobble. It starts now.
+        if scrobbleStartedAt == nil, let track = queue.currentTrack {
+            scrobbleStartedAt = Date()
+            Task { await LastFmScrobbler.shared.updateNowPlaying(track: track) }
+        }
 
         if fadePhase == .fadingOut {
             // Caught the pause fade before it reached silence, so the node/player
@@ -832,11 +911,27 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             // Fully halted: come up from silence so the restart isn't a click.
             fadeGain = 0
             applyVolume()
+            #if os(iOS)
+            activateAudioSession()
+            #endif
             if playbackSource == .remote { resumeRemoteAtRate() } else { resumePlayback() }
         }
         if playbackSource != .remote { startProgressTimer() }
         startFade(to: 1, over: Self.resumeFadeDuration, phase: .fadingIn)
     }
+
+    #if os(iOS)
+    /// Taking a non-mixable session stops other apps' audio, so this only runs
+    /// when something is about to be heard, never for a paused launch restore.
+    private func activateAudioSession() {
+        do {
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {
+            MixLog.playback.error("[PlaybackEngine] Audio session error: \(error)")
+        }
+    }
+    #endif
 
     /// Seek to `time` seconds. Works while paused or playing.
     /// Implemented by stopping the player node and re-scheduling the file from
@@ -855,7 +950,9 @@ public final class PlaybackEngine: NSObject, ObservableObject {
            let track = queue.currentTrack {
             Task { @MainActor in
                 await loadAndPlay(track: track)
-                seek(to: time)
+                // Only if it loaded: a failed reload leaves this same branch
+                // true, and the retry would reload forever.
+                if audioFile != nil { seek(to: time) }
             }
             return
         }
@@ -871,7 +968,10 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         }
         guard let file = audioFile, fileLengthFrames > 0 else { return }
         cancelCrossfade()
-        let clamped = max(0, min(time, duration))
+        // Stop just short of the end: a seek to exactly `duration` schedules zero
+        // frames, so no completion ever fires and the song sits at its end
+        // instead of advancing.
+        let clamped = max(0, min(time, duration - 0.05))
         let targetFrame = AVAudioFramePosition(clamped * fileSampleRate)
 
         let wasPlaying = (state == .playing)
@@ -888,8 +988,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
 
         currentTime = clamped
 
-        if wasPlaying {
-            startEngineIfNeeded()
+        if wasPlaying, startEngineIfNeeded() {
             playerNode.play()
             isNodePlaying = true
         }
@@ -910,7 +1009,10 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         // no resolver has ever produced is the "queue died in the middle" case:
         // the row is badged in the queue for exactly this reason, and reaching
         // it should cost a line of explanation, not the rest of the session.
-        while let next = queue.advance() {
+        // Bounded: under repeat one/all `advance()` never returns nil, so a queue
+        // with nothing playable left would spin the main actor forever.
+        for _ in 0..<queue.queue.count {
+            guard let next = queue.advance() else { break }
             if UnavailableTracks.shared.contains(next), !canPlayLocally(next) {
                 UnavailableTracks.shared.mark(title: next.identityTitle,
                                               artist: next.artistName, announce: true)
@@ -1252,8 +1354,13 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             state = .stopped
             return
         }
+        // Load suspended: a launch restore used to start the song, announce it to
+        // Last.fm and start the progress timer, then pause it a moment later.
+        // Cleared after, in case the load never reached the file open that
+        // consumes it and the next skip came up silent.
+        pausedWhileLoading = true
         await loadAndPlay(track: track)
-        // loadAndPlay starts playback; immediately pause and seek to saved position.
+        pausedWhileLoading = false
         if duration > 0 {
             seek(to: min(position, duration))
         }
@@ -1450,14 +1557,9 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         // Abort if a newer play() call has already taken over.
         guard loadGeneration == generation else { return }
 
-        // 2. Configure audio session (iOS only).
+        // 2. Claim the audio session, unless this load starts paused.
         #if os(iOS)
-        do {
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
-            try AVAudioSession.sharedInstance().setActive(true)
-        } catch {
-            MixLog.playback.error("[PlaybackEngine] Audio session error: \(error)")
-        }
+        if !pausedWhileLoading { activateAudioSession() }
         #endif
 
         // 3. Open the file, reconnect the graph for its format, schedule & play.
@@ -1491,8 +1593,10 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             connectGraph(for: processingFormat)
 
             scheduleSegment(of: file, startingAtFrame: 0, generation: generation)
+            normalize(to: url)
 
-            guard startEngineIfNeeded() else {
+            // A paused load leaves the engine off; `resume()` starts it.
+            if !startSuspended, !startEngineIfNeeded() {
                 throw NSError(domain: "PlaybackEngine", code: -1,
                               userInfo: [NSLocalizedDescriptionKey: "audio engine wouldn't start"])
             }
@@ -1514,7 +1618,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             // Reset scrobble tracking for the new track and announce "now playing".
             scrobbleStartedAt = startSuspended ? nil : Date()
             didScrobbleCurrent = false
-        rotateHistoryTracking()
+            rotateHistoryTracking()
             if !startSuspended {
                 let nowPlayingTrack = track
                 Task { await LastFmScrobbler.shared.updateNowPlaying(track: nowPlayingTrack) }
@@ -1636,6 +1740,9 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         // Reset and switch to the remote backend.
         teardownRemotePlayer()
         playbackSource = .remote
+        // No file to measure, so a stream gets the library's typical correction —
+        // otherwise a Discover song would jump out against the normalized library.
+        normalize(to: nil)
         currentTime = 0
         duration    = track.duration       // provisional; refined once the item loads
         canonicalDuration  = track.duration
@@ -1643,8 +1750,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         state       = .loading
 
         #if os(iOS)
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
-        try? AVAudioSession.sharedInstance().setActive(true)
+        if !pausedWhileLoading { activateAudioSession() }
         #endif
 
         // Inject auth headers (bearer) so the hosted resolver authorises the stream.
@@ -1740,6 +1846,10 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             // and `play(track:in:)`.
             player.rate = 0
             state = .paused
+            // The previous song's scrobble state would otherwise carry over;
+            // `resume()` starts this one's.
+            scrobbleStartedAt  = nil
+            didScrobbleCurrent = false
             updateNowPlayingRate(0)
             updateNowPlayingInfo(track: track)
             return
@@ -1784,8 +1894,8 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     }
 
     private func resumePlayback() {
-        guard audioFile != nil else { return }
-        startEngineIfNeeded()
+        // play() on a stopped engine raises an ObjC exception.
+        guard audioFile != nil, startEngineIfNeeded() else { return }
         playerNode.play()
         isNodePlaying = true
     }
@@ -1910,6 +2020,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     /// ~90% of a sub-30s song), so only meaningful listens count toward Home and
     /// stats. Fires once per track; the flag resets when a new track loads.
     private func checkHistoryThreshold() {
+        guard !PrivateSession.isActive else { return }
         guard let track = queue.currentTrack else { return }
         // Already logged: just keep the listen time current for the flush.
         if didRecordHistoryCurrent {
@@ -2286,7 +2397,13 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         // Warm the lyrics cache in the background for the incoming track.
         prefetchLyrics(for: next)
 
-        // Equal-power volume ramp.
+        // Equal-power volume ramp. The level correction is a single output gain,
+        // so the two songs can't each have their own during the overlap: it rides
+        // the same ramp, from this song's to the next one's.
+        let fromGain = normalizationGain
+        let toGain = Self.normalizesVolume
+            ? Self.attenuation(LoudnessAnalyzer.cachedGainDB(for: url) ?? LoudnessAnalyzer.typicalGainDB)
+            : 1
         crossfadeTask?.cancel()
         crossfadeTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -2296,6 +2413,8 @@ public final class PlaybackEngine: NSObject, ObservableObject {
                 let t = Float(i) / Float(steps)
                 outgoing.volume = cos(t * .pi / 2)
                 self.playerNode.volume = sin(t * .pi / 2)
+                self.normalizationGain = fromGain + (toGain - fromGain) * t
+                self.applyVolume()
                 try? await Task.sleep(for: .seconds(0.03))
             }
             if Task.isCancelled { return }
@@ -2304,6 +2423,8 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             self.playerNode.volume = 1
             self.outgoingPlayer = nil
             self.isTransitioning = false
+            // Measures the incoming file if the ramp above had to guess at it.
+            self.reapplyNormalization()
         }
     }
 

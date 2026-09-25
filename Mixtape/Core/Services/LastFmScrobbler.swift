@@ -272,7 +272,7 @@ public final class LastFmScrobbler: ObservableObject {
     /// - Parameter startedAt: when the user *began* playing the track. Last.fm
     ///   expects the start timestamp, not the completion time.
     public func scrobble(track: Track, startedAt: Date) async {
-        guard isEnabled, isConfigured else { return }   // inert until configured
+        guard isEnabled, isConfigured, !PrivateSession.isActive else { return }
 
         var params: [String: String] = [
             "method":    "track.scrobble",
@@ -289,7 +289,7 @@ public final class LastFmScrobbler: ObservableObject {
     /// Updates the user's "now playing" status (`track.updateNowPlaying`).
     /// This is a transient status update and is never persisted as a scrobble.
     public func updateNowPlaying(track: Track) async {
-        guard isEnabled, isConfigured else { return }   // inert until configured
+        guard isEnabled, isConfigured, !PrivateSession.isActive else { return }
 
         var params: [String: String] = [
             "method": "track.updateNowPlaying",
