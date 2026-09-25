@@ -46,6 +46,8 @@ public final class PlayHistoryRepository {
         /// Where the play came from. See `QueueSource.historyRef`.
         public let sourceKind: String?
         public let sourceID: String?
+        /// The install that played it. Pulled rows keep the writer's id.
+        public let deviceID: String
     }
 
     /// Returns every retained play event (newest first), for listening-stats
@@ -59,7 +61,7 @@ public final class PlayHistoryRepository {
         }
         return try context.fetch(desc).map {
             PlayRecord(trackID: $0.trackID, playedAt: $0.playedAt, secondsPlayed: $0.secondsPlayed,
-                       sourceKind: $0.sourceKind, sourceID: $0.sourceID)
+                       sourceKind: $0.sourceKind, sourceID: $0.sourceID, deviceID: $0.syncDeviceID)
         }
     }
 
@@ -73,7 +75,7 @@ public final class PlayHistoryRepository {
         desc.fetchOffset = offset
         return try context.fetch(desc).map {
             PlayRecord(trackID: $0.trackID, playedAt: $0.playedAt, secondsPlayed: $0.secondsPlayed,
-                       sourceKind: $0.sourceKind, sourceID: $0.sourceID)
+                       sourceKind: $0.sourceKind, sourceID: $0.sourceID, deviceID: $0.syncDeviceID)
         }
     }
 
@@ -103,6 +105,13 @@ public final class PlayHistoryRepository {
             return try context.fetch(desc).first?.playedAt
         }
         return TrackPlays(count: count, first: try edge(.forward), last: try edge(.reverse))
+    }
+
+    /// Every song played before `date`, ids only. What makes a song in a period new to you.
+    public func fetchTrackIDs(before date: Date) throws -> Set<UUID> {
+        var desc = FetchDescriptor<PlayHistoryEntity>(predicate: #Predicate { $0.playedAt < date })
+        desc.propertiesToFetch = [\.trackID]
+        return Set(try context.fetch(desc).map(\.trackID))
     }
 
     // MARK: - Mutate

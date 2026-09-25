@@ -851,6 +851,25 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
         #endif
     }
 
+    /// Every install's name on this account, by device id, for the stats page's device
+    /// split. Empty offline or signed out, and the split falls back to "Other devices".
+    public func deviceNames() async -> [String: String] {
+        guard let userID = currentUser?.id else { return [:] }
+        struct Row: Decodable { let device_id: String; let name: String? }
+        do {
+            let rows: [Row] = try await client.from("devices")
+                .select("device_id,name")
+                .eq("user_id", value: userID)
+                .execute()
+                .value
+            return Dictionary(rows.compactMap { row in row.name.map { (row.device_id, $0) } },
+                              uniquingKeysWith: { first, _ in first })
+        } catch {
+            MixLog.sync.error("device names fetch failed: \(error)")
+            return [:]
+        }
+    }
+
     private static var appVersion: String {
         (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "—"
     }

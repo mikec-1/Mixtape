@@ -6,6 +6,7 @@
 // Period-switchable (30 days / this year / all time).
 
 import SwiftUI
+import Charts
 
 public struct ListeningStatsView: View {
 
@@ -14,6 +15,8 @@ public struct ListeningStatsView: View {
     @State private var period: StatsPeriod = .allTime
     @State private var stats: ListeningStats = .empty
     @State private var showHistory = false
+    /// Install names by device id, for the device split. They live on the server.
+    @State private var deviceNames: [String: String] = [:]
 
     public init() {}
 
@@ -24,6 +27,7 @@ public struct ListeningStatsView: View {
             content
         }
         .onAppear(perform: recompute)
+        .task { deviceNames = await deps.syncService.deviceNames() }
         .onChange(of: period) { _, _ in
             Haptics.play(.selection)
             recompute()
@@ -50,11 +54,19 @@ public struct ListeningStatsView: View {
 
             if stats.hasData {
                 headlineGrid
+                overTimeCard
+                heatmapCard
                 if let busiest = stats.busiestHour {
                     byHourCard(busiestHour: busiest)
                 }
                 if !stats.topTracks.isEmpty { topTracksSection }
                 if !stats.topArtists.isEmpty { topArtistsSection }
+                if !stats.topAlbums.isEmpty { topAlbumsSection }
+                if !stats.topGenres.isEmpty {
+                    barsCard(title: "Genres", rows: stats.topGenres.map { ($0.name, $0.playCount) })
+                }
+                // One device is a single full bar, which says nothing.
+                if deviceRows.count > 1 { barsCard(title: "Devices", rows: deviceRows) }
                 historyLink
             } else {
                 EmptyStateView(
@@ -90,6 +102,14 @@ public struct ListeningStatsView: View {
             statCard(value: "\(stats.totalPlays)", label: "Plays", icon: MixtapeIcons.play)
             statCard(value: hoursLabel, label: "Listened", icon: "hourglass")
             statCard(value: "\(stats.uniqueTracks)", label: "Unique tracks", icon: MixtapeIcons.track)
+            if let new = stats.newTracks {
+                let rate = Int((Double(new) / Double(max(stats.uniqueTracks, 1)) * 100).rounded())
+                statCard(value: "\(new)", label: "New to you, \(rate)%", icon: "sparkles")
+            } else {
+                statCard(value: "\(stats.playsByDay.count)", label: "Days played", icon: "calendar")
+            }
+            statCard(value: "\(stats.currentStreak)", label: "Day streak", icon: "flame")
+            statCard(value: "\(stats.bestStreak)", label: "Best streak", icon: "trophy")
         }
     }
 
@@ -110,6 +130,151 @@ public struct ListeningStatsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
         .background(Color.mixSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    // MARK: Chart cards
+
+    /// The cards' shared chrome: a title, a detail on the right, the surface.
+    private func chartCard<Content: View>(title: String, detail: String? = nil,
+                                          @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text(title)
+                    .font(.mixBodyBold)
+                    .foregroundStyle(Color.mixTextPrimary)
+                Spacer()
+                if let detail {
+                    Text(detail)
+                        .font(.mixLabel)
+                        .foregroundStyle(Color.mixTextSecondary)
+                }
+            }
+            content()
+        }
+        .padding(16)
+        .background(Color.mixSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    /// Plays per day, week or month across the period: the one chart with time on it.
+    private var overTimeCard: some View {
+        let detail = switch stats.seriesUnit {
+        case .day:        "Per day"
+        case .weekOfYear: "Per week"
+        default:          "Per month"
+        }
+        return chartCard(title: "Listening over time", detail: detail) {
+            Chart(stats.series) { point in
+                BarMark(x: .value("Date", point.start, unit: stats.seriesUnit),
+                        y: .value("Plays", point.plays))
+                    .foregroundStyle(Color.mixPrimary)
+                    .cornerRadius(2)
+            }
+            .frame(height: 160)
+        }
+    }
+
+    /// A square per day, weeks as columns, stronger for more plays. Drawn by hand like
+    /// the by-hour bars, since Swift Charts has no calendar grid. At most a year.
+    private var heatmapCard: some View {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let yearAgo = cal.date(byAdding: .weekOfYear, value: -52, to: today) ?? today
+        let first = cal.startOfDay(for: max(stats.period.startDate() ?? stats.firstPlay ?? today, yearAgo))
+        let weekStart = cal.dateInterval(of: .weekOfYear, for: first)?.start ?? first
+        let lead = cal.dateComponents([.day], from: weekStart, to: first).day ?? 0
+        let days = (cal.dateComponents([.day], from: first, to: today).day ?? 0) + 1
+        let columns = max(1, (lead + days + 6) / 7)
+        let peak = max(stats.playsByDay.values.max() ?? 1, 1)
+        let active = stats.playsByDay.keys.filter { $0 >= first }.count
+        return chartCard(title: "Days you listened", detail: "\(active) of \(days)") {
+            Canvas { context, size in
+                let gap: CGFloat = 2
+                let side = min((size.width - gap * CGFloat(columns - 1)) / CGFloat(columns),
+                               (size.height - gap * 6) / 7)
+                for offset in 0..<days {
+                    guard let day = cal.date(byAdding: .day, value: offset, to: first) else { continue }
+                    let plays = stats.playsByDay[cal.startOfDay(for: day)] ?? 0
+                    let slot = lead + offset
+                    let rect = CGRect(x: CGFloat(slot / 7) * (side + gap), y: CGFloat(slot % 7) * (side + gap),
+                                      width: side, height: side)
+                    let fill = plays == 0
+                        ? Color.mixSurface2
+                        : Color.mixPrimary.opacity(0.3 + 0.7 * Double(plays) / Double(peak))
+                    context.fill(Path(roundedRect: rect, cornerRadius: min(2, side / 4)), with: .color(fill))
+                }
+            }
+            .aspectRatio(CGFloat(columns) / 7, contentMode: .fit)
+            .frame(maxHeight: 7 * 16 + 6 * 2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement()
+            .accessibilityLabel("Listened on \(active) of the last \(days) days")
+        }
+    }
+
+    /// A short ranked list as horizontal bars: genres, devices.
+    private func barsCard(title: String, rows: [(name: String, plays: Int)]) -> some View {
+        chartCard(title: title) {
+            Chart(Array(rows.enumerated()), id: \.offset) { item in
+                BarMark(x: .value("Plays", item.element.plays), y: .value(title, item.element.name))
+                    .foregroundStyle(Color.mixPrimary)
+                    .cornerRadius(3)
+                    .annotation(position: .trailing) {
+                        Text("\(item.element.plays)")
+                            .font(.mixCaption)
+                            .foregroundStyle(Color.mixTextSecondary)
+                    }
+            }
+            .chartXAxis(.hidden)
+            .frame(height: CGFloat(rows.count) * 32)
+        }
+    }
+
+    /// Plays per install, named from the `devices` table. An id with no name (a device
+    /// since removed, or offline) folds into "Other devices".
+    private var deviceRows: [(name: String, plays: Int)] {
+        var named: [String: Int] = [:]
+        for (id, plays) in stats.devicePlays {
+            let name = id == AppDependencies.deviceID
+                ? SupabaseSyncService.deviceName
+                : deviceNames[id] ?? "Other devices"
+            named[name, default: 0] += plays
+        }
+        return named.sorted { $0.value > $1.value }.map { ($0.key, $0.value) }
+    }
+
+    // MARK: Top albums
+
+    private var topAlbumsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Top albums")
+                .font(.mixTitle2)
+                .foregroundStyle(Color.mixTextPrimary)
+            ForEach(Array(stats.topAlbums.enumerated()), id: \.element.id) { index, item in
+                rankedRow(rank: index + 1, artwork: item.artworkData, placeholder: MixtapeIcons.album,
+                          corner: 6, title: item.title, subtitle: item.artist, count: item.playCount)
+            }
+        }
+    }
+
+    /// ▲3 / ▼1 / NEW against the period before. Nothing for a row holding its place.
+    @ViewBuilder
+    private func moveBadge(_ move: RankMove) -> some View {
+        switch move {
+        case .new:
+            Text("NEW")
+                .foregroundStyle(Color.mixPrimary)
+                .accessibilityLabel("New entry")
+        case .moved(let places) where places > 0:
+            Text("▲\(places)")
+                .foregroundStyle(Color.mixSuccess)
+                .accessibilityLabel("Up \(places)")
+        case .moved(let places) where places < 0:
+            Text("▼\(-places)")
+                .foregroundStyle(Color.mixDestructive)
+                .accessibilityLabel("Down \(-places)")
+        case .moved:
+            EmptyView()
+        }
     }
 
     // MARK: By-hour chart
@@ -173,7 +338,8 @@ public struct ListeningStatsView: View {
                         corner: 6,
                         title: item.track.title,
                         subtitle: item.track.artistName,
-                        count: item.playCount
+                        count: item.playCount,
+                        movement: item.movement
                     )
                 }
                 .buttonStyle(.plain).mixHandCursor()
@@ -196,7 +362,8 @@ public struct ListeningStatsView: View {
                     corner: 22,
                     title: item.name,
                     subtitle: nil,
-                    count: item.playCount
+                    count: item.playCount,
+                    movement: item.movement
                 )
             }
         }
@@ -211,13 +378,22 @@ public struct ListeningStatsView: View {
         corner: CGFloat,
         title: String,
         subtitle: String?,
-        count: Int
+        count: Int,
+        movement: RankMove? = nil
     ) -> some View {
         HStack(spacing: 12) {
-            Text("\(rank)")
-                .font(.mixBodyBold)
-                .foregroundStyle(Color.mixTextTertiary)
-                .frame(width: 22, alignment: .center)
+            VStack(spacing: 1) {
+                Text("\(rank)")
+                    .font(.mixBodyBold)
+                    .foregroundStyle(Color.mixTextTertiary)
+                if let movement {
+                    moveBadge(movement)
+                        .font(.system(.caption2, weight: .bold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                }
+            }
+            .frame(width: 30, alignment: .center)
             ArtworkThumbnail(data: artwork, size: 44, cornerRadius: corner, placeholder: placeholder)
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)

@@ -46,6 +46,20 @@ public enum StatsPeriod: String, CaseIterable, Identifiable, Sendable {
             return nil
         }
     }
+
+    /// Start of the period before this one, which the ▲/▼ badges measure against.
+    /// Nil for all-time: nothing comes before it.
+    func previousStartDate(now: Date = Date(), calendar: Calendar = .current) -> Date? {
+        switch self {
+        case .last30Days:
+            return calendar.date(byAdding: .day, value: -60, to: now)
+        case .thisYear:
+            return startDate(now: now, calendar: calendar)
+                .flatMap { calendar.date(byAdding: .year, value: -1, to: $0) }
+        case .allTime:
+            return nil
+        }
+    }
 }
 
 // MARK: - Result types
@@ -55,12 +69,15 @@ public struct ArtistStat: Identifiable, Sendable {
     public let name: String
     public let playCount: Int
     public let artworkData: Data?
+    /// Against the period before. Nil when there's nothing to compare with.
+    public var movement: RankMove? = nil
 }
 
 public struct TrackStat: Identifiable, Sendable {
     public var id: UUID { track.id }
     public let track: Track
     public let playCount: Int
+    public var movement: RankMove? = nil
 }
 
 /// Where one artist sits in the account's own listening. About the user, not the
@@ -101,6 +118,21 @@ public struct HistoryPlay: Identifiable, Sendable {
     public let source: String?
 }
 
+public struct AlbumStat: Identifiable, Sendable {
+    public let id: String          // folded title|lead artist: two records can share a title
+    public let title: String
+    public let artist: String
+    public let playCount: Int
+    public let artworkData: Data?
+}
+
+/// A name and how often it played. Genres.
+public struct CountStat: Identifiable, Sendable {
+    public let id: String
+    public let name: String
+    public let playCount: Int
+}
+
 public struct ListeningStats: Sendable {
     public let period: StatsPeriod
     public let totalPlays: Int
@@ -111,11 +143,26 @@ public struct ListeningStats: Sendable {
     public let busiestHour: Int?            // 0...23
     public let playsByHour: [Int]           // 24 buckets
     public let firstPlay: Date?
+    public let topAlbums: [AlbumStat]
+    public let topGenres: [CountStat]
+    /// Plays per install id. Naming them is the view's job: names live on the server.
+    public let devicePlays: [String: Int]
+    /// Listening over time, one point per `seriesUnit`.
+    public let series: [PlayPoint]
+    public let seriesUnit: Calendar.Component
+    /// Plays per day (keyed by start of day), for the heatmap.
+    public let playsByDay: [Date: Int]
+    public let currentStreak: Int
+    public let bestStreak: Int
+    /// Songs whose first-ever play is in this period. Nil for all-time, where every song is.
+    public let newTracks: Int?
 
     public static let empty = ListeningStats(
         period: .allTime, totalPlays: 0, uniqueTracks: 0, estimatedMinutes: 0,
         topTracks: [], topArtists: [],
-        busiestHour: nil, playsByHour: Array(repeating: 0, count: 24), firstPlay: nil
+        busiestHour: nil, playsByHour: Array(repeating: 0, count: 24), firstPlay: nil,
+        topAlbums: [], topGenres: [], devicePlays: [:], series: [], seriesUnit: .day,
+        playsByDay: [:], currentStreak: 0, bestStreak: 0, newTracks: nil
     )
 
     public var hasData: Bool { totalPlays > 0 }
@@ -194,15 +241,14 @@ public final class ListeningStatsService {
     }
 
     private func computeBody(period: StatsPeriod, now: Date) -> ListeningStats {
-        // Two SwiftData fetches and then pure in-memory work, spanned apart
-        // because the cost is lopsided in a way the total hides: one call in
-        // seven measured 746 ms and the rest were single digits. That is the
-        // shape of a cold fetch, not of the loops below — and `library.track(id:)`
-        // is already an O(1) index lookup, so the loops were never the suspect
-        // they look like.
-        let plays = mixMainActivity("stats-compute ▸ fetch-plays") {
-            (try? history.fetchAllPlays(since: period.startDate(now: now, calendar: calendar))) ?? []
+        // Fetches are spanned apart from the in-memory work: a cold fetch is the slow part.
+        let start = period.startDate(now: now, calendar: calendar)
+        let previousStart = period.previousStartDate(now: now, calendar: calendar)
+        // One fetch covers this period and the one before, which only says what moved.
+        let rows = mixMainActivity("stats-compute ▸ fetch-plays") {
+            (try? history.fetchAllPlays(since: previousStart ?? start)) ?? []
         }
+        let plays = start.map { s in rows.filter { $0.playedAt >= s } } ?? rows
         guard !plays.isEmpty else { return ListeningStats.empty }
 
         // Resolve a play's track against the library first, then the online-track
@@ -212,15 +258,18 @@ public final class ListeningStatsService {
         }
         func resolve(_ id: UUID) -> Track? { library.track(id: id) ?? snapshotMap[id] }
 
-        // Per-track play counts
         var countByTrack: [UUID: Int] = [:]
         var playsByHour = Array(repeating: 0, count: 24)
+        var playsByDay: [Date: Int] = [:]
+        var devicePlays: [String: Int] = [:]
         var estimatedSeconds: TimeInterval = 0
 
         for play in plays {
             countByTrack[play.trackID, default: 0] += 1
             let hour = calendar.component(.hour, from: play.playedAt)
             if hour >= 0 && hour < 24 { playsByHour[hour] += 1 }
+            playsByDay[calendar.startOfDay(for: play.playedAt), default: 0] += 1
+            devicePlays[play.deviceID, default: 0] += 1
             // The real listen when the play recorded one; rows written before
             // the engine reported it, and plays the app never finalised, fall
             // back to the track's full length.
@@ -231,46 +280,108 @@ public final class ListeningStatsService {
             }
         }
 
-        // Top tracks (resolve against library; drop tracks no longer present)
-        let topTracks: [TrackStat] = countByTrack
-            .compactMap { id, count -> TrackStat? in
-                guard let track = resolve(id) else { return nil }
-                return TrackStat(track: track, playCount: count)
-            }
-            .sorted { $0.playCount > $1.playCount }
-            .prefix(10)
-            .map { $0 }
+        // The period before, counted the same way. Nothing in it means no badges,
+        // rather than every row reading NEW.
+        var previousByTrack: [UUID: Int] = [:]
+        if let start, previousStart != nil {
+            for row in rows where row.playedAt < start { previousByTrack[row.trackID, default: 0] += 1 }
+        }
+        let compare = !previousByTrack.isEmpty
 
-        // Top artists (group resolved tracks by artist name)
-        // The cover is carried as a track id rather than bytes: this loop runs
-        // over every song ever played, and only ten of them end up on screen.
-        var artistCount: [String: (name: String, count: Int, cover: UUID?)] = [:]
+        // Most plays first, ties broken by key so equal counts can't swap places between
+        // the two periods and show as movement.
+        func ranked<K>(_ counts: [K: Int], _ tie: (K) -> String) -> [K] {
+            counts.sorted { $0.value != $1.value ? $0.value > $1.value : tie($0.key) < tie($1.key) }
+                .map(\.key)
+        }
+
+        // Top tracks (drop songs no longer present)
+        func trackOrder(_ counts: [UUID: Int]) -> [UUID] {
+            ranked(counts.filter { resolve($0.key) != nil }) { $0.uuidString }
+        }
+        let tracksNow = Array(trackOrder(countByTrack).prefix(10))
+        let trackMoves = compare
+            ? ListeningTrends.moves(current: tracksNow, previous: trackOrder(previousByTrack)) : [:]
+        let topTracks: [TrackStat] = tracksNow.compactMap { id in
+            resolve(id).map { TrackStat(track: $0, playCount: countByTrack[id] ?? 0, movement: trackMoves[id]) }
+        }
+
+        // Artists, albums and genres are read off each song once, not once per play.
+        // The cover is carried as a track id rather than bytes: this runs over every
+        // song ever played, and only ten of them end up on screen.
+        typealias Group = (name: String, detail: String, count: Int, cover: UUID?)
+        func add(_ key: String, _ name: String, _ detail: String, _ count: Int, _ cover: UUID,
+                 to groups: inout [String: Group]) {
+            var entry = groups[key] ?? (name, detail, 0, nil)
+            entry.count += count
+            if entry.cover == nil { entry.cover = cover }
+            groups[key] = entry
+        }
         // Each credited artist counted separately: "Dave, Stormzy" is two
         // artists, and bucketing it whole both hid them from the stats and fed
         // the recommendation seeds a name no catalogue can resolve.
+        func artistGroups(_ counts: [UUID: Int]) -> [String: Group] {
+            var out: [String: Group] = [:]
+            for (id, count) in counts {
+                guard let track = resolve(id) else { continue }
+                for name in ImportService.creditedArtists(from: track.artistName) {
+                    add(name.lowercased(), name, "", count, track.id, to: &out)
+                }
+            }
+            return out
+        }
+        var albums: [String: Group] = [:]
+        var genres: [String: Group] = [:]
         for (id, count) in countByTrack {
             guard let track = resolve(id) else { continue }
-            for name in ImportService.creditedArtists(from: track.artistName) {
-                let key = name.lowercased()
-                var entry = artistCount[key] ?? (name, 0, nil)
-                entry.count += count
-                if entry.cover == nil { entry.cover = track.id }
-                artistCount[key] = entry
+            // Title and lead artist: two records sharing a title are different albums.
+            let lead = ImportService.creditedArtists(from: track.artistName).first ?? track.artistName
+            if !track.albumTitle.isEmpty, track.albumTitle != "Unknown Album" {
+                add("\(track.albumTitle.lowercased())|\(lead.lowercased())",
+                    track.albumTitle, lead, count, track.id, to: &albums)
+            }
+            if let genre = track.genre?.trimmingCharacters(in: .whitespacesAndNewlines), !genre.isEmpty {
+                add(genre.lowercased(), genre, "", count, track.id, to: &genres)
             }
         }
-        let topArtists: [ArtistStat] = artistCount
-            .sorted { $0.value.count > $1.value.count }
-            .prefix(10)
-            .map { entry in
-                ArtistStat(id: entry.key,
-                           name: entry.value.name,
-                           playCount: entry.value.count,
-                           artworkData: entry.value.cover
-                               .flatMap { ArtworkProvider.shared.data(for: .track($0)) })
+        func cover(_ group: Group) -> Data? {
+            group.cover.flatMap { ArtworkProvider.shared.data(for: .track($0)) }
+        }
+
+        let artists = artistGroups(countByTrack)
+        let artistsNow = Array(ranked(artists.mapValues { $0.count }) { $0 }.prefix(10))
+        let artistMoves = compare
+            ? ListeningTrends.moves(current: artistsNow,
+                                    previous: ranked(artistGroups(previousByTrack).mapValues { $0.count }) { $0 })
+            : [:]
+        let topArtists: [ArtistStat] = artistsNow.compactMap { key in
+            artists[key].map { ArtistStat(id: key, name: $0.name, playCount: $0.count,
+                                          artworkData: cover($0), movement: artistMoves[key]) }
+        }
+        let topAlbums: [AlbumStat] = ranked(albums.mapValues { $0.count }) { $0 }.prefix(10).compactMap { key in
+            albums[key].map { AlbumStat(id: key, title: $0.name, artist: $0.detail,
+                                        playCount: $0.count, artworkData: cover($0)) }
+        }
+        let topGenres: [CountStat] = ranked(genres.mapValues { $0.count }) { $0 }.prefix(5).compactMap { key in
+            genres[key].map { CountStat(id: key, name: $0.name, playCount: $0.count) }
+        }
+
+        // Discovery: songs in this period that had never played before it.
+        let newTracks: Int? = start.map { s in
+            let before = mixMainActivity("stats-compute ▸ fetch-earlier-ids") {
+                (try? history.fetchTrackIDs(before: s)) ?? []
             }
+            return Set(countByTrack.keys).subtracting(before).count
+        }
 
         let busiestHour = playsByHour.enumerated().max(by: { $0.element < $1.element })
             .flatMap { $0.element > 0 ? $0.offset : nil }
+        let firstPlay = plays.last?.playedAt   // plays sorted newest-first
+        let seriesStart = start ?? firstPlay ?? now
+        let unit = ListeningTrends.bucketUnit(from: seriesStart, to: now)
+        // ponytail: streaks only see this period's days, so "30 Days" caps a longer run
+        // at 30. Counting the current streak off the whole log needs its own day fetch.
+        let streaks = ListeningTrends.streaks(days: Set(playsByDay.keys), today: now, calendar: calendar)
 
         return ListeningStats(
             period: period,
@@ -281,7 +392,17 @@ public final class ListeningStatsService {
             topArtists: topArtists,
             busiestHour: busiestHour,
             playsByHour: playsByHour,
-            firstPlay: plays.last?.playedAt   // plays sorted newest-first
+            firstPlay: firstPlay,
+            topAlbums: topAlbums,
+            topGenres: topGenres,
+            devicePlays: devicePlays,
+            series: ListeningTrends.series(playsByDay: playsByDay, from: seriesStart, to: now,
+                                           unit: unit, calendar: calendar),
+            seriesUnit: unit,
+            playsByDay: playsByDay,
+            currentStreak: streaks.current,
+            bestStreak: streaks.best,
+            newTracks: newTracks
         )
     }
 
