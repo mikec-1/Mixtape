@@ -114,6 +114,24 @@ public final class PlayHistoryRepository {
         return Set(try context.fetch(desc).map(\.trackID))
     }
 
+    /// Track ids played in `interval`, newest first. What a monthly tape is ranked from.
+    public func fetchTrackIDs(in interval: DateInterval) throws -> [UUID] {
+        let start = interval.start, end = interval.end
+        var desc = FetchDescriptor<PlayHistoryEntity>(
+            predicate: #Predicate { $0.playedAt >= start && $0.playedAt < end },
+            sortBy: [SortDescriptor(\.playedAt, order: .reverse)]
+        )
+        desc.propertiesToFetch = [\.trackID]
+        return try context.fetch(desc).map(\.trackID)
+    }
+
+    /// The oldest retained play, or nil with no history.
+    public func firstPlayDate() throws -> Date? {
+        var desc = FetchDescriptor<PlayHistoryEntity>(sortBy: [SortDescriptor(\.playedAt)])
+        desc.fetchLimit = 1
+        return try context.fetch(desc).first?.playedAt
+    }
+
     // MARK: - Mutate
 
     /// Records a newly played track and prunes old entries beyond the history

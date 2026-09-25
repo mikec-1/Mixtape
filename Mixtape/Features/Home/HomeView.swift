@@ -646,7 +646,10 @@ public struct HomeSections: View {
             guard bands.contains(.smart) else { return }
             let history = PlayHistoryRepository()
             let service = smartService
+            // A new month, or history synced in from before, needs its tape first.
+            service.ensureMonthTapes(history: history)
             allSmartLists = service.playlists.compactMap { playlist in
+                guard !SmartPlaylistService.isArchivedTape(playlist) else { return nil }
                 let tracks = service.resolve(playlist, using: library, history: history)
                 // A rule that can't fill a card isn't a playlist yet. A "Most
                 // Played" of one song was the complaint; the floor applies to
@@ -792,8 +795,12 @@ public struct HomeSections: View {
         smartShelf(title: "Your smart playlists", entries: mySmartLists, showsCreate: true)
     }
 
-    /// The five the app ships, in seed order.
-    private var smartLists: [SmartEntry] { allSmartLists.filter { SmartPlaylistService.isBuiltIn($0.playlist) } }
+    /// The app's own: the monthly tapes, newest first, then the five it ships in seed order.
+    private var smartLists: [SmartEntry] {
+        let builtIn = allSmartLists.filter { SmartPlaylistService.isBuiltIn($0.playlist) }
+        return builtIn.filter { $0.playlist.rule.tapeStart != nil }.reversed()
+            + builtIn.filter { $0.playlist.rule.tapeStart == nil }
+    }
     private var mySmartLists: [SmartEntry] { allSmartLists.filter { !SmartPlaylistService.isBuiltIn($0.playlist) } }
 
     private func smartShelf(title: String, entries: [SmartEntry], showsCreate: Bool = false) -> some View {

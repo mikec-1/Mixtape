@@ -50,6 +50,13 @@ struct ListeningTrendsCheck {
         assert(moves["z"] == .new)
         assert(moves["b"] == .moved(-2))
 
+        // Tapes: count first, then the song played last; months cross a year end.
+        let tape = ListeningTrends.tapeOrder(["x", "y", "z", "y", "x", "w", "y"])
+        assert(tape == ["y", "x", "z", "w"], "\(tape)")
+        let months = ListeningTrends.months(from: day(2025, 11, 30), to: day(2026, 2, 1), calendar: cal)
+        assert(months.map { "\($0.year)-\($0.month)" } == ["2025-11", "2025-12", "2026-1", "2026-2"], "\(months)")
+        assert(ListeningTrends.months(from: day(2026, 9, 1), to: day(2026, 9, 25), calendar: cal).count == 1)
+
         print("listening-trends-check: all passed")
     }
 }

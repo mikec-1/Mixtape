@@ -39,6 +39,7 @@ public final class SmartPlaylistService: ObservableObject {
             claimUnownedRows()
             seedDefaultsIfNeeded()
             refresh()
+            ensureMonthTapes(history: PlayHistoryRepository())
         }
     }
 
@@ -122,6 +123,10 @@ public final class SmartPlaylistService: ObservableObject {
             predicate: #Predicate { $0.id == id }
         )
         if let entity = try? context.fetch(desc).first {
+            // Remembered, or `ensureMonthTapes` would make it again.
+            if case .monthTape(let year, let month) = SmartPlaylist.decodeRule(entity.ruleData) {
+                UserDefaults.standard.set(deletedTapes + ["\(year)-\(month)"], forKey: deletedTapesKey)
+            }
             context.delete(entity)
             try? context.save()
         }
@@ -177,6 +182,14 @@ public final class SmartPlaylistService: ObservableObject {
             let recentIDs = Set(recentlyPlayedIDs(history: history, since: cutoff))
             return dealt(tracks.filter { library.isFavourited(trackID: $0.id) && !recentIDs.contains($0.id) },
                          for: playlist)
+
+        case .monthTape:
+            guard let start = playlist.rule.tapeStart,
+                  let month = Calendar.current.dateInterval(of: .month, for: start),
+                  let ids = try? history?.fetchTrackIDs(in: month) else { return [] }
+            return Array(ListeningTrends.tapeOrder(ids).lazy
+                .compactMap { library.track(id: $0) }
+                .prefix(SmartPlaylistRule.tapeLength))
 
         case .fieldContains(let field, let value):
             let needle = value.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -280,7 +293,47 @@ public final class SmartPlaylistService: ObservableObject {
     /// which is the harmless direction to be wrong in — it only decides which
     /// shelf the card sits on.
     public static func isBuiltIn(_ playlist: SmartPlaylist) -> Bool {
-        defaultRules.contains { $0.0 == playlist.name }
+        if case .monthTape = playlist.rule { return true }
+        return defaultRules.contains { $0.0 == playlist.name }
+    }
+
+    // MARK: - Monthly tapes
+
+    /// Tapes before last month's are the archive, not Home. Checked before resolving,
+    /// since there's one per month.
+    public static func isArchivedTape(_ playlist: SmartPlaylist, now: Date = Date()) -> Bool {
+        guard let start = playlist.rule.tapeStart else { return false }
+        return (Calendar.current.dateComponents([.month], from: start, to: now).month ?? 0) > 1
+    }
+
+    private var deletedTapesKey: String { "smartPlaylists.deletedTapes.\(currentUserID ?? "")" }
+    private var deletedTapes: [String] { UserDefaults.standard.stringArray(forKey: deletedTapesKey) ?? [] }
+
+    /// A tape for every month since the oldest play, so history that syncs in later
+    /// gets its months too. Existing and deleted months are left alone.
+    public func ensureMonthTapes(history: PlayHistoryRepository) {
+        guard let owner = currentUserID, let first = try? history.firstPlayDate() else { return }
+        let have = Set(playlists.map(\.rule))
+        let deleted = Set(deletedTapes)
+        var added = false
+        for (year, month) in ListeningTrends.months(from: first, to: Date(), calendar: .current) {
+            let rule = SmartPlaylistRule.monthTape(year: year, month: month)
+            guard !have.contains(rule), !deleted.contains("\(year)-\(month)"),
+                  let start = rule.tapeStart else { continue }
+            // Dated to its month, so tapes sort in calendar order.
+            context.insert(SmartPlaylistEntity(
+                id:          UUID(),
+                name:        "\(start.formatted(.dateTime.month(.wide))) Tape",
+                iconName:    rule.defaultIcon,
+                ruleData:    SmartPlaylist(name: "", rule: rule).encodedRule(),
+                dateCreated: start,
+                ownerID:     owner
+            ))
+            added = true
+        }
+        guard added else { return }
+        try? context.save()
+        refresh()
     }
 
     private static let defaultsGeneration = 2

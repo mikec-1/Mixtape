@@ -173,7 +173,8 @@ public struct SmartPlaylistCover: View {
         // nothing about the rule and make every one of these look like every
         // other one. The colour is derived from the id the way a mix's is
         // (`MixCoverStyle`), so a list keeps its colour everywhere it appears.
-        let accent = MixCoverStyle.color(for: playlist.id.uuidString)
+        let tape = playlist.rule.tapeStart
+        let accent = MixCoverStyle.color(for: tape.map { "\($0)" } ?? playlist.id.uuidString)
         RoundedRectangle(cornerRadius: size * 0.06, style: .continuous)
             .fill(
                 LinearGradient(colors: [accent.opacity(0.95), accent.opacity(0.55)],
@@ -181,10 +182,26 @@ public struct SmartPlaylistCover: View {
             )
             .frame(width: size, height: size)
             .overlay {
-                Image(systemName: playlist.iconName)
-                    .font(.system(size: size * 0.34, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .shadow(color: .black.opacity(0.25), radius: size * 0.03, y: size * 0.01)
+                // A tape wears its month: it's a stretch of time, not the top artist.
+                Group {
+                    if let tape {
+                        VStack(spacing: 0) {
+                            Text(tape.formatted(.dateTime.month(.abbreviated)).uppercased())
+                                .font(.system(size: size * 0.26, weight: .heavy))
+                            Text(tape.formatted(.dateTime.year()))
+                                .font(.system(size: size * 0.12, weight: .semibold))
+                                .opacity(0.85)
+                        }
+                        .minimumScaleFactor(0.5)
+                        .lineLimit(1)
+                        .padding(size * 0.08)
+                    } else {
+                        Image(systemName: playlist.iconName)
+                            .font(.system(size: size * 0.34, weight: .semibold))
+                    }
+                }
+                .foregroundStyle(.white)
+                .shadow(color: .black.opacity(0.25), radius: size * 0.03, y: size * 0.01)
             }
     }
 }

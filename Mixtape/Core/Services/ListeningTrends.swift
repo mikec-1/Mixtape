@@ -85,4 +85,32 @@ public enum ListeningTrends {
         }
         return out
     }
+
+    /// A monthly tape's order: most plays first, ties to whichever was played last.
+    /// `idsNewestFirst` is the month's plays as history returns them.
+    public static func tapeOrder<Key: Hashable>(_ idsNewestFirst: [Key]) -> [Key] {
+        var counts: [Key: Int] = [:]
+        var lastPlayed: [Key] = []
+        for id in idsNewestFirst {
+            if counts[id] == nil { lastPlayed.append(id) }
+            counts[id, default: 0] += 1
+        }
+        return lastPlayed.enumerated()
+            .sorted { (counts[$0.element]!, -$0.offset) > (counts[$1.element]!, -$1.offset) }
+            .map(\.element)
+    }
+
+    /// Every calendar month from `first`'s through `now`'s, oldest first.
+    public static func months(from first: Date, to now: Date,
+                              calendar: Calendar) -> [(year: Int, month: Int)] {
+        guard var cursor = calendar.dateInterval(of: .month, for: first)?.start else { return [] }
+        var out: [(year: Int, month: Int)] = []
+        while cursor <= now {
+            let c = calendar.dateComponents([.year, .month], from: cursor)
+            out.append((c.year!, c.month!))
+            guard let next = calendar.date(byAdding: .month, value: 1, to: cursor) else { break }
+            cursor = next
+        }
+        return out
+    }
 }

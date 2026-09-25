@@ -33,6 +33,9 @@ public enum SmartPlaylistRule: Codable, Hashable, Sendable {
     case forgottenFavourites(days: Int)
     /// Simple metadata filter: the chosen field contains `value` (case-insensitive).
     case fieldContains(field: Field, value: String)
+    /// The most played songs of one calendar month. Frozen once the month ends,
+    /// since its plays can't change.
+    case monthTape(year: Int, month: Int)
 
     /// Metadata fields supported by `.fieldContains`.
     public enum Field: String, Codable, Hashable, Sendable, CaseIterable {
@@ -113,6 +116,8 @@ extension SmartPlaylistRule {
             return "Loved but not played in \(days) days"
         case .fieldContains(let field, let value):
             return "\(field.displayName) contains “\(value)”"
+        case .monthTape:
+            return "Top \(Self.tapeLength) of \(tapeStart?.formatted(.dateTime.month(.wide).year()) ?? "the month")"
         }
     }
 
@@ -133,6 +138,11 @@ extension SmartPlaylistRule {
             return "What you've had on repeat recently."
         case .fieldContains:
             return summary
+        case .monthTape:
+            let month = tapeStart ?? Date()
+            return Calendar.current.isDate(month, equalTo: Date(), toGranularity: .month)
+                ? "Your most played this month, filling as you listen. Freezes on the 1st."
+                : "Your most played in \(month.formatted(.dateTime.month(.wide).year()))."
         }
     }
 
@@ -158,6 +168,16 @@ extension SmartPlaylistRule {
         case .onRepeat:            return "repeat"
         case .forgottenFavourites: return "heart.slash.fill"
         case .fieldContains:       return "line.3.horizontal.decrease.circle.fill"
+        case .monthTape:           return "calendar"
         }
+    }
+
+    /// Songs on a monthly tape.
+    public static let tapeLength = 25
+
+    /// A tape's month as its first day. Nil for every other rule.
+    public var tapeStart: Date? {
+        guard case .monthTape(let year, let month) = self else { return nil }
+        return Calendar.current.date(from: DateComponents(year: year, month: month))
     }
 }
