@@ -131,6 +131,7 @@ struct OnlineSongMenu: View {
         }
 
         Divider()
+        SuggestLessMenuItems(song: song)
         ShareMenuItems(.track(song))
     }
 

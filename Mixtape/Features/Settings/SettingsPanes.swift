@@ -336,6 +336,11 @@ struct PlaybackPane: View {
     @AppStorage("playback.trimPadding")     private var trimPadding = true
     @AppStorage("playback.autoplay")        private var autoplay = true
 
+    /// Counted on appear rather than observed: both lists are written from a
+    /// context menu somewhere else in the app, and nothing else in Settings cares.
+    @State private var hiddenCount  = SuggestionFeedback.hiddenSongs.count
+    @State private var blockedCount = SuggestionFeedback.blockedArtists.count
+
     /// Not `@AppStorage`: a private session is stored as an expiry, so the switch
     /// reflects "is one running" rather than a saved Bool.
     @State private var privateSession = PrivateSession.isActive
@@ -363,6 +368,15 @@ struct PlaybackPane: View {
             },
             set: { engine.setRate(Float($0.value)) }
         )
+    }
+
+    /// "2 songs and 1 artist" — named in the plural the counts actually need.
+    private var suggestionFeedbackSubtitle: String {
+        func part(_ count: Int, _ noun: String) -> String? {
+            count == 0 ? nil : "\(count) \(noun)\(count == 1 ? "" : "s")"
+        }
+        let parts = [part(hiddenCount, "song"), part(blockedCount, "artist")].compactMap { $0 }
+        return parts.joined(separator: " and ") + " won't be suggested in mixes or autoplay"
     }
 
     private var privateSessionSubtitle: String {
@@ -423,6 +437,22 @@ struct PlaybackPane: View {
                                   isOn: $autoplay)
             }
 
+            // Hidden only when there is nothing hidden: a row whose whole subject
+            // is an empty list has nothing to say.
+            if hiddenCount > 0 || blockedCount > 0 {
+                SettingsGroup(title: "Suggestions") {
+                    SettingsButtonRow(id: "playback.suggestionFeedback",
+                                      title: "Show These Again",
+                                      subtitle: suggestionFeedbackSubtitle,
+                                      icon: "eye",
+                                      role: .destructive) {
+                        SuggestionFeedback.clear()
+                        hiddenCount = 0
+                        blockedCount = 0
+                    }
+                }
+            }
+
             SettingsGroup(title: "Privacy",
                           footer: "A private session ends on its own after six hours.") {
                 SettingsToggleRow(id: "playback.privateSession",
@@ -479,7 +509,11 @@ struct PlaybackPane: View {
         }
         .onChange(of: privateSession) { _, on in PrivateSession.set(on) }
         .onChange(of: normalizeVolume) { _, _ in engine.reapplyNormalization() }
-        .onAppear { privateSession = PrivateSession.isActive }
+        .onAppear {
+            privateSession = PrivateSession.isActive
+            hiddenCount  = SuggestionFeedback.hiddenSongs.count
+            blockedCount = SuggestionFeedback.blockedArtists.count
+        }
         #if os(iOS)
         .sheet(isPresented: $showEqualizer) {
             MixSheet(title: "Equalizer",

@@ -899,6 +899,7 @@ LaunchTimeline.mark("deps/engine")
                 guard let self else { return }
                 let reset = UserDataReset.from(note)
                 if reset.clearedHistory { self.playbackEngine.clearRecentlyPlayed() }
+                if reset.clearedLibrary { SuggestionFeedback.clear() }
                 if reset.clearedLibrary {
                     // The recently-played entries that survive a library-only
                     // wipe are the Discover plays — the library ones no longer

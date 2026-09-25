@@ -222,6 +222,7 @@ public enum RecommendationEngine {
         func add(_ name: String) {
             let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !clean.isEmpty, clean.lowercased() != "unknown artist" else { return }
+            guard !SuggestionFeedback.isBlocked(artist: clean) else { return }
             guard seen.insert(clean.lowercased()).inserted else { return }
             ordered.append(clean)
         }
@@ -273,6 +274,7 @@ public enum RecommendationEngine {
             for name in ImportService.creditedArtists(from: track.artistName) {
                 let key = name.lowercased()
                 guard !key.isEmpty, key != "unknown artist" else { continue }
+                guard !SuggestionFeedback.isBlocked(artist: name) else { continue }
                 var entry = counts[key] ?? (name, 0)
                 entry.count += 1
                 counts[key] = entry

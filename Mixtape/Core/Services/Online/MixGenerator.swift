@@ -263,7 +263,7 @@ public enum MixGenerator {
         // Spelled out in steps rather than chained: the tuple-returning `map`
         // in the middle of a chain is more than the type checker will sit
         // through in reasonable time.
-        let living: [Track] = library.tracks.filter { !$0.isDeleted }
+        let living: [Track] = library.tracks.filter { !$0.isDeleted && SuggestionFeedback.allows($0) }
         var scored: [ScoredTrack] = living.map { ScoredTrack(track: $0, score: score($0)) }
         scored.sort { a, b in
             a.score == b.score ? a.track.title < b.track.title : a.score > b.score

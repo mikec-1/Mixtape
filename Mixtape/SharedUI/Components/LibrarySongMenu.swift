@@ -117,6 +117,7 @@ struct LibrarySongMenu: View {
             Divider()
             goToItems(for: track)
             ShareMenuItems(shareItem ?? .track(track))
+            SuggestLessMenuItems(track: track)
             Button("Get Info", systemImage: "info.circle") {
                 #if os(macOS)
                 appState.showInspector(for: track)

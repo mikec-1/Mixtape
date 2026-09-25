@@ -1342,6 +1342,9 @@ public final class ITunesSearchClient: Sendable {
     public func radioTracks(artistId: Int, limit: Int = 20) async -> [OnlineTrack] {
         guard let url = URL(string: "https://api.deezer.com/artist/\(artistId)/radio?limit=\(limit)"),
               let resp: DeezerTrackSearchResponse = await Self.getJSON(url) else { return [] }
+        // Radio is what every recommendation in the app is built from — mixes,
+        // stations, the queue's top-up — so this is the one place a "don't
+        // suggest this again" has to be honoured for all of them.
         return Self.preferringExplicit(resp.data).map { t in
             OnlineTrack(title: t.title, artistName: t.artist?.name ?? "", albumTitle: t.album?.title ?? "",
                         duration: TimeInterval(t.duration ?? 0),
@@ -1349,6 +1352,7 @@ public final class ITunesSearchClient: Sendable {
                         sourceID: t.id, isExplicit: t.explicit_lyrics ?? false,
                         contributors: t.contributors?.map(\.name) ?? [])
         }
+        .filter(SuggestionFeedback.allows)
     }
 
     /// The seed artist's radio, widened with the radios of artists Deezer says
@@ -1381,6 +1385,7 @@ public final class ITunesSearchClient: Sendable {
             OnlineArtist(id: $0.id, name: $0.name,
                          imageURL: Self.artistPicture($0.picture_xl, $0.picture_big))
         }
+        .filter { !SuggestionFeedback.isBlocked(artist: $0.name) }
         return await withSpotifyImages(artists)
     }
 

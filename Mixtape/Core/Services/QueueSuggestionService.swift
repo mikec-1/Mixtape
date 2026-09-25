@@ -170,7 +170,7 @@ public final class QueueSuggestionService: ObservableObject {
     /// same artist, shuffled within each tier. Never random across genres.
     private func localSuggestions(for seed: Track, excluding seen: Set<String>) -> [Track] {
         let pool = library.tracks.filter { t in
-            t.id != seed.id && !seen.contains(Self.key(t))
+            t.id != seed.id && !seen.contains(Self.key(t)) && SuggestionFeedback.allows(t)
         }
 
         let seedGenre  = seed.genre?.lowercased()
