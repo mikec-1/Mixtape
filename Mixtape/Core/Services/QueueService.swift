@@ -549,6 +549,9 @@ public final class QueueService: ObservableObject {
     /// Used by the crossfade engine to pre-load the upcoming track.
     public func peekNext() -> Track? {
         guard !queue.isEmpty else { return nil }
+        // Songs queued before anything played: the first row is next, whatever
+        // the repeat mode (`.one` would otherwise read `queue[-1]`).
+        guard currentIndex >= 0 else { return queue[0] }
         switch repeatMode {
         case .one:
             return queue[currentIndex]
@@ -564,6 +567,7 @@ public final class QueueService: ObservableObject {
     /// Advance one step. Returns the track to play next, or nil if the queue ended.
     public func advance() -> Track? {
         guard !queue.isEmpty else { return nil }
+        guard currentIndex >= 0 else { currentIndex = 0; return queue[0] }
         switch repeatMode {
         case .one:
             return queue[currentIndex]
@@ -580,7 +584,9 @@ public final class QueueService: ObservableObject {
 
     /// Go back one step. Returns the track to play.
     public func previous() -> Track? {
-        guard !queue.isEmpty else { return nil }
+        // Nothing started yet ("Add to Queue" before pressing play) — there is
+        // no previous, and `queue[-1]` below would crash.
+        guard !queue.isEmpty, currentIndex >= 0 else { return nil }
         if currentIndex > 0 {
             currentIndex -= 1
         } else if repeatMode == .all {

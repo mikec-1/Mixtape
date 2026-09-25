@@ -2260,7 +2260,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
     private func lastPullDate(table: String, userID: UUID) -> String {
         let key = lastPullDateKey(table: table, userID: userID)
         if let stored = UserDefaults.standard.string(forKey: key) {
-            // Apply a 24-hour overlap window to catch clock-skewed pushes from other devices.
+            // Apply a 5-minute overlap window (`pullOverlap`) to catch clock-skewed pushes from other devices.
             let f = ISO8601DateFormatter()
             f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
             if let date = f.date(from: stored) {
