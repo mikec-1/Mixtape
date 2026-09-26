@@ -1291,6 +1291,53 @@ public final class PlaylistSharingService: ObservableObject {
         return link.sharedPlaylistID
     }
 
+    // MARK: - Dubbing
+
+    /// A copy made for one person: a new link-shared row the server freezes on insert (20260926040000).
+    /// It gets its own playlist_id, so nothing that follows the local playlist ever finds or updates it.
+    public func dub(playlist: Playlist,
+                    tracks: [Track],
+                    artworkData: Data?,
+                    for recipient: String,
+                    note: String?) async throws -> UUID {
+        struct DubRow: Encodable {
+            let id: UUID
+            let playlist_id: UUID
+            let owner_id: UUID
+            let name: String
+            let description: String?
+            let track_ids: [UUID]
+            let tracks: [SharedTrackMeta]
+            let share_code: String
+            let artwork_path: String?
+            let link_shared = true
+            let dub_for: String
+            let dub_note: String?
+        }
+
+        let ownerID = try await client.auth.session.user.id
+        let id = UUID()
+        let artworkPath = await uploadCover(artworkData, sharedPlaylistID: id)
+        try await client
+            .from("shared_playlists")
+            .insert(DubRow(id: id,
+                           playlist_id: UUID(),
+                           owner_id: ownerID,
+                           name: playlist.name,
+                           description: playlist.description,
+                           track_ids: playlist.trackIDs,
+                           tracks: Self.snapshot(playlist: playlist, resolving: tracks),
+                           share_code: Self.generateShareCode(),
+                           artwork_path: artworkPath,
+                           dub_for: recipient,
+                           dub_note: note))
+            .execute()
+
+        let snapshot = tracks
+        Task { await self.publishTrackCovers(snapshot) }
+        return id
+    }
+
     // MARK: - Taking a published playlist down
 
     // Both of these address the `shared_playlists` row directly, and that is the
@@ -1453,7 +1500,11 @@ public final class PlaylistSharingService: ObservableObject {
     /// thrown: a missing picture is worth far less than the publish itself, and
     /// failing the whole toggle over it would be the wrong trade.
     private func uploadCover(playlist: Playlist, sharedPlaylistID: UUID) async -> String? {
-        guard let raw = playlist.displayArtwork else { return nil }
+        await uploadCover(playlist.displayArtwork, sharedPlaylistID: sharedPlaylistID)
+    }
+
+    private func uploadCover(_ raw: Data?, sharedPlaylistID: UUID) async -> String? {
+        guard let raw else { return nil }
         guard let session = try? await client.auth.session else { return nil }
         // 512px matches the avatar path; the largest a cover is ever drawn is the
         // 180pt detail hero, so anything bigger is bytes nobody sees.
@@ -1468,7 +1519,7 @@ public final class PlaylistSharingService: ObservableObject {
                 .upload(path, data: jpeg, options: FileOptions(contentType: "image/jpeg", upsert: true))
             return path
         } catch {
-            MixLog.sync.error("[Sharing] ❌ Cover upload failed for \(playlist.name): \(error)")
+            MixLog.sync.error("[Sharing] ❌ Cover upload failed for \(sharedPlaylistID): \(error)")
             return nil
         }
     }

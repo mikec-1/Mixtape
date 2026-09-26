@@ -76,6 +76,12 @@ struct ShareItem {
         ShareItem(url: MixtapeLink.playlist(sharedID), noun: "Playlist", title: p.name,
                   subtitle: "Playlist", artwork: .playlist(p.id))
     }
+
+    /// The cover picked for the dub, which may not be the playlist's.
+    static func dub(_ p: Playlist, sharedID: UUID, for name: String, artwork: Data?) -> ShareItem {
+        ShareItem(url: MixtapeLink.playlist(sharedID), noun: "Dub", title: p.name,
+                  subtitle: "For \(name)", artwork: .stored(artwork, nil))
+    }
 }
 
 /// For links that are known up front — songs, albums, artists.

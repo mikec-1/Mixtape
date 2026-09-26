@@ -20,7 +20,7 @@ import SwiftUI
 /// a `.contextMenu`'s content is torn down the moment it closes, so anything
 /// presented from inside it would be dismissed along with the menu.
 enum PlaylistActionSheet: Int, Identifiable {
-    case edit, spotifyExport, collaborate
+    case edit, spotifyExport, collaborate, dub
     var id: Int { rawValue }
 }
 
@@ -197,6 +197,12 @@ struct PlaylistActionsMenu: View {
                 Label("Invite Collaborators", systemImage: "person.badge.plus")
             }
             PlaylistShareMenuItems(playlist: live)
+            Button {
+                present(.dub)
+            } label: {
+                Label("Dub for Someone\u{2026}", systemImage: "recordingtape")
+            }
+            .disabled(deps.authService.currentUser == nil || isEmpty)
 
             Divider()
 
@@ -519,6 +525,9 @@ private struct PlaylistActionsModifier: ViewModifier {
                         .environmentObject(deps)
                 case .collaborate:
                     InviteCollaboratorsSheet(playlist: live, tracks: songs(of: live))
+                        .environmentObject(deps)
+                case .dub:
+                    DubSheet(playlist: live, tracks: songs(of: live))
                         .environmentObject(deps)
                 }
             }

@@ -58,6 +58,7 @@ public struct PlaylistDetailView: View {
     @State private var tracksForAddToPlaylist: [Track] = []
     // Collaborative share sheet
     @State private var showCollabShare = false
+    @State private var showDubSheet = false
     @State private var showSpotifyExport = false
     /// Whether this playlist appears on the owner's public profile. Separate from
     /// collaborative sharing on purpose: handing a friend a join code and putting
@@ -705,6 +706,10 @@ public struct PlaylistDetailView: View {
         }
         .sheet(isPresented: $showCollabShare) {
             InviteCollaboratorsSheet(playlist: livePlaylist, tracks: tracks)
+                .environmentObject(deps)
+        }
+        .sheet(isPresented: $showDubSheet) {
+            DubSheet(playlist: livePlaylist, tracks: tracks)
                 .environmentObject(deps)
         }
         #if os(iOS)
@@ -1736,6 +1741,12 @@ public struct PlaylistDetailView: View {
                 Label("Invite Collaborators", systemImage: "person.badge.plus")
             }
             PlaylistShareMenuItems(playlist: playlist)
+            Button {
+                showDubSheet = true
+            } label: {
+                Label("Dub for Someone\u{2026}", systemImage: "recordingtape")
+            }
+            .disabled(deps.authService.currentUser == nil || tracks.isEmpty)
 
             Divider()
 
