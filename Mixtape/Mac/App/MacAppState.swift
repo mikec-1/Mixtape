@@ -284,6 +284,7 @@ final class MacAppState: ObservableObject {
             // not in the router's `onChange`, so the history reads the tab in
             // the same turn as the section.
             if let tab = selection?.libraryTab { libraryTab = tab }
+            selectedCrateID = nil
             scheduleHistoryCapture()
         }
     }
@@ -526,6 +527,22 @@ final class MacAppState: ObservableObject {
         leaveSearch()
     }
 
+    /// Crate page. A drill-down like a playlist; any sidebar section clears it.
+    @Published var selectedCrateID: UUID? = nil {
+        didSet { scheduleHistoryCapture() }
+    }
+
+    func showCrate(_ id: UUID) {
+        leaveFullscreenLyricsForNavigation()
+        dismissContentOverlays()
+        leaveSearch()
+        selectedAlbum         = nil
+        selectedPlaylist      = nil
+        selectedSmartPlaylist = nil
+        selection             = nil
+        selectedCrateID       = id
+    }
+
     @Published var selectedPlaylist: Playlist? = nil {
         didSet {
             selectedPlaylistID = (selectedPlaylist?.isSystem == false) ? selectedPlaylist?.id : nil
@@ -566,6 +583,7 @@ final class MacAppState: ObservableObject {
         /// over, which for most people is Home.
         case search(String)
         case smartPlaylist(SmartPlaylist)
+        case crate(UUID)
         /// The Library page on a tab, and on Artists, the artist open on it.
         case library(LibraryTab, artist: Artist.ID?)
         case settings(SettingsCategory)
@@ -585,6 +603,7 @@ final class MacAppState: ObservableObject {
             case let (.publicPlaylist(a), .publicPlaylist(b)): return a.id == b.id
             case (.account,               .account):           return true
             case let (.smartPlaylist(a),  .smartPlaylist(b)):  return a.id == b.id
+            case let (.crate(a),          .crate(b)):          return a == b
             case let (.library(a, x),     .library(b, y)):     return a == b && x == y
             case let (.settings(a),       .settings(b)):       return a == b
             // Refining a query is the same page asking a different question,
@@ -656,7 +675,8 @@ final class MacAppState: ObservableObject {
         if discoverLinkActive { return true }
         guard selectedAlbum    == nil,
               selectedSmartPlaylist == nil,
-              selectedPlaylist == nil else { return false }
+              selectedPlaylist == nil,
+              selectedCrateID == nil else { return false }
         // The router hands the whole column to Discover while a query is live.
         if isSearching { return true }
         let section = selection ?? .home
@@ -731,6 +751,7 @@ final class MacAppState: ObservableObject {
         if let album = selectedAlbum          { return .album(album) }
         if let smart = selectedSmartPlaylist  { return .smartPlaylist(smart) }
         if let playlist = selectedPlaylist    { return .playlist(playlist) }
+        if let crate = selectedCrateID        { return .crate(crate) }
         let section = selection ?? .home
         if section == .library || section.libraryTab != nil {
             return .library(libraryTab, artist: libraryTab == .artists ? libraryArtistID : nil)
@@ -855,6 +876,7 @@ final class MacAppState: ObservableObject {
         selectedAlbum        = nil
         selectedPlaylist     = nil
         selectedSmartPlaylist = nil
+        selectedCrateID      = nil
         discoverLinkActive   = false
         // Restoring any other page ends the search, for the same reason the
         // drill-downs call `leaveSearch`: the results are no longer what the
@@ -869,6 +891,7 @@ final class MacAppState: ObservableObject {
         case .publicPlaylist(let t):   publicPlaylistTarget = t
         case .account:                 showingAccount       = true
         case .smartPlaylist(let p):    selectedSmartPlaylist = p
+        case .crate(let id):           selectedCrateID      = id
         case .library(let tab, let artist):
             selection       = .library
             libraryTab      = tab

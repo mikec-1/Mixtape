@@ -81,6 +81,8 @@ struct MacContentRouter: View {
                 .environmentObject(deps)
                 .environmentObject(engine)
                 .environmentObject(appState)
+        } else if let crateID = appState.selectedCrateID {
+            CrateDetailView(crateID: crateID, library: library)
         } else {
             switch appState.selection ?? .home {
             case .home, .discover:

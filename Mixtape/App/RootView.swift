@@ -159,6 +159,7 @@ public struct RootView: View {
         // Password reset is handled inline in MacAuthFlowView / SignInView.
         // isAwaitingPasswordReset keeps authState = .unauthenticated so the user
         // lands on the auth screen, which navigates to the Set New Password screen.
+        .modifier(NewCratePrompt())
         .sheet(isPresented: $showDownloadPrompt) {
             WelcomeDownloadPrompt()
                 .environmentObject(exportManager)

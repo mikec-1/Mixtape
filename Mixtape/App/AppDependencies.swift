@@ -328,6 +328,9 @@ public final class AppDependencies: ObservableObject {
         SavedAlbumsService.shared.pushWriter = { raw in
             Task { await auth.updateSavedAlbums(raw) }
         }
+        CrateService.shared.pushWriter = { raw in
+            Task { await auth.updateCrates(raw) }
+        }
         SavedAlbumsService.shared.onUnsave = { [libraryService] ids in libraryService.deleteTracks(ids: ids) }
         queueService.playlistLookup = { [weak libraryService] id in
             libraryService?.playlist(id: id)
@@ -851,6 +854,7 @@ LaunchTimeline.mark("deps/engine")
         if let lastUserID, lastUserID != user.id.uuidString {
             spotifyImportLedger.accountDidChange(remote: user.spotifyImports)
             spotifyFollowService.accountDidChange(remote: user.spotifyLinks)
+            CrateService.shared.accountDidChange(remote: user.crates)
         }
         UserDefaults.standard.set(user.id.uuidString, forKey: lastUserKey)
     }

@@ -71,6 +71,7 @@ struct AlbumActionsMenu: View {
             Label(isSaved ? "Remove from Library" : "Add to Library",
                   systemImage: isSaved ? "checkmark.circle.fill" : "plus.circle")
         }
+        AddToCrateMenu(item: .album(title: album.title, artist: album.artistName))
 
         Divider()
 

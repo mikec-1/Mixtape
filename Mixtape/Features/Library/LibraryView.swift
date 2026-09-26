@@ -118,6 +118,9 @@ public struct LibraryView: View {
                 PlaylistDetailView(playlist: $0)
                     .environmentObject(deps)
             }
+            .navigationDestination(for: Crate.self) {
+                CrateDetailView(crateID: $0.id, library: deps.libraryService)
+            }
             #if os(iOS)
             // Consume a cross-tab request to open a local artist (set when an
             // artist is tapped in the mini player / now-playing sheet / Home).
@@ -143,6 +146,8 @@ public struct LibraryView: View {
                 if let landing = section(landingFor: route) {
                     vm.selectedSection = landing
                 }
+                // A crate only needs a name, asked at the root.
+                if route == .crate { CrateService.shared.requestNewCrate(); return }
                 activeRoute = route
             }) {
                 LibraryCreateMenu { pendingRoute = $0 }
@@ -167,6 +172,8 @@ public struct LibraryView: View {
         case .generateMix:
             GenerateMixSheet()
                 .environmentObject(deps)
+        case .crate:
+            EmptyView()
         case .joinShared:
             JoinSharedPlaylistSheet()
                 .environmentObject(deps)
@@ -183,7 +190,7 @@ public struct LibraryView: View {
     /// finish with the user looking at a page it isn't on.
     private func section(landingFor route: LibraryCreateRoute) -> LibrarySection? {
         switch route {
-        case .playlist, .joinShared, .generateMix: return .playlists
+        case .playlist, .joinShared, .generateMix, .crate: return .playlists
         case .smartPlaylist:         return .smart
         case .importSongs:           return nil
         }
@@ -244,6 +251,8 @@ public struct LibraryView: View {
                         .padding(.horizontal, 16)
                         .padding(.bottom, 4)
                 }
+
+                CratesShelf(library: deps.libraryService)
 
                 if vm.layout == .grid {
                     PlaylistsGridView(items: vm.sortOrder.mixed(vm.visiblePlaylists, albums: albums, smart: smart))

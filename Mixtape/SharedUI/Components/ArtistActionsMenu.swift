@@ -73,6 +73,10 @@ struct ArtistActionsMenu: View {
 
         Divider()
 
+        AddToCrateMenu(item: .artist(name))
+
+        Divider()
+
         BulkDownloadMenuItems(tracks: tracks(), downloads: deps.downloadManager)
 
         Divider()

@@ -36,6 +36,7 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
                 PlaylistTrackSortService.shared.adoptRemote(user.playlistTrackSorts)
                 SpotifyImportLedger.shared?.adoptRemote(user.spotifyImports)
                 SavedAlbumsService.shared.adoptRemote(user.savedAlbums)
+                CrateService.shared.adoptRemote(user.crates)
                 SpotifyFollowService.shared?.adoptRemote(user.spotifyLinks)
             } else {
                 AudioEqualizer.currentUserID = nil
@@ -737,6 +738,14 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
         ]))
     }
 
+    /// Crates. Silent on failure.
+    public func updateCrates(_ raw: String) async {
+        guard currentUser != nil else { return }
+        _ = try? await client.auth.update(user: UserAttributes(data: [
+            "crates": .string(raw)
+        ]))
+    }
+
     /// Stores the Spotify playlist links on the account. Silent on failure,
     /// like the rest.
     public func updateSpotifyLinks(_ raw: String) async {
@@ -865,6 +874,10 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
             if case .string(let raw) = session.user.userMetadata["saved_albums"], !raw.isEmpty { return raw }
             return nil
         }()
+        let crates: String? = {
+            if case .string(let raw) = session.user.userMetadata["crates"], !raw.isEmpty { return raw }
+            return nil
+        }()
         let spotifyLinks: String? = {
             if case .string(let raw) = session.user.userMetadata["spotify_links"], !raw.isEmpty { return raw }
             return nil
@@ -883,6 +896,7 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
             playlistTrackSorts: trackSorts,
             spotifyImports: spotifyImports,
             savedAlbums: savedAlbums,
+            crates: crates,
             spotifyLinks: spotifyLinks
         )
     }

@@ -48,6 +48,7 @@ struct MacSidebarView: View {
     /// changes don't reach this view, so adding a rule to the library would
     /// leave the sidebar showing the old list until something else redrew it.
     @EnvironmentObject private var smartService: SmartPlaylistService
+    @ObservedObject private var crateService = CrateService.shared
     @ObservedObject private var meta = PlaylistMetadataService.shared
 
     /// Playlist a drag is currently over — draws the insertion line, or the
@@ -98,6 +99,7 @@ struct MacSidebarView: View {
 
                     if showFilter { filterField }
 
+                    crateRows
                     playlistRows
                 }
                 .padding(.bottom, 12)
@@ -203,6 +205,10 @@ struct MacSidebarView: View {
                 .tracking(0.4)
 
             Spacer(minLength: 0)
+
+            MacSidebarIconButton(systemImage: "square.stack.3d.up", help: "New Crate") {
+                crateService.requestNewCrate()
+            }
 
             MacSidebarIconButton(systemImage: "plus", help: "New Playlist") {
                 showNewPlaylist = true
@@ -328,6 +334,20 @@ struct MacSidebarView: View {
         .padding(.horizontal, 10)
         .padding(.bottom, 6)
         .transition(.opacity.combined(with: .move(edge: .top)))
+    }
+
+    @ViewBuilder
+    private var crateRows: some View {
+        let query = filterText.trimmingCharacters(in: .whitespaces)
+        ForEach(crateService.crates.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }) { crate in
+            MacSidebarCrateRow(crate: crate,
+                               entries: crateService.entries(of: crate, in: library, limit: 4),
+                               isSelected: appState.selectedCrateID == crate.id) {
+                appState.clearPlaylistSelection()
+                appState.showCrate(crate.id)
+            }
+            .contextMenu { CrateShareMenuItems(crate: crate) }
+        }
     }
 
     @ViewBuilder
@@ -859,6 +879,45 @@ private struct MacSidebarIconButton: View {
 }
 
 // MARK: - Sidebar Playlist Row
+
+private struct MacSidebarCrateRow: View {
+    let crate: Crate
+    /// The cover's four, not the whole crate.
+    let entries: [CrateEntry]
+    let isSelected: Bool
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 9) {
+                CrateCover(entries: entries, size: 32)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(crate.name)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(isSelected ? Color.mixPrimary : Color.mixTextPrimary)
+                        .lineLimit(1)
+                    Text(crate.items.count == 1 ? "Crate \u{00B7} 1 item" : "Crate \u{00B7} \(crate.items.count) items")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.mixTextTertiary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(isSelected ? Color.mixPrimary.opacity(0.15) : isHovered ? Color.primary.opacity(0.07) : .clear,
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .padding(.horizontal, 10)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).mixHandCursor()
+        .onHover { isHovered = $0 }
+    }
+}
 
 private struct MacSidebarPlaylistRow: View {
     let playlist:   Playlist

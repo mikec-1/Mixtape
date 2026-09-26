@@ -38,6 +38,8 @@ public struct AppUser: Identifiable, Codable, Hashable, Sendable {
     public var spotifyImports: String?
     /// Saved albums JSON, `user_metadata.saved_albums`. See `SavedAlbumsService`.
     public var savedAlbums: String?
+    /// Crates JSON, `user_metadata.crates`. See `CrateService`.
+    public var crates: String?
     /// Which playlists follow a Spotify source, read from
     /// `user_metadata.spotify_links` — a JSON map of playlist id → link.
     /// Follows the account so signing out doesn't take the connection with it.
@@ -70,6 +72,7 @@ public struct AppUser: Identifiable, Codable, Hashable, Sendable {
         playlistTrackSorts: String? = nil,
         spotifyImports: String? = nil,
         savedAlbums: String? = nil,
+        crates: String? = nil,
         spotifyLinks: String? = nil,
         createdAt: Date = Date(),
         lastLoginAt: Date = Date(),
@@ -86,6 +89,7 @@ public struct AppUser: Identifiable, Codable, Hashable, Sendable {
         self.playlistTrackSorts = playlistTrackSorts
         self.spotifyImports = spotifyImports
         self.savedAlbums = savedAlbums
+        self.crates = crates
         self.spotifyLinks = spotifyLinks
         self.createdAt        = createdAt
         self.lastLoginAt      = lastLoginAt

@@ -36,6 +36,20 @@ public enum MixtapeLink {
         id.map { path("artist", String($0)) } ?? named("artist", ["name": name])
     }
 
+    /// Most items a crate link carries, so it stays a sane URL.
+    public static let crateLimit = 50
+
+    /// A whole crate, as base64url JSON in `d`: `{"n": name, "i": [["p", id], ["a", title, artist], ["r", name]]}`.
+    public static func crate(name: String, items: [[String]]) -> URL {
+        struct Payload: Encodable { let n: String; let i: [[String]] }
+        let json = (try? JSONEncoder().encode(Payload(n: name, i: Array(items.prefix(crateLimit))))) ?? Data()
+        let d = json.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        return URL(string: "\(base)/crate?d=\(d)")!
+    }
+
     public static func playlist(_ sharedID: UUID) -> URL {
         path("playlist", sharedID.uuidString.lowercased())
     }

@@ -20,6 +20,7 @@ import SwiftUI
 enum LibraryCreateRoute: String, Identifiable {
     case playlist
     case smartPlaylist
+    case crate
     case generateMix
     case joinShared
     case importSongs
@@ -59,6 +60,11 @@ struct LibraryCreateMenu: View {
                     title: "Smart Playlist",
                     subtitle: "Set a rule and it keeps itself up to date")
 
+                row(.crate,
+                    icon: "square.stack.3d.up",
+                    title: "Crate",
+                    subtitle: "Keep playlists, albums and artists together")
+
                 row(.generateMix,
                     icon: "sparkles",
                     title: "Generate a Mix",
@@ -94,7 +100,7 @@ struct LibraryCreateMenu: View {
     /// the content can use. Fixed rather than measured: the options are a known
     /// set, and a detent that resizes itself as the rows render reads as a
     /// glitch. Any slack lands on the trailing `Spacer`.
-    private static let sheetHeight: CGFloat = 58 + (5 * 68) + 25 + 12 + 34
+    private static let sheetHeight: CGFloat = 58 + (6 * 68) + 25 + 12 + 34
 
     private func row(_ route: LibraryCreateRoute,
                      icon: String,

@@ -157,6 +157,9 @@ struct PlaylistActionsMenu: View {
             Label(isPinned ? "Unpin" : "Pin to Top",
                   systemImage: isPinned ? "pin.slash" : "pin")
         }
+        if !playlist.isSystem {
+            AddToCrateMenu(item: .playlist(playlist.id))
+        }
 
         Divider()
 
