@@ -2136,8 +2136,10 @@ public struct PlaylistDetailView: View {
     @ViewBuilder
     private func sideMenu(_ group: SideGroup) -> some View {
         Button("Play \(group.title)", systemImage: MixtapeIcons.play) {
+            // Auto-reverse plays on through the other sides; otherwise just this one.
+            // ponytail: turning it on mid-side still loops that side until the next play.
             if let first = group.tracks.first(where: \.canResolveAudio) ?? group.tracks.first {
-                playAndMark(first, within: group.tracks)
+                playAndMark(first, within: engine.queue.repeatMode == .all ? nil : group.tracks)
             }
         }
         if canEditSides {

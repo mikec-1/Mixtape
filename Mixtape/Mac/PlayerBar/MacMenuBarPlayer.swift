@@ -94,10 +94,10 @@ struct MacMenuBarPlayer: View {
                 .disabled(!hasTrack)
             Spacer()
             Button { queue.cycleRepeat() } label: {
-                Image(systemName: queue.repeatMode == .one ? "repeat.1" : "repeat")
+                Image(systemName: queue.repeatSystemImage)
             }
             .foregroundStyle(queue.repeatMode == .off ? .secondary : Color.mixPrimary)
-            .accessibilityLabel("Repeat")
+            .accessibilityLabel(queue.repeatLabel)
         }
         .font(.title3)
         .buttonStyle(.plain)

@@ -320,8 +320,8 @@ struct MacPlayerBar: View {
 
             // Repeat
             TransportButton(
-                icon: queueService.repeatMode.systemImage,
-                label: queueService.repeatMode.accessibilityLabel,
+                icon: queueService.repeatSystemImage,
+                label: queueService.repeatLabel,
                 size: 13,
                 isActive: queueService.repeatMode != .off
             ) {

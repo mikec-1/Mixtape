@@ -774,8 +774,8 @@ public struct NowPlayingView: View {
 
             Spacer(minLength: 8)
 
-            NPButton(icon: queueService.repeatMode.systemImage,
-                     label: queueService.repeatMode.accessibilityLabel,
+            NPButton(icon: queueService.repeatSystemImage,
+                     label: queueService.repeatLabel,
                      isActive: queueService.repeatMode != .off, size: 22) {
                 engine.queue.cycleRepeat()
             }
@@ -1381,12 +1381,13 @@ private struct UpNextSheet: View {
                        isOn: queueService.shuffleEnabled) {
                 engine.queue.toggleShuffle()
             }
-            tileButton(title: queueService.repeatMode == .one ? "Repeat one" : "Repeat",
-                       icon: queueService.repeatMode.systemImage,
+            tileButton(title: queueService.isAutoReverse ? "Auto-reverse"
+                              : queueService.repeatMode == .one ? "Repeat one" : "Repeat",
+                       icon: queueService.repeatSystemImage,
                        isOn: queueService.repeatMode != .off) {
                 engine.queue.cycleRepeat()
             }
-            .accessibilityLabel(queueService.repeatMode.accessibilityLabel)
+            .accessibilityLabel(queueService.repeatLabel)
             Menu {
                 if engine.sleepTimerRemaining != nil {
                     Button(role: .destructive) { engine.cancelSleepTimer() } label: {

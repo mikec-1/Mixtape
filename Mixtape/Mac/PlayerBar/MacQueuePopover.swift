@@ -216,7 +216,7 @@ struct MacQueuePanelView: View {
 
             if showsControls {
             QueueToolButton(
-                icon:     queueService.repeatMode.systemImage,
+                icon:     queueService.repeatSystemImage,
                 help:     repeatHelp,
                 isActive: queueService.repeatMode != .off
             ) {
@@ -249,7 +249,9 @@ struct MacQueuePanelView: View {
     private var repeatHelp: String {
         switch queueService.repeatMode {
         case .off: return "Repeat off"
-        case .all: return "Repeating the songs above the orange line"
+        case .all: return queueService.isAutoReverse
+            ? "Auto-reverse: every side, then back to Side A"
+            : "Repeating the songs above the orange line"
         case .one: return "Repeat song"
         }
     }

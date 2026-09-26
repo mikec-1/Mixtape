@@ -166,6 +166,22 @@ public final class QueueService: ObservableObject {
     /// question.
     public var sourcePlaylistID: UUID? { source.playlistID }
 
+    /// Whether a playlist has sides. Set by AppDependencies.
+    public var playlistHasSides: (UUID) -> Bool = { _ in false }
+
+    /// Repeat all on a playlist with sides: the tape flips from side to side.
+    public var isAutoReverse: Bool {
+        repeatMode == .all && sourcePlaylistID.map(playlistHasSides) == true
+    }
+
+    public var repeatLabel: String {
+        isAutoReverse ? "Auto-reverse" : repeatMode.accessibilityLabel
+    }
+
+    public var repeatSystemImage: String {
+        isAutoReverse ? "arrow.left.arrow.right" : repeatMode.systemImage
+    }
+
     /// Where the repeating group ends, as a position in the current queue.
     ///
     /// Nil when repeat isn't `.all`, and also when the row that marked the
