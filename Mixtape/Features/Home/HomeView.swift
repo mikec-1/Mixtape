@@ -371,6 +371,9 @@ public struct HomeSections: View {
     /// The tape picked in the archive, opened once its sheet has gone.
     @State private var pendingTape: SmartPlaylist? = nil
 
+    /// "This week, one year ago", most played first.
+    @State private var yearAgo: [Track] = []
+
     /// Spotify-sourced artist profile images for "Recent artists", keyed by
     /// lowercased name. Discover-only artists have no library `Artist` row, so we
     /// fetch their photo from `deps.spotifyClient` and cache the bytes here.
@@ -624,6 +627,9 @@ public struct HomeSections: View {
                 if !recentArtists.isEmpty {
                     artistRow(title: "Recent artists", artists: recentArtists)
                 }
+                if yearAgo.count >= Self.minimumYearAgo {
+                    carousel(title: "This week, one year ago", tracks: yearAgo)
+                }
                 if showsRecommendations, !recommendations.isEmpty {
                     carousel(title: "Made for you", tracks: recommendations)
                 }
@@ -675,6 +681,10 @@ public struct HomeSections: View {
         .task(id: prefetchKey) {
             guard bands.contains(.top) else { return }
             deps.onlineCoordinator.prefetchResolvable(Array(recentlyPlayed.prefix(6)))
+        }
+        .task(id: library.revision) {
+            guard bands.contains(.library) else { return }
+            yearAgo = Self.yearAgo(in: library)
         }
         #if os(iOS)
         .navigationDestination(item: $navSmart) { playlist in
@@ -853,6 +863,21 @@ public struct HomeSections: View {
             }
             .scrollClipDisabled()
         }
+    }
+
+    /// Fewer than this and last year's week isn't worth a row.
+    private static let minimumYearAgo = 5
+
+    /// Songs played in this week last year, most played first. History is synced, so
+    /// every device shows the same row.
+    private static func yearAgo(in library: LibraryService, now: Date = Date()) -> [Track] {
+        let calendar = Calendar.current
+        guard let then = calendar.date(byAdding: .year, value: -1, to: now),
+              let week = calendar.dateInterval(of: .weekOfYear, for: then),
+              let ids = try? PlayHistoryRepository().fetchTrackIDs(in: week) else { return [] }
+        return Array(ListeningTrends.tapeOrder(ids).lazy
+            .compactMap { library.track(id: $0) }
+            .prefix(20))
     }
 
     private func openSmart(_ playlist: SmartPlaylist) {
