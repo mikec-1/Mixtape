@@ -4,6 +4,8 @@
 // presence = who's in, "state" from the host, "command" from guests to the
 // host, "kick" and "end" from the host.
 // A guest pauses continuity while in a Jam: one device can't mirror two players.
+// If the host leaves, the Jam ends for everyone (Spotify's rule): the host's device
+// renews a 90 s lease (touch_jam), so quitting or dropping off ends it like End does.
 // Shares its protocol with mixtape-web src/lib/jam.ts, keep them in sync.
 
 import Foundation
@@ -122,6 +124,7 @@ public final class JamService: ObservableObject {
     private var kicked: Set<String> = []
     private var lastSent: (position: Double, at: TimeInterval, playing: Bool)?
     private var sendScheduled = false
+    private var lastCheck: TimeInterval = -.infinity
 
     private static let storeKey = "jam.session"
     private var uptime: TimeInterval { ProcessInfo.processInfo.systemUptime }
@@ -235,6 +238,7 @@ public final class JamService: ObservableObject {
         kicked = []
         presenceRefs = [:]
         lastSent = nil
+        lastCheck = -.infinity
         if !s.isHost {
             engine.queue.manualRedirect = nil
             engine.endMirroring()
@@ -551,16 +555,35 @@ public final class JamService: ObservableObject {
 
     private func tick() {
         guard let s = session else { return }
+        let now = uptime
+        if now - lastCheck >= 30 { check(s) }
         guard s.isHost else {
             if last?.msg.playing == true { mirror() }
             return
         }
         guard let sent = lastSent else { return }
-        let now = uptime
         let expected = sent.playing ? sent.position + (now - sent.at) : sent.position
         // A seek, or the 5 s heartbeat that keeps guests honest.
         if abs(engine.currentTime - expected) > 2 || (sent.playing && now - sent.at >= 5) {
             sendState()
+        }
+    }
+
+    /// The host renews the lease; guests ask whether it's still on. Catches an
+    /// end whose broadcast was missed, and a host who left without pressing End.
+    private func check(_ s: Session) {
+        lastCheck = uptime
+        Task {
+            // Only a real false ends it: an error or a signed-out null isn't an answer.
+            let live: Bool
+            if s.isHost {
+                live = (try? await client.rpc("touch_jam", params: ["p_jam": s.id.uuidString]).execute().value) ?? true
+            } else {
+                live = (try? await client.rpc("can_use_jam_topic",
+                                              params: ["p_topic": "jam:\(s.id.uuidString.lowercased())"]).execute().value) ?? true
+            }
+            guard !live, session?.id == s.id else { return }
+            close(announceEnd: s.isHost, toast: "This Jam has ended")
         }
     }
 
