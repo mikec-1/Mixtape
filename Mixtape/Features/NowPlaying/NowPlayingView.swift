@@ -1148,6 +1148,9 @@ private struct UpNextSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            TapeDeckPicker(decks: deps.tapeDecks)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 8)
             // Over the list rather than in it: the notice has to survive the
             // queue emptying, which is exactly what a run of skips does.
             list.overlay(alignment: .bottom) { SkipNoticeBox() }

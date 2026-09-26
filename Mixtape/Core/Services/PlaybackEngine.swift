@@ -1339,6 +1339,21 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         await loadAndPlay(track: track)
     }
 
+    /// Tape decks: puts a parked queue back, paused at `position` or playing on. Nil empties the player.
+    public func loadDeck(_ snapshot: QueueService.Snapshot?, at position: TimeInterval,
+                         from tracks: [UUID: Track], play: Bool) async {
+        stopPlayback()
+        clearOnlineContext()
+        guard let snapshot, let track = queue.restore(snapshot, from: tracks) else {
+            forgetLastSession()
+            return
+        }
+        await loadButPause(track: track, at: position, keepingQueue: true)
+        persistPlaybackPosition()
+        persistQueueSnapshot()
+        if play { togglePlayPause() }
+    }
+
     /// Load `track` and leave it paused at `position` seconds (resume-on-launch path).
     private func loadButPause(track: Track, at position: TimeInterval,
                               keepingQueue: Bool = false) async {

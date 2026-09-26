@@ -194,6 +194,11 @@ public final class AppDependencies: ObservableObject {
         deviceID: Self.deviceID, currentUser: { [weak self] in self?.authService.currentUser },
         toast: { [weak self] in self?.showToast($0) })
     public let downloadManager: DownloadManager
+    /// Named queues you switch between (7.6).
+    public lazy var tapeDecks = TapeDeckService(
+        engine: playbackEngine, coordinator: onlineCoordinator, library: libraryService,
+        toast: { [weak self] in self?.showToast($0) },
+        addToPlaylist: { [weak self] in self?.addTracks(ids: $0, toPlaylist: $1) })
 
     // MARK: - Library & Import
 
@@ -921,6 +926,7 @@ LaunchTimeline.mark("deps/engine")
         onlineCoordinator.endSession()
         playbackEngine.forgetLastSession()
         playbackEngine.restoreHistory([])
+        tapeDecks.reset()
     }
 
     /// Rebuild what a wipe invalidated.

@@ -10,6 +10,7 @@ import SwiftUI
 
 struct MacQueuePanelView: View {
 
+    @EnvironmentObject private var deps:        AppDependencies
     @EnvironmentObject private var engine:      PlaybackEngine
     @EnvironmentObject private var coordinator: OnlinePlaybackCoordinator
     /// Observed directly rather than reached through `engine.queue`: the engine
@@ -43,6 +44,15 @@ struct MacQueuePanelView: View {
     }
 
     var body: some View {
+        VStack(spacing: 0) {
+            TapeDeckPicker(decks: deps.tapeDecks)
+                .padding(.horizontal, 14)
+                .padding(.top, 10)
+            queueBody
+        }
+    }
+
+    private var queueBody: some View {
         Group {
             if currentRow == nil && upcomingRows.isEmpty {
                 MacPanelEmptyState(icon: "music.note.list",
