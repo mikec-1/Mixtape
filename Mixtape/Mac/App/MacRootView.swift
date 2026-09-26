@@ -350,17 +350,20 @@ struct MacRootView: View {
         // gesture every palette supports.
         .overlay {
             if appState.commandPaletteOpen {
-                ZStack(alignment: .top) {
-                    Color.black.opacity(0.28)
-                        .ignoresSafeArea()
-                        .onTapGesture { appState.commandPaletteOpen = false }
+                // Its own AppKit view, or clicks can land on the track tables underneath.
+                AppKitLayer {
+                    ZStack(alignment: .top) {
+                        Color.black.opacity(0.28)
+                            .ignoresSafeArea()
+                            .onTapGesture { appState.commandPaletteOpen = false }
 
-                    MacCommandPalette()
-                        .environmentObject(deps)
-                        .environmentObject(appState)
-                        .environmentObject(library)
-                        .environmentObject(engine)
-                        .padding(.top, 90)
+                        MacCommandPalette()
+                            .environmentObject(deps)
+                            .environmentObject(appState)
+                            .environmentObject(library)
+                            .environmentObject(engine)
+                            .padding(.top, 90)
+                    }
                 }
                 .transition(.opacity)
             }
@@ -1346,6 +1349,25 @@ private struct HistoryTitlebarAccessory: NSViewRepresentable {
 
 /// Keeps the host NSWindow's titlebar transparent and separator-free so MacTopBar
 /// can paint the full width of the chrome itself.
+/// SwiftUI content in its own NSHostingView, so it sits above AppKit views in hit-testing.
+private struct AppKitLayer<Content: View>: NSViewRepresentable {
+    @ViewBuilder let content: Content
+
+    func makeNSView(context: Context) -> NSHostingView<AnyView> {
+        let host = NSHostingView(rootView: AnyView(content.environment(\.self, context.environment)))
+        host.sizingOptions = []
+        return host
+    }
+
+    func updateNSView(_ host: NSHostingView<AnyView>, context: Context) {
+        host.rootView = AnyView(content.environment(\.self, context.environment))
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSHostingView<AnyView>, context: Context) -> CGSize? {
+        proposal.replacingUnspecifiedDimensions()
+    }
+}
+
 private struct WindowChromeTint: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSView {

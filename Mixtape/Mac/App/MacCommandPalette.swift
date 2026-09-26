@@ -329,7 +329,8 @@ struct MacCommandPalette: View {
                 .strokeBorder(Color.mixSeparator, lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.35), radius: 30, y: 12)
-        .onAppear { fieldFocused = true }
+        // Next turn, once the palette's own host view is in the window.
+        .onAppear { DispatchQueue.main.async { fieldFocused = true } }
         // Any change to the result set can strand the cursor past the end.
         .onChange(of: query) { _, _ in selection = 0 }
     }
@@ -347,6 +348,7 @@ struct MacCommandPalette: View {
                 .focused($fieldFocused)
                 .onKeyPress(.downArrow) { move(1);  return .handled }
                 .onKeyPress(.upArrow)   { move(-1); return .handled }
+                .onKeyPress(.escape)    { appState.commandPaletteOpen = false; return .handled }
                 .onSubmit(run)
                 // ⌘⌫ clears what's been typed here rather than reaching the
                 // window behind the palette and offering to delete a song.
@@ -370,17 +372,19 @@ struct MacCommandPalette: View {
                 VStack(alignment: .leading, spacing: 0) {
                     // Index has to be tracked across sections so ↑/↓ walk the
                     // whole palette, not each group independently.
-                    let all = flatItems
-                    ForEach(sections, id: \.0) { title, items in
-                        Text(title.uppercased())
+                    let secs = sections
+                    let starts = secs.reduce(into: [0]) { $0.append($0.last! + $1.1.count) }
+                    ForEach(Array(secs.enumerated()), id: \.element.0) { s, section in
+                        Text(section.0.uppercased())
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(Color.mixTextTertiary)
                             .padding(.horizontal, 16)
                             .padding(.top, 10)
                             .padding(.bottom, 4)
 
-                        ForEach(items) { item in
-                            let index = all.firstIndex(where: { $0.id == item.id }) ?? 0
+                        // By position: item ids are minted fresh on every redraw.
+                        ForEach(Array(section.1.enumerated()), id: \.offset) { i, item in
+                            let index = starts[s] + i
                             PaletteRow(item: item, isSelected: index == selection)
                                 .id(index)
                                 .onTapGesture {
