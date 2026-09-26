@@ -116,3 +116,14 @@ extension Data {
         (try? JSONDecoder().decode([UUID].self, from: self)) ?? []
     }
 }
+
+extension Array where Element == PlaylistSide {
+    /// Nil when there are no sides, so most rows store nothing.
+    nonisolated var sidesData: Data? {
+        isEmpty ? nil : try? JSONEncoder().encode(self)
+    }
+
+    nonisolated init(data: Data?) {
+        self = data.flatMap { try? JSONDecoder().decode([PlaylistSide].self, from: $0) } ?? []
+    }
+}

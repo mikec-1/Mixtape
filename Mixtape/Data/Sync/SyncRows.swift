@@ -352,6 +352,9 @@ nonisolated struct PlaylistRow: Codable, Sendable {
     /// reason as `isPinned`: a client or server that predates the column sends
     /// nil, and nil must leave the local order alone rather than flattening it.
     var sortIndex: Int?
+    /// See `Playlist.sides`. Always sent, so removing the last side syncs; nil from
+    /// an older client leaves the local sides alone.
+    var sides: [PlaylistSide]?
     /// Where this playlist came from — a mix, someone else's published list, or
     /// the user's own. Optional because a client that predates the column sends
     /// nil, which the migration defines as `owned`.
@@ -380,6 +383,7 @@ nonisolated struct PlaylistRow: Codable, Sendable {
         case coverKind    = "cover_kind"
         case isPinned     = "is_pinned"
         case sortIndex    = "sort_index"
+        case sides
         case origin
         case ownerName    = "owner_name"
         case dateCreated  = "created_at"
@@ -401,6 +405,7 @@ nonisolated struct PlaylistRow: Codable, Sendable {
         self.coverKind    = entity.coverKindRaw
         self.isPinned     = entity.isPinned
         self.sortIndex    = entity.sortIndex
+        self.sides        = [PlaylistSide](data: entity.sidesData)
         self.origin       = PlaylistRow.wireOrigin(entity.originRaw)
         self.ownerName    = entity.ownerName
         self.dateCreated  = entity.dateCreated
@@ -433,6 +438,7 @@ nonisolated struct PlaylistRow: Codable, Sendable {
         // Same reasoning: a server that predates the column has nothing to say
         // about the order, and saying nothing must not clear one.
         if let sortIndex { entity.sortIndex = sortIndex }
+        if let sides { entity.sidesData = sides.sidesData }
         // Nil is "a client that predates the column", which the migration
         // defines as `owned` — and that is already the local default, so
         // leaving the row alone says the same thing without overwriting an
@@ -497,6 +503,7 @@ extension PlaylistEntity {
             coverKindRaw:        row.coverKind ?? PlaylistCoverKind.derived.rawValue,
             isPinned:            row.isPinned ?? false,
             sortIndex:           row.sortIndex,
+            sidesData:           row.sides?.sidesData,
             syncStatus:          SyncStatus.synced.rawValue,
             syncDeviceID:        row.syncDeviceID,
             syncLocalModifiedAt: row.updatedAt,

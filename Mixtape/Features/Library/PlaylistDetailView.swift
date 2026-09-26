@@ -117,6 +117,9 @@ public struct PlaylistDetailView: View {
     /// someone their friend unpublished a playlist because the wifi dropped is
     /// worse than saying nothing.
     @State private var sourceUnavailable = false
+    /// The side being renamed, and the name being typed.
+    @State private var renamingSide: SideGroup?
+    @State private var sideName = ""
 
     private var columns: TrackColumns { TrackColumns(width: listWidth) }
 
@@ -647,6 +650,20 @@ public struct PlaylistDetailView: View {
         } message: {
             Text(unavailableMessage)
         }
+        .alert("Rename \(renamingSide?.title ?? "Side")",
+               isPresented: Binding(get: { renamingSide != nil },
+                                    set: { if !$0 { renamingSide = nil } })) {
+            TextField("Name", text: $sideName)
+            Button("Rename") {
+                if let side = renamingSide?.side {
+                    editSides { $0.renameSide(startingAt: side.start, to: sideName) }
+                }
+                renamingSide = nil
+            }
+            Button("Cancel", role: .cancel) { renamingSide = nil }
+        } message: {
+            Text("Leave it empty to show just the letter.")
+        }
         // Removing songs from the library — context menu and swipe both land
         // here, so there's one prompt rather than one per gesture.
         .confirmsTrackDeletion($tracksPendingDeletion) { pending in
@@ -736,8 +753,14 @@ public struct PlaylistDetailView: View {
                     noMatchesState
                         .frame(maxWidth: .infinity)
                         .padding(.top, 60)
+                } else if let groups = sideGroups {
+                    // One table per side. They share the selection, see `suppressSelectionSync`.
+                    ForEach(groups) { group in
+                        sideHeader(group)
+                        trackTable(group.tracks)
+                    }
                 } else {
-                    trackTable
+                    trackTable(visibleTracks)
                 }
             }
         }
@@ -747,7 +770,7 @@ public struct PlaylistDetailView: View {
         .onDisappear { appState.clearTrackSelection() }
     }
 
-    private var trackTable: some View {
+    private func trackTable(_ rows: [Track]) -> some View {
         NativeTrackTable(
             tracks:              visibleTracks,
             currentTrackID:      engine.queue.currentTrack?.id,
@@ -795,6 +818,8 @@ public struct PlaylistDetailView: View {
             excludedPlaylistID:  playlist.id,
             onFindInDiscover:    { findInDiscover($0) },
             onChoosePlaylist:    { tracksForAddToPlaylist = $0 },
+            onStartSide:         canEditSides ? { track in editSides { $0.startSide(at: track.id) } } : nil,
+            canStartSide:        { canStartSide(at: $0) },
             isFavourited:        { deps.libraryService.isFavourited(trackID: $0) },
             playlists:           deps.libraryService.playlists,
             availability:        { deps.downloadManager.status(for: $0) },
@@ -859,6 +884,16 @@ public struct PlaylistDetailView: View {
                 noMatchesState
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
+            } else if let groups = sideGroups {
+                ForEach(groups) { group in
+                    sideHeader(group)
+                        .listRowInsets(TrackColumns.rowInsets)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                    ForEach(Array(group.tracks.enumerated()), id: \.element.id) { index, track in
+                        trackRow(track: track, index: index + 1, isSelected: false)
+                    }
+                }
             } else {
                 // Identified by the track, not by its position. With `\.offset`,
                 // reordering or filtering the list renamed every row from the
@@ -2033,6 +2068,93 @@ public struct PlaylistDetailView: View {
         }
     }
 
+    // MARK: - Sides
+
+    /// Visible rows split by side, or nil for one plain list. Sides follow the
+    /// running order, so any other sort hides them.
+    private var sideGroups: [SideGroup]? {
+        guard trackSort.isDefault else { return nil }
+        let layout = livePlaylist.sideLayout
+        guard !layout.isEmpty else { return nil }
+        let numbers = livePlaylist.sideNumbers()
+        var rows = Array(repeating: [Track](), count: layout.count)
+        for track in visibleTracks { rows[numbers[track.id] ?? 0].append(track) }
+        return layout.indices.compactMap { i in
+            rows[i].isEmpty ? nil : SideGroup(index: i, side: layout[i].side, tracks: rows[i])
+        }
+    }
+
+    private var canEditSides: Bool {
+        !isReadOnly && !isSmart && !livePlaylist.isSystem && trackSort.isDefault
+    }
+
+    /// Not the first song, and not one that already starts a side.
+    private func canStartSide(at track: Track) -> Bool {
+        guard canEditSides, livePlaylist.trackIDs.first != track.id else { return false }
+        return !livePlaylist.sides.contains { $0.start == track.id }
+    }
+
+    private func editSides(_ body: (inout Playlist) -> Void) {
+        deps.libraryService.editSides(ofPlaylist: playlist.id, body)
+    }
+
+    private func sideHeader(_ group: SideGroup) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(group.title)
+                .foregroundStyle(Color.mixTextPrimary)
+            if !group.side.name.isEmpty {
+                Text(group.side.name)
+                    .foregroundStyle(Color.mixTextSecondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            Menu { sideMenu(group) } label: {
+                Image(systemName: "ellipsis")
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            #if os(macOS)
+            .menuStyle(.button)
+            .buttonStyle(.plain).mixHandCursor()
+            .menuIndicator(.hidden)
+            #endif
+            .foregroundStyle(Color.mixTextSecondary)
+            .accessibilityLabel("\(group.title) options")
+        }
+        .font(.mixTitle2)
+        #if os(macOS)
+        .padding(.horizontal, 22)
+        #else
+        .padding(.horizontal, TrackColumns.rowPadding)
+        #endif
+        .padding(.top, 20)
+        .padding(.bottom, 4)
+        .contentShape(Rectangle())
+        .contextMenu { sideMenu(group) }
+    }
+
+    @ViewBuilder
+    private func sideMenu(_ group: SideGroup) -> some View {
+        Button("Play \(group.title)", systemImage: MixtapeIcons.play) {
+            if let first = group.tracks.first(where: \.canResolveAudio) ?? group.tracks.first {
+                playAndMark(first, within: group.tracks)
+            }
+        }
+        if canEditSides {
+            Divider()
+            Button("Rename Side\u{2026}", systemImage: "pencil") {
+                sideName = group.side.name
+                renamingSide = group
+            }
+            // Not destructive: the songs join the side before.
+            if let start = group.side.start {
+                Button("Remove Side", systemImage: "minus.circle") {
+                    editSides { $0.removeSide(startingAt: start) }
+                }
+            }
+        }
+    }
+
     /// Opens Discover with this song's title and artist already searched, so a
     /// placeholder can be turned into the real thing in two taps.
     ///
@@ -2220,6 +2342,12 @@ public struct PlaylistDetailView: View {
         .listRowSeparator(.hidden)
         .contextMenu {
             trackContextMenu(for: track)
+            if canStartSide(at: track) {
+                Divider()
+                Button("Start New Side Here", systemImage: "rectangle.split.1x2") {
+                    editSides { $0.startSide(at: track.id) }
+                }
+            }
         }
         // ── Swipe left: delete / remove ──────────────────────────
         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
@@ -2257,6 +2385,15 @@ public struct PlaylistDetailView: View {
         }
     }
     #endif
+}
+
+/// One side's visible rows on the playlist page.
+private struct SideGroup: Identifiable {
+    let index: Int
+    let side: PlaylistSide
+    let tracks: [Track]
+    var id: Int { index }
+    var title: String { "Side \(PlaylistSide.letter(index))" }
 }
 
 // MARK: - Track Table Columns

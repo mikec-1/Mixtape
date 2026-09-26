@@ -283,6 +283,9 @@ public final class PlaylistEntity {
     /// "never arranged" until it is.
     public var sortIndex: Int? = nil
 
+    /// JSON-encoded `[PlaylistSide]`. Nil means no sides.
+    public var sidesData: Data? = nil
+
     /// When the bucket's copy of this cover was last written, as of the last
     /// time we looked.
     ///
@@ -334,6 +337,7 @@ public final class PlaylistEntity {
         coverKindRaw: String = PlaylistCoverKind.derived.rawValue,
         isPinned: Bool = false,
         sortIndex: Int? = nil,
+        sidesData: Data? = nil,
         artworkKey: String? = nil,
         syncStatus: String = SyncStatus.localOnly.rawValue,
         syncServerID: String? = nil,
@@ -355,6 +359,7 @@ public final class PlaylistEntity {
         self.coverKindRaw         = coverKindRaw
         self.isPinned             = isPinned
         self.sortIndex            = sortIndex
+        self.sidesData            = sidesData
         self.artworkKey           = artworkKey
         self.syncStatus           = syncStatus
         self.syncServerID         = syncServerID

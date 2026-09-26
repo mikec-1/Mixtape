@@ -94,6 +94,10 @@ struct NativeTrackTable: NSViewRepresentable {
     /// which is the only route to a playlist that doesn't exist yet. Nil leaves
     /// the submenu as a plain list of the playlists there are.
     var onChoosePlaylist:       (([Track]) -> Void)? = nil
+    /// "Start New Side Here". Nil hides the item.
+    var onStartSide:            ((Track) -> Void)? = nil
+    /// Only consulted when `onStartSide` is set.
+    var canStartSide:           (Track) -> Bool = { _ in true }
 
     // MARK: Online pages
     //
@@ -974,6 +978,11 @@ extension NativeTrackTable {
 
             }
 
+            if !many, parent.onStartSide != nil, parent.canStartSide(track) {
+                menu.addItem(menuItem("Start New Side Here", action: #selector(menuStartSide(_:)), track: track))
+                menu.addItem(.separator())
+            }
+
             // Leaving *this* playlist — never a delete, never a confirmation:
             // the song stays in the library and the row comes back with one
             // drag. Offered above the library delete because on a playlist page
@@ -1088,6 +1097,11 @@ extension NativeTrackTable {
         @objc func menuRemoveFromPlaylist(_ item: NSMenuItem) {
             guard let targets = item.representedObject as? [Track] else { return }
             parent.onRemoveFromPlaylist?(targets)
+        }
+
+        @objc func menuStartSide(_ item: NSMenuItem) {
+            guard let track = item.representedObject as? Track else { return }
+            parent.onStartSide?(track)
         }
 
         @objc func menuFindInDiscover(_ item: NSMenuItem) {

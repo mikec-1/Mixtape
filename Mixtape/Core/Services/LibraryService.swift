@@ -1874,6 +1874,13 @@ public final class LibraryService: ObservableObject {
         refreshPlaylists()
     }
 
+    /// Start, remove or rename a side. See `Playlist.sides`.
+    public func editSides(ofPlaylist id: UUID, _ body: (inout Playlist) -> Void) {
+        guard playlist(id: id)?.isEditable != false else { return }
+        mutatePlaylist(id: id, body: body)
+        refreshPlaylists()
+    }
+
     public func updatePlaylist(id: UUID, name: String, description: String?, artworkData: Data?) {
         guard id != Playlist.favouritesID && id != Playlist.allSongsID else { return }
         guard playlist(id: id)?.isEditable != false else { return }

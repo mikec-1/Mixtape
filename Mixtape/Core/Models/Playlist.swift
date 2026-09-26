@@ -57,6 +57,23 @@ public enum PlaylistOrigin: String, Codable, Hashable, Sendable {
     case spotifyMirror
 }
 
+/// A named stretch of a playlist, like one side of a tape.
+public struct PlaylistSide: Codable, Hashable, Sendable {
+    /// First song on this side. Nil for Side A, which starts at the top.
+    public var start: UUID?
+    public var name: String
+
+    public init(start: UUID?, name: String = "") {
+        self.start = start
+        self.name  = name
+    }
+
+    /// "A", "B", ... then numbers past Z.
+    public static func letter(_ index: Int) -> String {
+        index < 26 ? String(UnicodeScalar(65 + index)!) : String(index + 1)
+    }
+}
+
 public struct Playlist: Identifiable, Codable, Hashable, Sendable {
 
     // MARK: - Well-known IDs
@@ -114,6 +131,9 @@ public struct Playlist: Identifiable, Codable, Hashable, Sendable {
     /// in library order rather than all claiming position zero.
     public var sortIndex: Int?
 
+    /// Side A, B, ... in running order. Empty means no sides. Synced.
+    public var sides: [PlaylistSide]
+
     // Sync
     public var sync: SyncMetadata
     public var isDeleted: Bool
@@ -131,6 +151,7 @@ public struct Playlist: Identifiable, Codable, Hashable, Sendable {
         coverKind: PlaylistCoverKind = .derived,
         isPinned: Bool = false,
         sortIndex: Int? = nil,
+        sides: [PlaylistSide] = [],
         sync: SyncMetadata,
         isDeleted: Bool = false
     ) {
@@ -146,6 +167,7 @@ public struct Playlist: Identifiable, Codable, Hashable, Sendable {
         self.coverKind    = coverKind
         self.isPinned     = isPinned
         self.sortIndex    = sortIndex
+        self.sides        = sides
         self.sync         = sync
         self.isDeleted    = isDeleted
     }
@@ -212,14 +234,94 @@ public struct Playlist: Identifiable, Codable, Hashable, Sendable {
     public mutating func removeTracks(_ ids: [UUID]) {
         let doomed = Set(ids)
         guard !doomed.isEmpty else { return }
-        let before = trackIDs.count
+        let before = trackIDs
         trackIDs.removeAll(where: doomed.contains)
-        guard trackIDs.count != before else { return }
+        guard trackIDs.count != before.count else { return }
+        // A side whose first song goes starts at the next one that stays.
+        if !sides.isEmpty {
+            sides = sides.compactMap { side in
+                guard let start = side.start, doomed.contains(start) else { return side }
+                guard let at = before.firstIndex(of: start),
+                      let next = before[(at + 1)...].first(where: { !doomed.contains($0) })
+                else { return nil }
+                return PlaylistSide(start: next, name: side.name)
+            }
+            sides = sideLayout.map(\.side)
+        }
         touch()
     }
 
     public mutating func reorder(fromOffsets: IndexSet, toOffset: Int) {
         trackIDs.move(fromOffsets: fromOffsets, toOffset: toOffset)
+        touch()
+    }
+
+    // MARK: Sides
+
+    /// Where each side starts in `trackIDs`, in running order. A break whose song
+    /// has gone is skipped, two on one song keep the later, and a lone side means none.
+    public var sideLayout: [(offset: Int, side: PlaylistSide)] {
+        guard !sides.isEmpty else { return [] }
+        var position: [UUID: Int] = [:]
+        for (i, id) in trackIDs.enumerated() where position[id] == nil { position[id] = i }
+        var byOffset: [Int: PlaylistSide] = [:]
+        for side in sides {
+            if let start = side.start {
+                if let at = position[start] { byOffset[at] = side }
+            } else {
+                byOffset[0] = side
+            }
+        }
+        guard byOffset.count > 1 else { return [] }
+        return byOffset.sorted { $0.key < $1.key }.enumerated().map { i, entry in
+            guard i == 0 else { return (entry.key, entry.value) }
+            // Side A always starts at the top.
+            return (0, PlaylistSide(start: nil, name: entry.value.name))
+        }
+    }
+
+    /// Side number (0 is A) for each song. Empty when there are no sides.
+    public func sideNumbers() -> [UUID: Int] {
+        let layout = sideLayout
+        guard !layout.isEmpty else { return [:] }
+        var result: [UUID: Int] = [:]
+        var side = 0
+        for (i, id) in trackIDs.enumerated() {
+            while side + 1 < layout.count, layout[side + 1].offset <= i { side += 1 }
+            if result[id] == nil { result[id] = side }
+        }
+        return result
+    }
+
+    /// Starts a new side at `trackID`. The first song and existing starts already are one.
+    public mutating func startSide(at trackID: UUID) {
+        guard let at = trackIDs.firstIndex(of: trackID), at > 0 else { return }
+        var next = sideLayout.map(\.side)
+        guard !next.contains(where: { $0.start == trackID }) else { return }
+        if next.isEmpty { next = [PlaylistSide(start: nil)] }
+        next.append(PlaylistSide(start: trackID))
+        sides = next
+        sides = sideLayout.map(\.side)
+        touch()
+    }
+
+    /// Folds the side starting at `trackID` into the one before it.
+    public mutating func removeSide(startingAt trackID: UUID) {
+        var next = sideLayout.map(\.side)
+        guard next.contains(where: { $0.start == trackID }) else { return }
+        next.removeAll { $0.start == trackID }
+        sides = next
+        sides = sideLayout.map(\.side)
+        touch()
+    }
+
+    /// `start` is nil for Side A. An empty name shows just the letter.
+    public mutating func renameSide(startingAt start: UUID?, to name: String) {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        var next = sideLayout.map(\.side)
+        guard let i = next.firstIndex(where: { $0.start == start }), next[i].name != name else { return }
+        next[i].name = name
+        sides = next
         touch()
     }
 

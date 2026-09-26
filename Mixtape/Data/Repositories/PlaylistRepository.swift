@@ -211,6 +211,7 @@ extension PlaylistEntity {
             coverKind:   PlaylistCoverKind(rawValue: coverKindRaw) ?? .derived,
             isPinned:    isPinned,
             sortIndex:   sortIndex,
+            sides:       [PlaylistSide](data: sidesData),
             sync: SyncMetadata(
                 serverID:         syncServerID,
                 status:           SyncStatus(rawValue: syncStatus) ?? .localOnly,
@@ -251,6 +252,7 @@ extension PlaylistEntity {
         coverKindRaw         = playlist.coverKind.rawValue
         isPinned             = playlist.isPinned
         sortIndex            = playlist.sortIndex
+        sidesData            = playlist.sides.sidesData
 
         syncStatus           = playlist.sync.status.rawValue
         syncServerID         = playlist.sync.serverID
@@ -275,6 +277,7 @@ extension PlaylistEntity {
             coverKindRaw:         playlist.coverKind.rawValue,
             isPinned:             playlist.isPinned,
             sortIndex:            playlist.sortIndex,
+            sidesData:            playlist.sides.sidesData,
             syncStatus:           playlist.sync.status.rawValue,
             syncServerID:         playlist.sync.serverID,
             syncDeviceID:         playlist.sync.deviceID,
