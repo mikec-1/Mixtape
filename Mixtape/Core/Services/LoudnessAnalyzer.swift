@@ -61,11 +61,10 @@ public enum LoudnessAnalyzer {
 
     /// The correction for `url` in dB, measured if it hasn't been already.
     ///
-    /// `nonisolated async` is what actually leaves the main actor in this target
-    /// (`SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, SE-0338); `Task.detached`
-    /// would inherit the caller's isolation and decode on the main thread.
+    /// `@concurrent` keeps the decode off the main actor. Plain `nonisolated async` runs on the
+    /// caller's actor with approachable concurrency on.
     @discardableResult
-    public nonisolated static func measureGainDB(for url: URL) async -> Float? {
+    @concurrent public nonisolated static func measureGainDB(for url: URL) async -> Float? {
         if let cached = cachedGainDB(for: url) { return cached }
         guard let measured = integrated(url) else { return nil }
 
