@@ -356,6 +356,7 @@ struct MacRootView: View {
                         .onTapGesture { appState.commandPaletteOpen = false }
 
                     MacCommandPalette()
+                        .environmentObject(deps)
                         .environmentObject(appState)
                         .environmentObject(library)
                         .environmentObject(engine)
@@ -401,6 +402,12 @@ struct MacRootView: View {
                 .environmentObject(deps.queueService)
         }
         // ── Library ▸ Merge Duplicate Songs ───────────────────────────────
+        .sheet(item: $appState.dubRequest) { request in
+            DubSheet(playlist: request.playlist,
+                     tracks: request.playlist.trackIDs.compactMap { deps.libraryService.track(id: $0) },
+                     recipient: request.recipient)
+                .environmentObject(deps)
+        }
         .sheet(isPresented: $showMergeDuplicates) {
             MergeDuplicatesSheet().environmentObject(deps)
         }

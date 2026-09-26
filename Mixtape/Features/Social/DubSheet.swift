@@ -10,12 +10,18 @@ struct DubSheet: View {
     @EnvironmentObject private var deps: AppDependencies
     @Environment(\.dismiss) private var dismiss
 
-    @State private var recipient = ""
+    @State private var recipient: String
     @State private var note = ""
     @State private var artworkData: Data?
     @State private var isMaking = false
 
     private var name: String { recipient.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    init(playlist: Playlist, tracks: [Track], recipient: String = "") {
+        self.playlist = playlist
+        self.tracks = tracks
+        _recipient = State(initialValue: recipient)
+    }
 
     var body: some View {
         MixSheet(title: "Dub for Someone",

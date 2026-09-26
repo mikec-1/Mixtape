@@ -170,6 +170,15 @@ struct OnlineDiscoverView: View {
                 } else {
                     fallBackToSearch("\(title) \(artistName)".trimmingCharacters(in: .whitespaces))
                 }
+            case let .artistRadio(name):
+                let station = await StationBuilder.artistRadio(name: name, using: deps.itunesClient)
+                defer { appState.resolvingDiscoverLink = nil }
+                if let station {
+                    appState.searchText = ""
+                    path = [.mix(station)]
+                } else {
+                    fallBackToSearch(name)
+                }
             case let .songRadio(title, artistName):
                 let station = await StationBuilder.songRadio(title: title,
                                                              artistName: artistName,

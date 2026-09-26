@@ -1239,6 +1239,8 @@ final class MacAppState: ObservableObject {
         case album(title: String, artistName: String, trackID: Int?)
         /// A station built from one song — "Go to Song Radio" on a track row.
         case songRadio(title: String, artistName: String)
+        /// Station seeded from an artist name (⌘K radio).
+        case artistRadio(name: String)
     }
     @Published var pendingDiscover: DiscoverDeepLink? = nil
 
@@ -1300,6 +1302,24 @@ final class MacAppState: ObservableObject {
     }
 
     /// Open the station seeded by one song, as a page of its own.
+    func showArtistRadio(name: String) {
+        guard !name.isEmpty else { return }
+        leaveFullscreenLyricsForNavigation()
+        clearSearch()
+        dismissContentOverlays()
+        pendingDiscover       = .artistRadio(name: name)
+        resolvingDiscoverLink = "\(name) Radio"
+        openLinkedDiscover()
+    }
+
+    /// ⌘K "dub <playlist> to <person>". MacRootView presents the sheet.
+    struct DubRequest: Identifiable {
+        let id = UUID()
+        let playlist: Playlist
+        let recipient: String
+    }
+    @Published var dubRequest: DubRequest? = nil
+
     func showSongRadio(title: String, artistName: String) {
         guard !title.isEmpty, !artistName.isEmpty else { return }
         leaveFullscreenLyricsForNavigation()

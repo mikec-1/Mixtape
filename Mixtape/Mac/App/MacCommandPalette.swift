@@ -20,6 +20,7 @@ struct MacCommandPalette: View {
     @EnvironmentObject private var appState: MacAppState
     @EnvironmentObject private var library:  LibraryService
     @EnvironmentObject private var engine:   PlaybackEngine
+    @EnvironmentObject private var deps:     AppDependencies
     @Environment(\.mixChrome) private var chrome
 
     @ObservedObject private var meta = PlaylistMetadataService.shared
@@ -136,6 +137,126 @@ struct MacCommandPalette: View {
 
     /// Library lookups only run once there's something to look up — an empty
     /// palette shows commands and recently played playlists, not 4000 songs.
+    // MARK: - Verbs
+
+    private struct Verb {
+        let name: String
+        let usage: String
+        let summary: String
+        let icon: String
+    }
+
+    private static let verbs = [
+        Verb(name: "queue", usage: "queue <song>", summary: "Add a song to the queue", icon: "text.append"),
+        Verb(name: "radio", usage: "radio <artist>", summary: "Start a station from an artist", icon: "dot.radiowaves.left.and.right"),
+        Verb(name: "download", usage: "download <album>", summary: "Download an album", icon: "arrow.down.circle"),
+        Verb(name: "dub", usage: "dub <playlist> to <person>", summary: "Dub a playlist for someone", icon: "recordingtape"),
+        Verb(name: "goto", usage: "goto settings/playback", summary: "Jump to a page or a setting", icon: "arrow.turn.down.right"),
+    ]
+
+    /// The verb the query starts with, and what follows it.
+    private var verb: (verb: Verb, argument: String)? {
+        let parts = trimmedQuery.split(separator: " ", maxSplits: 1)
+        guard let first = parts.first?.lowercased(),
+              let verb = Self.verbs.first(where: { $0.name == first }) else { return nil }
+        return (verb, parts.count > 1 ? parts[1].trimmingCharacters(in: .whitespaces) : "")
+    }
+
+    /// The verbs as rows that fill the field, until one has an argument.
+    private var verbHints: [PaletteItem] {
+        let typed = trimmedQuery.lowercased()
+        return Self.verbs.filter { typed.isEmpty || $0.name.hasPrefix(typed) }.map { verb in
+            PaletteItem(kind: .command, title: verb.usage, subtitle: verb.summary,
+                        icon: verb.icon, fill: verb.name + " ") {}
+        }
+    }
+
+    private var verbItems: [PaletteItem] {
+        guard let parsed = verb, !parsed.argument.isEmpty else { return [] }
+        let verb = parsed.verb, argument = parsed.argument
+        switch verb.name {
+        case "queue":
+            return matching(library.displayTracks) {
+                $0.title.localizedCaseInsensitiveContains(argument)
+                    || $0.artistName.localizedCaseInsensitiveContains(argument)
+            }.map { track in
+                PaletteItem(kind: .song, title: "Queue \(track.title)", subtitle: track.artistName,
+                            icon: verb.icon, artwork: track.displayArtwork) {
+                    engine.queue.append(track)
+                    deps.showToast("Added to Queue")
+                }
+            }
+        case "radio":
+            let artists = matching(library.artists) { $0.name.localizedCaseInsensitiveContains(argument) }
+            var items = artists.map { radioItem($0.name, artwork: $0.displayArtwork) }
+            // The catalogue has artists the library doesn't.
+            if !artists.contains(where: { $0.name.caseInsensitiveCompare(argument) == .orderedSame }) {
+                items.append(radioItem(argument, artwork: nil))
+            }
+            return items
+        case "download":
+            return matching(library.albums) {
+                $0.title.localizedCaseInsensitiveContains(argument)
+                    || $0.artistName.localizedCaseInsensitiveContains(argument)
+            }.map { album in
+                PaletteItem(kind: .album, title: "Download \(album.title)", subtitle: album.artistName,
+                            icon: verb.icon, artwork: album.displayArtwork) {
+                    let started = library.tracks(in: album).filter { deps.downloadManager.download($0) == nil }.count
+                    deps.showToast(started == 0
+                                   ? "Nothing left to download in \u{201C}\(album.title)\u{201D}"
+                                   : "Downloading \(started) song\(started == 1 ? "" : "s")")
+                }
+            }
+        case "dub":
+            guard deps.authService.currentUser != nil else { return [] }
+            // "dub road trip to sam": the last " to " splits playlist from person.
+            let padded = argument + " "
+            let split = padded.range(of: " to ", options: [.caseInsensitive, .backwards])
+            let name = split.map { String(padded[..<$0.lowerBound]) } ?? argument
+            let person = split.map { padded[$0.upperBound...].trimmingCharacters(in: .whitespaces) } ?? ""
+            return matching(library.playlists) {
+                $0.isEditable && !$0.isSystem && !$0.isDeleted && !$0.trackIDs.isEmpty
+                    && $0.name.localizedCaseInsensitiveContains(name)
+            }.map { playlist in
+                PaletteItem(kind: .playlist, title: "Dub \(playlist.name)",
+                            subtitle: person.isEmpty ? "For someone" : "For \(person)",
+                            icon: verb.icon, artwork: library.coverData(for: playlist)) {
+                    appState.dubRequest = MacAppState.DubRequest(playlist: playlist, recipient: person)
+                }
+            }
+        case "goto":
+            let words = argument.lowercased().split { $0 == " " || $0 == "/" }
+            let pages = MacSidebarItem.allCases.map { item in
+                (key: item.title.lowercased(),
+                 item: PaletteItem(kind: .command, title: item.title, subtitle: "Page",
+                                   icon: item.systemImage) { appState.goToSection(item) })
+            }
+            let user = deps.authService.currentUser
+            let settings = SettingsCategory.visible(isSignedIn: user != nil,
+                                                    isDeveloper: user?.isDeveloper == true).map { category in
+                (key: "settings \(category.title.lowercased())",
+                 item: PaletteItem(kind: .command, title: "Settings \u{203A} \(category.title)",
+                                   subtitle: category.summary, icon: category.icon) {
+                     SettingsRoute.shared.open(category)
+                     appState.goToSection(.settings)
+                 })
+            }
+            return Array((pages + settings)
+                .filter { page in words.allSatisfy { page.key.contains($0) } }
+                .prefix(perSectionLimit)
+                .map { $0.item })
+        default:
+            return []
+        }
+    }
+
+    private func radioItem(_ name: String, artwork: Data?) -> PaletteItem {
+        PaletteItem(kind: .artist, title: "\(name) Radio", subtitle: "Station",
+                    icon: "dot.radiowaves.left.and.right", artwork: artwork, circular: true) {
+            appState.showArtistRadio(name: name)
+        }
+    }
+
     private func matching<T>(_ source: [T], _ predicate: (T) -> Bool) -> [T] {
         guard !trimmedQuery.isEmpty else { return [] }
         return Array(source.lazy.filter(predicate).prefix(perSectionLimit))
@@ -171,7 +292,9 @@ struct MacCommandPalette: View {
     /// Flat, in display order — the same order arrow keys walk.
     private var sections: [(String, [PaletteItem])] {
         [
+            (verb?.verb.summary ?? "", verbItems),
             ("Jump back in", recentPlaylists),
+            ("Actions",      verbHints),
             ("Commands",     filteredCommands),
             ("Songs",        songs),
             ("Albums",       albums),
@@ -287,6 +410,10 @@ struct MacCommandPalette: View {
     private func run() {
         guard flatItems.indices.contains(selection) else { return }
         let item = flatItems[selection]
+        if let fill = item.fill {
+            query = fill
+            return
+        }
         appState.commandPaletteOpen = false
         item.action()
     }
@@ -304,11 +431,14 @@ struct PaletteItem: Identifiable {
     let icon:     String
     var artwork:  Data? = nil
     var circular: Bool  = false
+    /// Set on verb hints: running the row types this instead of closing.
+    var fill:     String? = nil
     let action:   () -> Void
 
     init(kind: Kind, title: String, subtitle: String, icon: String,
-         artwork: Data? = nil, circular: Bool = false,
+         artwork: Data? = nil, circular: Bool = false, fill: String? = nil,
          action: @escaping () -> Void) {
+        self.fill = fill
         self.kind = kind
         self.title = title
         self.subtitle = subtitle

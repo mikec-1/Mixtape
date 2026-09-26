@@ -456,6 +456,18 @@ enum StationBuilder {
                    cap: 50)
     }
 
+    /// "radio <artist>" from ⌘K, for any name the catalogue knows.
+    static func artistRadio(name: String, using catalog: ITunesSearchClient) async -> PersonalMix? {
+        let tracks = await catalog.deepRadioTracks(forArtist: name, limit: 50)
+        return mix(id: "station:artist-name:\(hashKey([name.lowercased()]))",
+                   title: "\(name) Radio",
+                   subtitleText: "\(name) and the artists around them \u{2014} "
+                               + credits(of: tracks, excluding: name, limit: 2),
+                   seedArtist: name,
+                   tracks: tracks,
+                   cap: 50)
+    }
+
     // MARK: - Artist page stations
 
     /// The two stations an artist page carries.
