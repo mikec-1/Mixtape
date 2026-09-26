@@ -72,6 +72,7 @@ public struct PublicPlaylistPage: View {
     /// first read, or on a server without `get_playlist_save_count` — and the
     /// header shows nothing at all rather than claiming zero.
     @State private var saveCount: Int?
+    @State private var notes: PlaylistNotes?
     @State private var isHiding = false
     @State private var actionError: String?
 
@@ -169,6 +170,12 @@ public struct PublicPlaylistPage: View {
                     }
                     .padding(.horizontal, Metrics.inset)
                     .padding(.top, 4)
+                }
+
+                if let notes, !notes.isEmpty {
+                    LinerNotesView(notes: notes, songs: summary.tracks.map { ($0.id, $0.title) })
+                        .padding(.horizontal, Metrics.inset)
+                        .padding(.top, 28)
                 }
             }
             .frame(maxWidth: 1100, alignment: .leading)
@@ -640,7 +647,8 @@ public struct PublicPlaylistPage: View {
         library.reconcileSharedPlaylist(localPlaylistID: local.id,
                                         remoteTrackIDs: summary.tracks.map(\.id),
                                         remoteTrackMeta: sharedTrackMeta,
-                                        ownerID: summary.ownerID)
+                                        ownerID: summary.ownerID,
+                                        notes: notes)
 
         // Marked "owner" because the role is load-bearing and not just a label:
         // `setPublic` refuses to publish anything whose link says otherwise, and
@@ -691,7 +699,8 @@ public struct PublicPlaylistPage: View {
                                         remoteTrackIDs: summary.tracks.map(\.id),
                                         remoteTrackMeta: sharedTrackMeta,
                                         ownerID: summary.ownerID,
-                                        dedupeAgainstLibrary: true)
+                                        dedupeAgainstLibrary: true,
+                                        notes: notes)
 
         deps.showToast("Copied \u{201C}\(summary.name)\u{201D} to your library")
         Task { try? await deps.syncService.sync() }
@@ -787,6 +796,7 @@ public struct PublicPlaylistPage: View {
             break
         }
 
+        notes = try? await PlaylistSharingService.shared.fetchPublicPlaylist(sharedPlaylistID: summary.id).notes
         await loadCollaborators()
         await loadSaveCount()
 

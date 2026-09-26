@@ -136,6 +136,9 @@ public final class PlaylistSharingService: ObservableObject {
         /// push direction pretending it can set one.
         public var artworkPath: String?
 
+        /// Nil from a row that predates the column, which leaves local notes alone.
+        public var notes: PlaylistNotes?
+
         enum CodingKeys: String, CodingKey {
             case id
             case playlistId  = "playlist_id"
@@ -147,6 +150,7 @@ public final class PlaylistSharingService: ObservableObject {
             case shareCode   = "share_code"
             case updatedAt   = "updated_at"
             case artworkPath = "artwork_path"
+            case notes
         }
 
         public init(
@@ -159,7 +163,8 @@ public final class PlaylistSharingService: ObservableObject {
             tracks: [SharedTrackMeta],
             shareCode: String,
             updatedAt: Date,
-            artworkPath: String? = nil
+            artworkPath: String? = nil,
+            notes: PlaylistNotes? = nil
         ) {
             self.id = id
             self.playlistId = playlistId
@@ -171,6 +176,7 @@ public final class PlaylistSharingService: ObservableObject {
             self.shareCode = shareCode
             self.updatedAt = updatedAt
             self.artworkPath = artworkPath
+            self.notes = notes
         }
 
         public init(from decoder: Decoder) throws {
@@ -190,6 +196,7 @@ public final class PlaylistSharingService: ObservableObject {
             shareCode   = try c.decodeIfPresent(String.self, forKey: .shareCode) ?? ""
             updatedAt   = try c.decode(Date.self, forKey: .updatedAt)
             artworkPath = try c.decodeIfPresent(String.self, forKey: .artworkPath)
+            notes       = try c.decodeIfPresent(PlaylistNotes.self, forKey: .notes)
         }
 
         public func encode(to encoder: Encoder) throws {
@@ -204,6 +211,7 @@ public final class PlaylistSharingService: ObservableObject {
             try c.encode(shareCode, forKey: .shareCode)
             try c.encode(updatedAt, forKey: .updatedAt)
             try c.encodeIfPresent(artworkPath, forKey: .artworkPath)
+            try c.encodeIfPresent(notes, forKey: .notes)
         }
 
         /// Public URL of the playlist cover, if one was published.
@@ -276,7 +284,8 @@ public final class PlaylistSharingService: ObservableObject {
             tracks: Self.snapshot(playlist: playlist, resolving: tracks),
             shareCode: shareCode,
             updatedAt: Date(),
-            artworkPath: artworkPath
+            artworkPath: artworkPath,
+            notes: playlist.notes
         )
 
         try await client
@@ -436,7 +445,8 @@ public final class PlaylistSharingService: ObservableObject {
             libraryService.reconcileSharedPlaylist(localPlaylistID: existingID,
                                                    remoteTrackIDs: record.trackIds,
                                                    remoteTrackMeta: record.tracks,
-                                                   ownerID: record.ownerId)
+                                                   ownerID: record.ownerId,
+                                                   notes: record.notes)
             setLinkedShare(LinkedShare(sharedPlaylistID: record.id,
                                        shareCode: record.shareCode,
                                        role: role),
@@ -468,7 +478,8 @@ public final class PlaylistSharingService: ObservableObject {
         libraryService.reconcileSharedPlaylist(localPlaylistID: local.id,
                                                remoteTrackIDs: record.trackIds,
                                                remoteTrackMeta: record.tracks,
-                                               ownerID: record.ownerId)
+                                               ownerID: record.ownerId,
+                                               notes: record.notes)
         setLinkedShare(LinkedShare(sharedPlaylistID: record.id,
                                    shareCode: record.shareCode,
                                    role: role),
@@ -644,7 +655,8 @@ public final class PlaylistSharingService: ObservableObject {
                                                    remoteTrackIDs: remote.trackIds,
                                                    remoteTrackMeta: remote.tracks,
                                                    ownerID: remote.ownerId,
-                                                   dedupeAgainstLibrary: true)
+                                                   dedupeAgainstLibrary: true,
+                                                   notes: remote.notes)
             return .available
         } catch SharingError.unavailable {
             return .unavailable
@@ -1207,6 +1219,7 @@ public final class PlaylistSharingService: ObservableObject {
             let description: String?
             let track_ids: [UUID]
             let tracks: [SharedTrackMeta]
+            let notes: PlaylistNotes
             let artwork_path: String?
             let updated_at: Date
         }
@@ -1217,6 +1230,7 @@ public final class PlaylistSharingService: ObservableObject {
             description: playlist.description,
             track_ids: playlist.trackIDs,
             tracks: Self.snapshot(playlist: playlist, resolving: tracks),
+            notes: playlist.notes,
             artwork_path: artworkPath,
             updated_at: Date()
         )
@@ -1266,6 +1280,7 @@ public final class PlaylistSharingService: ObservableObject {
             let description: String?
             let track_ids: [UUID]
             let tracks: [SharedTrackMeta]
+            let notes: PlaylistNotes
             let artwork_path: String?
             let updated_at: Date
         }
@@ -1283,6 +1298,7 @@ public final class PlaylistSharingService: ObservableObject {
                 description: playlist.description,
                 track_ids: playlist.trackIDs,
                 tracks: Self.snapshot(playlist: playlist, resolving: tracks),
+                notes: playlist.notes,
                 artwork_path: artworkPath,
                 updated_at: Date()
             ))
@@ -1308,6 +1324,7 @@ public final class PlaylistSharingService: ObservableObject {
             let description: String?
             let track_ids: [UUID]
             let tracks: [SharedTrackMeta]
+            let notes: PlaylistNotes
             let share_code: String
             let artwork_path: String?
             let link_shared = true
@@ -1327,6 +1344,7 @@ public final class PlaylistSharingService: ObservableObject {
                            description: playlist.description,
                            track_ids: playlist.trackIDs,
                            tracks: Self.snapshot(playlist: playlist, resolving: tracks),
+                           notes: playlist.notes,
                            share_code: Self.generateShareCode(),
                            artwork_path: artworkPath,
                            dub_for: recipient,
@@ -1681,7 +1699,8 @@ public final class PlaylistSharingService: ObservableObject {
             localPlaylistID: localPlaylistID,
             remoteTrackIDs: remote.trackIds,
             remoteTrackMeta: remote.tracks,
-            ownerID: remote.ownerId
+            ownerID: remote.ownerId,
+            notes: remote.notes
         )
     }
 
@@ -1705,6 +1724,7 @@ public final class PlaylistSharingService: ObservableObject {
         struct TracksPayload: Encodable {
             let track_ids: [UUID]
             let tracks: [SharedTrackMeta]
+            let notes: PlaylistNotes
             let updated_at: Date
         }
 
@@ -1714,6 +1734,7 @@ public final class PlaylistSharingService: ObservableObject {
         let payload = TracksPayload(
             track_ids: local.trackIDs,
             tracks: Self.snapshot(playlist: local, resolving: libraryService.tracks),
+            notes: local.notes,
             updated_at: Date()
         )
 

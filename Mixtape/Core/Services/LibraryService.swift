@@ -1881,6 +1881,14 @@ public final class LibraryService: ObservableObject {
         refreshPlaylists()
     }
 
+    /// Sets the liner notes, pushing them to a shared playlist like its songs.
+    public func setNotes(_ notes: PlaylistNotes, ofPlaylist id: UUID) {
+        guard playlist(id: id)?.isEditable != false else { return }
+        mutatePlaylist(id: id) { $0.notes = notes; $0.touch() }
+        refreshPlaylists()
+        pushIfShared(id)
+    }
+
     public func updatePlaylist(id: UUID, name: String, description: String?, artworkData: Data?) {
         guard id != Playlist.favouritesID && id != Playlist.allSongsID else { return }
         guard playlist(id: id)?.isEditable != false else { return }
@@ -2216,7 +2224,8 @@ public final class LibraryService: ObservableObject {
         remoteTrackIDs: [UUID],
         remoteTrackMeta: [PlaylistSharingService.SharedTrackMeta],
         ownerID: UUID? = nil,
-        dedupeAgainstLibrary: Bool = false
+        dedupeAgainstLibrary: Bool = false,
+        notes: PlaylistNotes? = nil
     ) {
         let metaByID = Dictionary(remoteTrackMeta.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         // Hashed once rather than scanned per song. `track(id:)` walks the whole
@@ -2239,6 +2248,8 @@ public final class LibraryService: ObservableObject {
         // The remote order with every song the user owns swapped for their copy.
         // Identical to `remoteTrackIDs` when nothing matched.
         var resolvedTrackIDs: [UUID] = []
+        // Owner's id to ours, so a note follows its song.
+        var swapped: [UUID: UUID] = [:]
         for trackID in remoteTrackIDs {
             guard let meta = metaByID[trackID] else {
                 // No metadata to match on, so there is nothing to do but carry
@@ -2259,6 +2270,7 @@ public final class LibraryService: ObservableObject {
                                                artistName: meta.artist,
                                                duration: meta.duration) {
                     resolvedTrackIDs.append(existing.id)
+                    swapped[trackID] = existing.id
                     continue
                 }
                 let row = Self.sharedTrackRow(meta: meta, deviceID: deviceID)
@@ -2289,6 +2301,17 @@ public final class LibraryService: ObservableObject {
             if playlist.trackIDs != resolvedTrackIDs {
                 playlist.trackIDs = resolvedTrackIDs
                 playlist.touch()
+            }
+            if var mapped = notes {
+                for (from, to) in swapped {
+                    guard let note = mapped[song: from] else { continue }
+                    mapped[song: from] = nil
+                    mapped[song: to] = note
+                }
+                if playlist.notes != mapped {
+                    playlist.notes = mapped
+                    playlist.touch()
+                }
             }
         }
 

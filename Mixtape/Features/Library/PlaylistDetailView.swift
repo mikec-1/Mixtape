@@ -60,6 +60,7 @@ public struct PlaylistDetailView: View {
     // Collaborative share sheet
     @State private var showCollabShare = false
     @State private var showDubSheet = false
+    @State private var showLinerNotes = false
     @State private var showSpotifyExport = false
     /// Whether this playlist appears on the owner's public profile. Separate from
     /// collaborative sharing on purpose: handing a friend a join code and putting
@@ -719,6 +720,10 @@ public struct PlaylistDetailView: View {
             DubSheet(playlist: livePlaylist, tracks: tracks)
                 .environmentObject(deps)
         }
+        .sheet(isPresented: $showLinerNotes) {
+            LinerNotesSheet(playlist: livePlaylist, tracks: tracks)
+                .environmentObject(deps)
+        }
         #if os(iOS)
         // A name in the byline opens as a sheet rather than a push: this page
         // can be reached from more than one tab's stack, and a profile is a
@@ -773,6 +778,12 @@ public struct PlaylistDetailView: View {
                     }
                 } else {
                     trackTable(visibleTracks)
+                }
+                if !livePlaylist.notes.isEmpty {
+                    linerNotes
+                        .padding(.horizontal, 22)
+                        .padding(.top, 28)
+                        .padding(.bottom, 40)
                 }
             }
         }
@@ -917,6 +928,15 @@ public struct PlaylistDetailView: View {
                     trackRow(track: track, index: index + 1, isSelected: false)
                 }
             }
+
+            if !livePlaylist.notes.isEmpty {
+                linerNotes
+                    .padding(.top, 20)
+                    .padding(.bottom, 24)
+                    .listRowInsets(TrackColumns.rowInsets)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+            }
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
@@ -929,6 +949,12 @@ public struct PlaylistDetailView: View {
         }
     }
     #endif
+
+    /// Numbered by running order, whatever the sort.
+    private var linerNotes: some View {
+        LinerNotesView(notes: livePlaylist.notes,
+                       songs: tracks.map { ($0.id, $0.displayTitle) })
+    }
 
     // MARK: - Header
 
@@ -1761,6 +1787,11 @@ public struct PlaylistDetailView: View {
                 showEditSheet = true
             } label: {
                 Label("Edit Details", systemImage: "pencil")
+            }
+            Button {
+                showLinerNotes = true
+            } label: {
+                Label("Liner Notes\u{2026}", systemImage: "text.quote")
             }
         }
 

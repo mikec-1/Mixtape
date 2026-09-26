@@ -74,6 +74,35 @@ public struct PlaylistSide: Codable, Hashable, Sendable {
     }
 }
 
+/// Liner notes: a few words on the playlist and on any of its songs. Synced, and sent with a share.
+nonisolated public struct PlaylistNotes: Codable, Hashable, Sendable {
+    public var text = ""
+    /// By lowercase song id, the same keys the web reads.
+    public var songs: [String: String] = [:]
+
+    public init() {}
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        text  = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
+        songs = try c.decodeIfPresent([String: String].self, forKey: .songs) ?? [:]
+    }
+
+    public var isEmpty: Bool { text.isEmpty && songs.isEmpty }
+
+    public subscript(song id: UUID) -> String? {
+        get { songs[id.uuidString.lowercased()] }
+        set { songs[id.uuidString.lowercased()] = newValue?.isEmpty == false ? newValue : nil }
+    }
+
+    /// Nil when empty, so most rows store nothing.
+    var data: Data? { isEmpty ? nil : try? JSONEncoder().encode(self) }
+
+    init(data: Data?) {
+        self = data.flatMap { try? JSONDecoder().decode(PlaylistNotes.self, from: $0) } ?? PlaylistNotes()
+    }
+}
+
 public struct Playlist: Identifiable, Codable, Hashable, Sendable {
 
     // MARK: - Well-known IDs
@@ -134,6 +163,9 @@ public struct Playlist: Identifiable, Codable, Hashable, Sendable {
     /// Side A, B, ... in running order. Empty means no sides. Synced.
     public var sides: [PlaylistSide]
 
+    /// See `PlaylistNotes`.
+    public var notes: PlaylistNotes
+
     // Sync
     public var sync: SyncMetadata
     public var isDeleted: Bool
@@ -152,6 +184,7 @@ public struct Playlist: Identifiable, Codable, Hashable, Sendable {
         isPinned: Bool = false,
         sortIndex: Int? = nil,
         sides: [PlaylistSide] = [],
+        notes: PlaylistNotes = PlaylistNotes(),
         sync: SyncMetadata,
         isDeleted: Bool = false
     ) {
@@ -168,6 +201,7 @@ public struct Playlist: Identifiable, Codable, Hashable, Sendable {
         self.isPinned     = isPinned
         self.sortIndex    = sortIndex
         self.sides        = sides
+        self.notes        = notes
         self.sync         = sync
         self.isDeleted    = isDeleted
     }

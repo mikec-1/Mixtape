@@ -355,6 +355,8 @@ nonisolated struct PlaylistRow: Codable, Sendable {
     /// See `Playlist.sides`. Always sent, so removing the last side syncs; nil from
     /// an older client leaves the local sides alone.
     var sides: [PlaylistSide]?
+    /// See `Playlist.notes`. Always sent like `sides`; nil leaves the local notes alone.
+    var notes: PlaylistNotes?
     /// Where this playlist came from — a mix, someone else's published list, or
     /// the user's own. Optional because a client that predates the column sends
     /// nil, which the migration defines as `owned`.
@@ -384,6 +386,7 @@ nonisolated struct PlaylistRow: Codable, Sendable {
         case isPinned     = "is_pinned"
         case sortIndex    = "sort_index"
         case sides
+        case notes
         case origin
         case ownerName    = "owner_name"
         case dateCreated  = "created_at"
@@ -406,6 +409,7 @@ nonisolated struct PlaylistRow: Codable, Sendable {
         self.isPinned     = entity.isPinned
         self.sortIndex    = entity.sortIndex
         self.sides        = [PlaylistSide](data: entity.sidesData)
+        self.notes        = PlaylistNotes(data: entity.notesData)
         self.origin       = PlaylistRow.wireOrigin(entity.originRaw)
         self.ownerName    = entity.ownerName
         self.dateCreated  = entity.dateCreated
@@ -439,6 +443,7 @@ nonisolated struct PlaylistRow: Codable, Sendable {
         // about the order, and saying nothing must not clear one.
         if let sortIndex { entity.sortIndex = sortIndex }
         if let sides { entity.sidesData = sides.sidesData }
+        if let notes { entity.notesData = notes.data }
         // Nil is "a client that predates the column", which the migration
         // defines as `owned` — and that is already the local default, so
         // leaving the row alone says the same thing without overwriting an
@@ -504,6 +509,7 @@ extension PlaylistEntity {
             isPinned:            row.isPinned ?? false,
             sortIndex:           row.sortIndex,
             sidesData:           row.sides?.sidesData,
+            notesData:           row.notes?.data,
             syncStatus:          SyncStatus.synced.rawValue,
             syncDeviceID:        row.syncDeviceID,
             syncLocalModifiedAt: row.updatedAt,

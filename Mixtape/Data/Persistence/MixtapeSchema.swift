@@ -286,6 +286,9 @@ public final class PlaylistEntity {
     /// JSON-encoded `[PlaylistSide]`. Nil means no sides.
     public var sidesData: Data? = nil
 
+    /// JSON-encoded `PlaylistNotes`. Nil means none.
+    public var notesData: Data? = nil
+
     /// When the bucket's copy of this cover was last written, as of the last
     /// time we looked.
     ///
@@ -338,6 +341,7 @@ public final class PlaylistEntity {
         isPinned: Bool = false,
         sortIndex: Int? = nil,
         sidesData: Data? = nil,
+        notesData: Data? = nil,
         artworkKey: String? = nil,
         syncStatus: String = SyncStatus.localOnly.rawValue,
         syncServerID: String? = nil,
@@ -360,6 +364,7 @@ public final class PlaylistEntity {
         self.isPinned             = isPinned
         self.sortIndex            = sortIndex
         self.sidesData            = sidesData
+        self.notesData            = notesData
         self.artworkKey           = artworkKey
         self.syncStatus           = syncStatus
         self.syncServerID         = syncServerID

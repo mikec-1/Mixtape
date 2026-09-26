@@ -212,6 +212,7 @@ extension PlaylistEntity {
             isPinned:    isPinned,
             sortIndex:   sortIndex,
             sides:       [PlaylistSide](data: sidesData),
+            notes:       PlaylistNotes(data: notesData),
             sync: SyncMetadata(
                 serverID:         syncServerID,
                 status:           SyncStatus(rawValue: syncStatus) ?? .localOnly,
@@ -253,6 +254,7 @@ extension PlaylistEntity {
         isPinned             = playlist.isPinned
         sortIndex            = playlist.sortIndex
         sidesData            = playlist.sides.sidesData
+        notesData            = playlist.notes.data
 
         syncStatus           = playlist.sync.status.rawValue
         syncServerID         = playlist.sync.serverID
@@ -278,6 +280,7 @@ extension PlaylistEntity {
             isPinned:             playlist.isPinned,
             sortIndex:            playlist.sortIndex,
             sidesData:            playlist.sides.sidesData,
+            notesData:            playlist.notes.data,
             syncStatus:           playlist.sync.status.rawValue,
             syncServerID:         playlist.sync.serverID,
             syncDeviceID:         playlist.sync.deviceID,
