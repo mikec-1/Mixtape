@@ -124,11 +124,21 @@ struct ArtworkWash: ViewModifier {
                     ArtworkWashTint.shared.publish(colors: colors, intensity: intensity, from: id)
                     return
                 }
+                // Seen before: no decode, so the fade starts straight away.
+                let key = Self.cacheKey(source)
+                if let cached = Self.sampled[key] {
+                    colors = cached.isEmpty ? fallback : cached
+                    ArtworkWashTint.shared.publish(colors: colors, intensity: intensity, from: id)
+                    return
+                }
                 // Decoding runs off the main thread: a screen is often pushed
                 // and painted in the same frame, and a cover can be a megabyte.
                 let sampled = await Task.detached(priority: .userInitiated) {
                     ArtworkColors.gradientColors(from: source)
                 }.value
+                // Colours are tiny, so the cap is only a backstop.
+                if Self.sampled.count >= 512 { Self.sampled.removeAll() }
+                Self.sampled[key] = sampled
                 // Unreadable artwork lands here too, not just missing artwork —
                 // the page asked to be tinted, and "the JPEG didn't decode" is
                 // not a reason to show it untinted.
@@ -161,6 +171,18 @@ struct ArtworkWash: ViewModifier {
     private struct WashKey: Equatable {
         let source: Data?
         let enabled: Bool
+    }
+
+    /// Sampled colours by cover, so reopening a page skips the decode.
+    private static var sampled: [Int: [Color]] = [:]
+
+    /// Size and both ends of the image, like the library's cover fingerprint.
+    private static func cacheKey(_ data: Data) -> Int {
+        var hasher = Hasher()
+        hasher.combine(data.count)
+        hasher.combine(data.prefix(64))
+        hasher.combine(data.suffix(64))
+        return hasher.finalize()
     }
 
     /// Kept as a constant because the titlebar tint has to match this exactly.

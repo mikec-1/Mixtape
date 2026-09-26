@@ -174,7 +174,7 @@ public struct SmartPlaylistCover: View {
         // other one. The colour is derived from the id the way a mix's is
         // (`MixCoverStyle`), so a list keeps its colour everywhere it appears.
         let tape = playlist.rule.tapeStart
-        let accent = MixCoverStyle.color(for: tape.map { "\($0)" } ?? playlist.id.uuidString)
+        let accent = Self.accent(for: playlist)
         RoundedRectangle(cornerRadius: size * 0.06, style: .continuous)
             .fill(
                 LinearGradient(colors: [accent.opacity(0.95), accent.opacity(0.55)],
@@ -203,6 +203,13 @@ public struct SmartPlaylistCover: View {
                 .foregroundStyle(.white)
                 .shadow(color: .black.opacity(0.25), radius: size * 0.03, y: size * 0.01)
             }
+    }
+}
+
+extension SmartPlaylistCover {
+    /// The cover's colour. The page wash uses it too, so the two match.
+    static func accent(for playlist: SmartPlaylist) -> Color {
+        MixCoverStyle.color(for: playlist.rule.tapeStart.map { "\($0)" } ?? playlist.id.uuidString)
     }
 }
 

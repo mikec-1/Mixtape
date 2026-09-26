@@ -653,7 +653,7 @@ public struct HomeSections: View {
             service.ensureMonthTapes(history: history)
             allSmartLists = service.playlists.compactMap { playlist in
                 guard !SmartPlaylistService.isArchivedTape(playlist) else { return nil }
-                let tracks = service.resolve(playlist, using: library, history: history)
+                let tracks = deps.smartTracks(playlist)
                 // A rule that can't fill a card isn't a playlist yet. A "Most
                 // Played" of one song was the complaint; the floor applies to
                 // the shipped rules only — see `isWorthShowing`.

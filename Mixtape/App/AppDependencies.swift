@@ -102,13 +102,26 @@ public final class AppDependencies: ObservableObject {
 
     /// A smart playlist's songs right now. One call site for the rule's inputs,
     /// so the cover, the page and Home can't resolve it three different ways.
+    /// Kept per library revision: the sidebar and list rows ask on every draw, and every
+    /// play bumps `revision`, so history rules stay current.
     public func smartTracks(_ smart: SmartPlaylist) -> [Track] {
-        smartPlaylistService.resolve(
+        let revision = libraryService.revision
+        if smartMemoRevision != revision {
+            smartMemo = [:]
+            smartMemoRevision = revision
+        }
+        if let hit = smartMemo[smart] { return hit }
+        let tracks = smartPlaylistService.resolve(
             smart,
             using: libraryService,
             history: PlayHistoryRepository()
         )
+        smartMemo[smart] = tracks
+        return tracks
     }
+
+    private var smartMemo: [SmartPlaylist: [Track]] = [:]
+    private var smartMemoRevision: UInt64?
 
     public func smartTrackIDs(_ smart: SmartPlaylist) -> [UUID] {
         smartTracks(smart).map(\.id)

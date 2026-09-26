@@ -30,6 +30,7 @@ public struct PlaylistDetailView: View {
     // Rename
     /// Confirming a press that would delete downloaded audio.
     @State private var resolvedCover: Data?
+    @State private var coverLoaded = false
     @State private var showRemoveDownloadsConfirm = false
     /// Stopping a Liked Songs sync asks what to do with the songs it imported.
     @State private var showStopLikedSongs = false
@@ -253,7 +254,11 @@ public struct PlaylistDetailView: View {
     ///
     /// Nil for All Songs and Favourites: their hero is a glyph, and the wash
     /// comes from `washFallback` instead.
-    private var displayCover: Data? { resolvedCover }
+    private var displayCover: Data? {
+        guard !isSmart else { return nil }
+        // Until `loadCover` runs, read the stored cover directly so it's there on the first frame.
+        return coverLoaded ? resolvedCover : livePlaylist.displayArtwork
+    }
 
     /// What the cover is built from, as a value that changes when it should.
     private var coverIdentity: String {
@@ -275,6 +280,7 @@ public struct PlaylistDetailView: View {
     /// (the `ModelContext` lives there); *drawing* them does not, so only the
     /// reads happen here and the composition goes to a background task.
     private func loadCover() async {
+        defer { coverLoaded = true }
         // A smart playlist wears its rule's icon on every other surface —
         // `PlaylistArtwork` has always routed it to `SmartPlaylistCover`. Only
         // this page composed a 2×2 of its songs instead, which is why the
@@ -336,7 +342,7 @@ public struct PlaylistDetailView: View {
     /// The brand orange for the two glyph playlists, so they match their cover.
     private var washFallback: [Color] {
         if let smart = smartRule {
-            let accent = MixCoverStyle.color(for: smart.id.uuidString)
+            let accent = SmartPlaylistCover.accent(for: smart)
             return [accent, accent.opacity(0.55)]
         }
         return livePlaylist.isSystem ? ArtworkColors.brandGradient : []
@@ -428,16 +434,17 @@ public struct PlaylistDetailView: View {
                 if deps.spotifyFollowService.isFollowing(playlistID: playlist.id) {
                     await deps.spotifyFollowService.sync(playlistID: playlist.id)
                 }
-                await loadByline()
-                // Only ever about a playlist of your own: the toggle it backs puts
-                // *your* playlist on *your* profile, and asking for anything else is
-                // a round trip whose answer is always no.
-                if !isReadOnly { await loadPublicState() }
-                await loadSaveCount()
                 // After the refresh, not before: a playlist just joined has no local
                 // rows at all until `refreshSharedPlaylist` writes them, so prefetching
                 // first would find nothing to warm.
                 deps.onlineCoordinator.prefetchResolvable(tracks)
+            }
+            // The header's reads, alongside the refresh so the byline doesn't wait for it.
+            .task(id: playlist.id) {
+                await loadByline()
+                // Only for your own playlists: the toggle puts yours on your profile.
+                if !isReadOnly { await loadPublicState() }
+                await loadSaveCount()
             }
             // Only a mix says who it was made for, so only a mix pays for the
             // lookup. Keyed on the account so switching users doesn't leave the
@@ -2100,7 +2107,7 @@ public struct PlaylistDetailView: View {
         if isSmart { return "Smart Playlist" }
         let count = livePlaylist.sideLayout.count
         guard count > 1 else { return "Playlist" }
-        return "Tape \u{00B7} Sides " + (0..<count).map(PlaylistSide.letter).joined(separator: ", ")
+        return "Tape \u{00B7} Sides " + (0..<count).map { PlaylistSide.letter($0) }.joined(separator: ", ")
     }
 
     private var canEditSides: Bool {
