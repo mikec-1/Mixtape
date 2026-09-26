@@ -1111,11 +1111,12 @@ private struct UpNextSheet: View {
     /// song) so edit mode's handles line up with the song, not the heading.
     private enum QueueItem: Identifiable {
         case heading(String, QueueOrigin, id: String)
+        case side(String, id: String)
         case entry(QueueService.Entry)
 
         var id: String {
             switch self {
-            case .heading(_, _, let id): id
+            case .heading(_, _, let id), .side(_, let id): id
             case .entry(let row): row.id.uuidString
             }
         }
@@ -1129,6 +1130,7 @@ private struct UpNextSheet: View {
         var items: [QueueItem] = []
         var lanesSeen: [QueueOrigin: Int] = [:]
         var previous: QueueOrigin?
+        let sides = queueService.sideMarks()
         for row in upcoming {
             if !isRepeatGrouping, row.origin != previous {
                 let n = lanesSeen[row.origin, default: 0]
@@ -1137,6 +1139,7 @@ private struct UpNextSheet: View {
                                       id: "lane-\(row.origin.rawValue)-\(n)"))
             }
             previous = row.origin
+            if let side = sides[row.id] { items.append(.side(side, id: "side-\(row.id)")) }
             items.append(.entry(row))
         }
         return items
@@ -1174,7 +1177,7 @@ private struct UpNextSheet: View {
                     .foregroundStyle(Color.mixTextPrimary)
                     .accessibilityAddTraits(.isHeader)
                 if let name = queueService.source.displayName {
-                    Text("Playing \(Text(name).foregroundStyle(Color.mixTextPrimary))")
+                    Text("Playing \(Text(name).foregroundStyle(Color.mixTextPrimary))\(currentSide.map { " \u{00B7} \($0)" } ?? "")")
                         .font(.mixBody)
                         .foregroundStyle(Color.mixTextSecondary)
                         .lineLimit(1)
@@ -1227,6 +1230,7 @@ private struct UpNextSheet: View {
             ForEach(items) { item in
                 switch item {
                 case .heading(let title, let origin, _): laneHeading(title, origin: origin)
+                case .side(let title, _): sideHeading(title)
                 case .entry(let row): queueRow(row)
                 }
             }
@@ -1312,6 +1316,22 @@ private struct UpNextSheet: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Now playing: \(track.title), \(track.artistName)")
+    }
+
+    /// The playing row's side, for the header.
+    private var currentSide: String? {
+        queueService.entryID(at: queueService.currentIndex).flatMap { queueService.sideMarks()[$0] }
+    }
+
+    private func sideHeading(_ title: String) -> some View {
+        Label(title, systemImage: "recordingtape")
+            .font(.mixCaptionBold)
+            .foregroundStyle(Color.mixTextSecondary)
+            .listRowInsets(EdgeInsets(top: 10, leading: 20, bottom: 0, trailing: 16))
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+            .moveDisabled(true)
+            .deleteDisabled(true)
     }
 
     private func laneHeading(_ title: String, origin: QueueOrigin) -> some View {
@@ -1476,7 +1496,7 @@ private struct UpNextSheet: View {
     /// Labelled, because an unexplained rule between two songs reads as trim.
     private var repeatDivider: some View {
         HStack(spacing: 6) {
-            Text("Repeats from here")
+            Text(queueService.repeatDividerLabel)
                 .font(.system(size: MixFontScale.size(10), weight: .semibold))
                 .foregroundStyle(Color.mixRepeatBoundary)
                 .fixedSize(horizontal: true, vertical: false)

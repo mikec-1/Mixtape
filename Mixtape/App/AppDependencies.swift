@@ -311,8 +311,8 @@ public final class AppDependencies: ObservableObject {
             Task { await auth.updateSavedAlbums(raw) }
         }
         SavedAlbumsService.shared.onUnsave = { [libraryService] ids in libraryService.deleteTracks(ids: ids) }
-        queueService.playlistHasSides = { [weak libraryService] id in
-            libraryService?.playlist(id: id)?.sideLayout.isEmpty == false
+        queueService.playlistLookup = { [weak libraryService] id in
+            libraryService?.playlist(id: id)
         }
 
         LaunchTimeline.mark("deps/library-service")

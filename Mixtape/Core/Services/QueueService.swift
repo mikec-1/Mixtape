@@ -167,11 +167,39 @@ public final class QueueService: ObservableObject {
     public var sourcePlaylistID: UUID? { source.playlistID }
 
     /// Whether a playlist has sides. Set by AppDependencies.
-    public var playlistHasSides: (UUID) -> Bool = { _ in false }
+    public var playlistLookup: (UUID) -> Playlist? = { _ in nil }
 
     /// Repeat all on a playlist with sides: the tape flips from side to side.
     public var isAutoReverse: Bool {
-        repeatMode == .all && sourcePlaylistID.map(playlistHasSides) == true
+        repeatMode == .all && sourcePlaylistID.flatMap(playlistLookup)?.sideLayout.isEmpty == false
+    }
+
+    /// Side titles by row id: the playing row's side and each context row that starts
+    /// a new one. Empty unless a playlist with sides plays in running order.
+    public func sideMarks() -> [UUID: String] {
+        guard let playlist = sourcePlaylistID.flatMap(playlistLookup) else { return [:] }
+        let layout = playlist.sideLayout
+        guard !layout.isEmpty else { return [:] }
+        let numbers = playlist.sideNumbers()
+        var marks: [UUID: String] = [:]
+        var last: Int?
+        for (i, row) in entries.enumerated() where row.origin == .context {
+            guard let side = numbers[row.track.id] else { continue }
+            // Shuffled or sorted, so sides mean nothing.
+            if let last, side < last { return [:] }
+            if side != last || i == currentIndex {
+                let name = layout[side].side.name
+                marks[row.id] = "Side \(PlaylistSide.letter(side))" + (name.isEmpty ? "" : " \u{00B7} \(name)")
+            }
+            last = side
+        }
+        return marks
+    }
+
+    /// The repeat divider's text. Auto-reverse names the side the tape flips to.
+    public var repeatDividerLabel: String {
+        guard isAutoReverse else { return "Repeats from here" }
+        return "Flips to " + (entryIDs.first.flatMap { sideMarks()[$0] } ?? "Side A")
     }
 
     public var repeatLabel: String {

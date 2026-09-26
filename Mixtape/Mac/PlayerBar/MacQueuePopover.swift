@@ -51,8 +51,9 @@ struct MacQueuePanelView: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 2) {
+                        let sides = queueService.sideMarks()
                         if let current = currentRow {
-                            sectionHeader("Now playing")
+                            sectionHeader(sides[current.id].map { "Now playing \u{00B7} \($0)" } ?? "Now playing")
                             QueuePanelRow(row: current, isCurrent: true)
                         }
 
@@ -64,17 +65,17 @@ struct MacQueuePanelView: View {
                             if showsRepeatDivider {
                                 queueHeader(title: sections.first?.title ?? "Next in queue")
                                 ForEach(loopingRows) { row in
-                                    draggableRow(row)
+                                    upcomingRow(row, side: sides[row.id])
                                 }
                                 repeatDivider
                                 ForEach(afterRepeatRows) { row in
-                                    draggableRow(row)
+                                    upcomingRow(row, side: sides[row.id])
                                 }
                             } else {
                                 ForEach(Array(sections.enumerated()), id: \.element.id) { index, section in
                                     queueHeader(title: section.title, showsControls: index == 0)
                                     ForEach(section.rows) { row in
-                                        draggableRow(row)
+                                        upcomingRow(row, side: sides[row.id])
                                     }
                                 }
                             }
@@ -126,7 +127,8 @@ struct MacQueuePanelView: View {
                 .frame(width: 18, height: 2)
                 .clipShape(Capsule())
 
-            Text(afterRepeatRows.isEmpty ? "Repeats from here" : "Repeats from here · below plays once repeat is off")
+            Text(afterRepeatRows.isEmpty ? queueService.repeatDividerLabel
+                 : "\(queueService.repeatDividerLabel) · below plays once repeat is off")
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(Color.mixRepeatBoundary)
                 .lineLimit(1)
@@ -154,6 +156,19 @@ struct MacQueuePanelView: View {
 
     /// One upcoming row, draggable onto any other row to reorder it — which is
     /// also how a song is moved into or out of the repeating group.
+    @ViewBuilder
+    private func upcomingRow(_ row: QueueService.Entry, side: String?) -> some View {
+        if let side {
+            Label(side, systemImage: "recordingtape")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.mixTextSecondary)
+                .padding(.horizontal, 14)
+                .padding(.top, 8)
+                .padding(.bottom, 2)
+        }
+        draggableRow(row)
+    }
+
     @ViewBuilder
     private func draggableRow(_ row: QueueService.Entry) -> some View {
         QueuePanelRow(row: row, isCurrent: false,

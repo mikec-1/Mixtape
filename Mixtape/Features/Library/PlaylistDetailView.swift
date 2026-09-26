@@ -927,7 +927,7 @@ public struct PlaylistDetailView: View {
 
     private var header: some View {
         DetailHero(
-            eyebrow: isSmart ? "Smart Playlist" : "Playlist",
+            eyebrow: eyebrow,
             title: livePlaylist.name,
             subtitle: livePlaylist.description,
             // The byline carries the counts itself when there is one, so they
@@ -2093,6 +2093,14 @@ public struct PlaylistDetailView: View {
         return layout.indices.compactMap { i in
             rows[i].isEmpty ? nil : SideGroup(index: i, side: layout[i].side, tracks: rows[i])
         }
+    }
+
+    /// "Tape · Sides A, B" once a playlist has sides.
+    private var eyebrow: String {
+        if isSmart { return "Smart Playlist" }
+        let count = livePlaylist.sideLayout.count
+        guard count > 1 else { return "Playlist" }
+        return "Tape \u{00B7} Sides " + (0..<count).map(PlaylistSide.letter).joined(separator: ", ")
     }
 
     private var canEditSides: Bool {
