@@ -125,6 +125,7 @@ struct DevicePickerList: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Divider().overlay(Color.mixSeparator).padding(.bottom, 4)
+                JamRow(onPick: onPick)
                 #if os(iOS)
                 RouteButton()
                 #endif
@@ -263,6 +264,41 @@ private struct DeviceRow: View {
         .buttonStyle(.plain).mixHandCursor()
         .onHover { isHovered = $0 }
         .accessibilityLabel("\(device.name), \(kind). Play here")
+    }
+}
+
+/// Start a Jam, or open the one this device is in. Reads `deps` so the
+/// picker's call sites stay as they are.
+private struct JamRow: View {
+    @EnvironmentObject private var deps: AppDependencies
+    let onPick: () -> Void
+
+    var body: some View { Content(jam: deps.jam, onPick: onPick) }
+
+    private struct Content: View {
+        @ObservedObject var jam: JamService
+        let onPick: () -> Void
+
+        var body: some View {
+            Button {
+                onPick()
+                jam.present()
+            } label: {
+                PickerTile(icon: "person.2.wave.2", title: title, subtitle: subtitle)
+            }
+            .buttonStyle(.plain).mixHandCursor()
+        }
+
+        private var title: String {
+            guard let s = jam.session else { return "Start a Jam" }
+            return s.isHost ? "Your Jam" : "\(s.hostName)\u{2019}s Jam"
+        }
+
+        private var subtitle: String {
+            guard let s = jam.session else { return "Listen together with friends" }
+            let n = Set(jam.members.map(\.userID)).count
+            return "Code \(s.code) · \(n) \(n == 1 ? "person" : "people")"
+        }
     }
 }
 

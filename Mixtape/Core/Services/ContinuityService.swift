@@ -494,7 +494,7 @@ public final class ContinuityService: ObservableObject {
             playing: engine.state == .playing, since: since, queue: upcoming)
     }
 
-    private func summary(of track: Track) -> TrackSummary {
+    func summary(of track: Track) -> TrackSummary {
         TrackSummary(id: track.id.uuidString.lowercased(), title: track.title,
                      artist: track.artistName, album: track.albumTitle, duration: track.duration,
                      artworkKey: track.artworkKey, sourceRef: track.sourceRef,
@@ -553,7 +553,7 @@ public final class ContinuityService: ObservableObject {
 
     /// The library's copy when it has one; otherwise an online row the resolver
     /// can fetch by title and artist.
-    private func resolve(_ s: TrackSummary) -> Track {
+    func resolve(_ s: TrackSummary) -> Track {
         let id = UUID(uuidString: s.id) ?? UUID()
         if var track = library.track(id: id) {
             // A library row with no cover of its own draws a grey square; the

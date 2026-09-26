@@ -614,6 +614,10 @@ public final class QueueService: ObservableObject {
 
     // MARK: - Queue Editing
 
+    /// Set while this device is a Jam guest: "Add to Queue" and "Play Next" go to
+    /// the host's queue instead (returns true when it took them).
+    public var manualRedirect: (([Track]) -> Bool)?
+
     /// The first upcoming position that isn't in `lane` or an earlier one — i.e.
     /// where a new row of `lane` has to go to keep the lanes in order.
     ///
@@ -638,6 +642,7 @@ public final class QueueService: ObservableObject {
 
     /// A whole album or mix next, in its running order, as one change.
     public func insertNext(contentsOf tracks: [Track], manual: Bool = true) {
+        if manual, manualRedirect?(tracks) == true { return }
         insert(tracks, at: min(max(currentIndex + 1, 0), queue.count),
                lane: manual ? .manual : .context)
     }
@@ -660,6 +665,7 @@ public final class QueueService: ObservableObject {
     /// Add rows to a specific lane, in the one place that lane's rows belong.
     public func append(contentsOf tracks: [Track], lane: QueueOrigin) {
         guard !tracks.isEmpty else { return }
+        if lane == .manual, manualRedirect?(tracks) == true { return }
         insert(tracks, at: insertionIndex(for: lane), lane: lane)
     }
 

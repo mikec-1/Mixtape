@@ -175,6 +175,11 @@ public final class AppDependencies: ObservableObject {
         deviceID: Self.deviceID, name: SupabaseSyncService.deviceName,
         platform: SupabaseSyncService.platformName,
         toast: { [weak self] in self?.showToast($0) })
+    /// Listening together with other accounts (Phase 6).
+    public lazy var jam = JamService(
+        client: SupabaseConfig.client, engine: playbackEngine, continuity: continuity,
+        deviceID: Self.deviceID, currentUser: { [weak self] in self?.authService.currentUser },
+        toast: { [weak self] in self?.showToast($0) })
     public let downloadManager: DownloadManager
 
     // MARK: - Library & Import
@@ -696,7 +701,14 @@ LaunchTimeline.mark("deps/engine")
         downloadManager.$downloadQuality
             .sink { [weak self] q in self?.continuity.setQuality(q.title) }
             .store(in: &cancellables)
-        syncService.onRealtimeReady = { [weak self] in self?.continuity.start(userID: $0) }
+        // Eager too, so a guest's queue redirect is back before the first tap.
+        jam.online = onlineCoordinator
+        syncService.onRealtimeReady = { [weak self] uid in
+            guard let self else { return }
+            // A Jam guest mirrors the host, not its own devices.
+            if !jam.isGuest { continuity.start(userID: uid) }
+            jam.resume()
+        }
         LaunchTimeline.mark("deps/init-end")
     }
 
@@ -853,6 +865,7 @@ LaunchTimeline.mark("deps/engine")
     }
 
     private func onSignOutSync() {
+        jam.leave()
         continuity.stop()
         clearPlaybackSession()
         // The filter is a choice the signed-out person made; the next one starts

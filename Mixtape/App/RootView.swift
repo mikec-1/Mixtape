@@ -140,6 +140,8 @@ public struct RootView: View {
         .onOpenURL { url in
             if let code = Self.inviteCode(from: url) {
                 Task { await redeemInvite(code) }
+            } else if let code = Self.inviteCode(from: url, kind: "jam") {
+                Task { await deps.jam.join(code: code) }
             } else if Self.isHandledByAnAuthSession(url) {
                 // Deliberately nothing. See the note on the function.
             } else {
@@ -169,6 +171,7 @@ public struct RootView: View {
         )) {
             UsernamePromptView(authService: deps.authService)
         }
+        .background(JamSheetPresenter(jam: deps.jam))
     }
 
     /// True for the redirects that belong to an `ASWebAuthenticationSession`
@@ -205,17 +208,18 @@ public struct RootView: View {
     /// still needs an Associated Domains entitlement and a second handler — but
     /// it won't need this function rewritten, and every `mixtape://` invite
     /// already sent keeps working because this branch never goes away.
-    static func inviteCode(from url: URL) -> String? {
+    /// `kind: "jam"` reads Jam links (mixtape://jam/CODE) the same way.
+    static func inviteCode(from url: URL, kind: String = "join") -> String? {
         let segments = url.path.split(separator: "/").map(String.init)
 
-        if url.host?.lowercased() == "join" {
+        if url.host?.lowercased() == kind {
             if let first = segments.first { return normalisedCode(first) }
             let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?
                 .queryItems?.first(where: { $0.name == "code" })?.value
             return query.flatMap(normalisedCode)
         }
 
-        if segments.first?.lowercased() == "join", segments.count >= 2 {
+        if segments.first?.lowercased() == kind, segments.count >= 2 {
             return normalisedCode(segments[1])
         }
 

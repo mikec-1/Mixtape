@@ -708,7 +708,7 @@ struct InviteCollaboratorsSheet: View {
 
     /// `.interpolation(.none)` at the call site matters as much as this does — a
     /// smoothed QR is a blurry QR, and cameras stop reading it.
-    private static func qrImage(for string: String) -> Image? {
+    static func qrImage(for string: String) -> Image? {
         let filter = CIFilter.qrCodeGenerator()
         filter.message = Data(string.utf8)
         filter.correctionLevel = "M"
