@@ -189,7 +189,7 @@ struct MacTopBar: View {
 // Window drag for the empty bar (`WindowDragGesture` needs macOS 15). Views drawn above
 // still get their own clicks. Double-click keeps the system titlebar behaviour.
 
-private struct WindowDragArea: NSViewRepresentable {
+struct WindowDragArea: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSView { DragView() }
     func updateNSView(_ nsView: NSView, context: Context) {}
@@ -242,8 +242,10 @@ private struct MacHistoryButton: View {
 struct MacHistoryButtons: View {
 
     @EnvironmentObject private var appState: MacAppState
-    /// The recap covers the window, titlebar included.
+    /// The recap and the song editor cover the window, titlebar included.
     @ObservedObject var recap: RecapService
+
+    private var covered: Bool { recap.presented != nil || appState.editTrack != nil }
 
     var body: some View {
         HStack(spacing: 2) {
@@ -261,8 +263,8 @@ struct MacHistoryButtons: View {
                 appState.goForward()
             }
         }
-        .opacity(recap.presented == nil ? 1 : 0)
-        .allowsHitTesting(recap.presented == nil)
+        .opacity(covered ? 0 : 1)
+        .allowsHitTesting(!covered)
     }
 }
 

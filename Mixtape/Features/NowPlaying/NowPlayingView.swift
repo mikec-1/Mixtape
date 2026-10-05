@@ -111,7 +111,7 @@ public struct NowPlayingView: View {
             }
         }
         .sheet(item: $editTrack) { track in
-            SongEditorSheet(track: track, onOpenPost: { code in
+            SongEditor(track: track, onOpenPost: { code in
                 #if os(iOS)
                 iosAppState.openPost(code: code)
                 #endif

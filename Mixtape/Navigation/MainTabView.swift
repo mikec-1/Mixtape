@@ -113,7 +113,7 @@ public struct MainTabView: View {
         // Not while the player is up; it presents its own.
         .sheet(item: Binding(get: { iosAppState.showNowPlaying ? nil : iosAppState.editTrack },
                              set: { iosAppState.editTrack = $0 })) { track in
-            SongEditorSheet(track: track, onOpenPost: { iosAppState.openPost(code: $0) })
+            SongEditor(track: track, onOpenPost: { iosAppState.openPost(code: $0) })
                 .environmentObject(deps)
         }
         .sheet(item: Binding(get: { iosAppState.showNowPlaying ? nil : iosAppState.postTrack },

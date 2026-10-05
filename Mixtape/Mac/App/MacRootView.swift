@@ -177,6 +177,9 @@ struct MacRootView: View {
             }
             .mixAnimation(.easeInOut(duration: 0.18), value: showZoomHUD)
         }
+        // Under the song editor: no shortcuts, clicks or VoiceOver.
+        .disabled(appState.editTrack != nil)
+        .accessibilityHidden(appState.editTrack != nil)
         // With `.hiddenTitleBar`, ignore any leftover titlebar safe area so the bar sits behind the traffic lights.
         .ignoresSafeArea(.container, edges: .top)
         // Window constraints
@@ -202,6 +205,21 @@ struct MacRootView: View {
         }
         .mixAnimation(.easeInOut(duration: 0.25), value: appState.lyricsPresented)
         .mixAnimation(.easeInOut(duration: 0.25), value: appState.lyricsFullscreen)
+        // The song editor takes the whole window. Its own AppKit view so clicks can't reach the lists under it.
+        .overlay {
+            if let track = appState.editTrack {
+                AppKitLayer {
+                    SongEditor(track: track,
+                               onOpenPost: { appState.showPost(code: $0) },
+                               onClose: { appState.editTrack = nil })
+                        .environmentObject(deps)
+                        .id(track.id)
+                }
+                .ignoresSafeArea()
+                .transition(.opacity)
+            }
+        }
+        .mixAnimation(.easeInOut(duration: 0.2), value: appState.editTrack?.id)
         // Messages and the "Added to ..." card, bottom centre above the player bar. Outside the zoom transform too.
         .overlay(alignment: .bottom) {
             VStack(spacing: 8) {
@@ -238,6 +256,7 @@ struct MacRootView: View {
                     .keyboardShortcut("+", modifiers: .command)
             }
             .opacity(0)
+            .disabled(appState.editTrack != nil)
         }
         // Command palette. An overlay, not a sheet, so clicking outside dismisses it.
         .overlay {
@@ -295,10 +314,6 @@ struct MacRootView: View {
                 .environmentObject(engine)
                 .environmentObject(deps)
                 .environmentObject(deps.queueService)
-        }
-        .sheet(item: $appState.editTrack) { track in
-            SongEditorSheet(track: track, onOpenPost: { appState.showPost(code: $0) })
-                .environmentObject(deps)
         }
         .sheet(item: $appState.postTrack) { track in
             PostSheet(track: track, onOpen: { appState.showPost(code: $0) })
@@ -455,7 +470,7 @@ struct MacRootView: View {
             }
             // Keyboard shortcuts
             .onAppear  {
-                keyHandler.start(engine: engine, recap: deps.recap)
+                keyHandler.start(engine: engine, recap: deps.recap, appState: appState)
                 let userID = deps.authService.currentUser?.id.uuidString
                 appState.currentUserID = userID
                 PlaylistMetadataService.shared.currentUserID = userID
@@ -745,12 +760,12 @@ private final class KeyboardShortcutHandler: ObservableObject {
     /// so Space would re-press it instead of pausing.
     private var focusFromKeyboard = false
 
-    func start(engine: PlaybackEngine, recap: RecapService) {
+    func start(engine: PlaybackEngine, recap: RecapService, appState: MacAppState) {
         guard monitor == nil else { return }
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown]) { [weak self, weak engine, weak recap] event in
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown]) { [weak self, weak engine, weak recap, weak appState] event in
             guard let self, let engine else { return event }
-            // The recap story pauses itself with Space.
-            if recap?.presented != nil { return event }
+            // The recap story and the song editor play and pause themselves with Space.
+            if recap?.presented != nil || appState?.editTrack != nil { return event }
             if event.type == .leftMouseDown { self.focusFromKeyboard = false; return event }
             if event.keyCode == 48 { self.focusFromKeyboard = true }   // Tab / ⇧Tab
 

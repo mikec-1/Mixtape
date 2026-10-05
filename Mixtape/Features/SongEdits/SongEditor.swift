@@ -1,61 +1,60 @@
-// Quick editor: speed, pitch, bass, reverb and a trim on any song, saved as a new song beside the original.
-// On Apple silicon Macs it can also split the song into stems and set each one's level,
-// and on any Mac cut, loop and reorder parts of it.
+// Song editor: speed, pitch, bass, reverb and a trim on any song, saved as a new song beside the original.
+// A sheet on iOS. On the Mac it takes over the window as a studio (SongEditor+Studio.swift), where
+// Apple silicon can split the song into stems and any Mac can cut, loop and reorder parts of it.
 
 import SwiftUI
 
-struct SongEditorSheet: View {
+struct SongEditor: View {
     let track: Track
     /// Opens a post made from the saved edit, by its share code.
     var onOpenPost: ((String) -> Void)?
+    /// Closes the Mac studio. Nil dismisses the sheet.
+    var onClose: (() -> Void)?
 
-    @EnvironmentObject private var deps: AppDependencies
+    @EnvironmentObject var deps: AppDependencies
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var preview = EditPreview()
+    @StateObject var preview = EditPreview()
 
-    @State private var original: Track?
-    @State private var source: URL?
+    @State var original: Track?
+    @State var source: URL?
     /// A temporary copy of the original's audio, deleted on close.
-    @State private var scratch: URL?
-    @State private var loadError: String?
-    @State private var speed = 0.85
-    @State private var reverb = 0.35
+    @State var scratch: URL?
+    @State var loadError: String?
+    @State var speed = 0.85
+    @State var reverb = 0.35
     /// Nil follows the speed.
-    @State private var pitch: Double?
-    @State private var bass = 0.0
-    @State private var name = ""
-    @State private var nameTouched = false
+    @State var pitch: Double?
+    @State var bass = 0.0
+    @State var name = ""
+    @State var nameTouched = false
     /// Set once the song is split; the preview then plays these.
-    @State private var stemFiles: [String: URL]?
-    @State private var levels: [String: Double] = [:]
-    @State private var splitting: Double?
-    @State private var splitTask: Task<Void, Never>?
-    @State private var splitError: String?
+    @State var stemFiles: [String: URL]?
+    @State var levels: [String: Double] = [:]
+    @State var splitting: Double?
+    @State var splitTask: Task<Void, Never>?
+    @State var splitError: String?
     /// Parts in play order once arranging. Nil is the song as it is.
-    @State private var sections: [SongEdit.Section]?
+    @State var sections: [SongEdit.Section]?
     /// Peaks of the whole original, about 20 slices a second.
-    @State private var peaks: [Float]?
+    @State var peaks: [Float]?
     /// Each stem's peaks once split, so the shape follows the levels.
-    @State private var stemPeaks: [String: [Float]]?
-    @State private var posting: Track?
+    @State var stemPeaks: [String: [Float]]?
+    @State var posting: Track?
     /// Plain-key shortcuts stand down while the name is being typed.
-    @FocusState private var naming: Bool
+    @FocusState var naming: Bool
 
-    @State private var progress: Double?
-    @State private var saveTask: Task<Void, Never>?
-    @State private var saveError: String?
-    @State private var saved: Track?
+    @State var progress: Double?
+    @State var saveTask: Task<Void, Never>?
+    @State var saveError: String?
+    @State var saved: Track?
     /// The rendered file under a readable name, for sharing. Its folder is deleted on close.
-    @State private var shareURL: URL?
-    #if os(macOS)
-    /// Grows the editor to the app window. Remembered on this Mac.
-    @AppStorage("songEditor.fillsWindow") private var fillsWindow = false
-    /// The app window's content size, which the editor fits itself to.
-    @State private var room = CGSize(width: 1200, height: 860)
-    private static let resized = NotificationCenter.default.publisher(for: NSWindow.didResizeNotification)
-    #endif
+    @State var shareURL: URL?
+    /// Asks before leaving unsaved changes behind.
+    @State var confirmingClose = false
+    /// The edit as it opened, to tell whether anything changed.
+    @State var opened: SongEdit?
 
-    private var edit: SongEdit? {
+    var edit: SongEdit? {
         guard let original else { return nil }
         return SongEdit(of: original.id,
                         sourceRef: original.sourceRef
@@ -66,34 +65,63 @@ struct SongEditorSheet: View {
     }
 
     /// One part, start to end, once: nothing to save.
-    private var isWholeSong: Bool {
+    var isWholeSong: Bool {
         guard let sections else { return true }
         guard sections.count == 1, let only = sections.first else { return false }
         return only.times == 1 && only.start < 0.05 && only.end > preview.length - 0.05
     }
 
-    private var peakCount: Int { min(max(Int(preview.length * 20), 200), 12_000) }
+    var peakCount: Int { min(max(Int(preview.length * 20), 200), 12_000) }
 
-    private var busy: Bool { progress != nil || splitting != nil }
+    var busy: Bool { progress != nil || splitting != nil }
 
-    private var trimmedName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
+    var trimmedName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
 
-    private var canSave: Bool {
+    var canSave: Bool {
         source != nil && splitting == nil && edit?.isOriginal == false && !trimmedName.isEmpty
     }
 
     /// A shortcut with no modifier, off while typing.
-    private func plainKey(_ key: KeyEquivalent) -> KeyboardShortcut? {
+    func plainKey(_ key: KeyEquivalent) -> KeyboardShortcut? {
         naming ? nil : KeyboardShortcut(key, modifiers: [])
     }
 
     var body: some View {
+        content
+        .sheet(item: $posting) { track in
+            PostSheet(track: track, onOpen: { code in close(); onOpenPost?(code) })
+                .environmentObject(deps)
+        }
+        .task { await load() }
+        .onChange(of: speed) { changed() }
+        .onChange(of: reverb) { changed() }
+        .onChange(of: pitch) { changed() }
+        .onChange(of: bass) { changed() }
+        .onChange(of: levels) { changed() }
+        .onChange(of: sections) {
+            let wasPlaying = preview.isPlaying
+            preview.arrange(sections)
+            if wasPlaying { preview.play() }
+            refreshName()
+        }
+        .onDisappear {
+            saveTask?.cancel()
+            splitTask?.cancel()
+            preview.stop()
+            if let scratch { try? FileManager.default.removeItem(at: scratch) }
+            if let shareURL { try? FileManager.default.removeItem(at: shareURL.deletingLastPathComponent()) }
+        }
+    }
+
+    #if os(macOS)
+    var content: some View { studio }
+    #else
+    var content: some View {
         MixSheet(title: "Edit Song",
                  subtitle: "Saved as a new song. The original stays as it is.",
-                 size: sheetSize,
+                 size: .large,
                  scroll: false,
-                 dismissDisabled: busy,
-                 closesOnOutsideClick: false) {
+                 dismissDisabled: busy) {
             // The waveform stays put while the controls scroll under it.
             VStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: 14) {
@@ -127,40 +155,17 @@ struct SongEditorSheet: View {
                         .opacity(0).allowsHitTesting(false).accessibilityHidden(true)
                 }
         }
-        #if os(macOS)
-        .onAppear { room = Self.windowRoom() ?? room }
-        .onReceive(Self.resized) { _ in room = Self.windowRoom() ?? room }
-        #else
         .editorPageSizing()
-        #endif
-        .sheet(item: $posting) { track in
-            PostSheet(track: track, onOpen: { code in dismiss(); onOpenPost?(code) })
-                .environmentObject(deps)
-        }
-        .task { await load() }
-        .onChange(of: speed) { changed() }
-        .onChange(of: reverb) { changed() }
-        .onChange(of: pitch) { changed() }
-        .onChange(of: bass) { changed() }
-        .onChange(of: levels) { changed() }
-        .onChange(of: sections) {
-            let wasPlaying = preview.isPlaying
-            preview.arrange(sections)
-            if wasPlaying { preview.play() }
-            refreshName()
-        }
-        .onDisappear {
-            saveTask?.cancel()
-            splitTask?.cancel()
-            preview.stop()
-            if let scratch { try? FileManager.default.removeItem(at: scratch) }
-            if let shareURL { try? FileManager.default.removeItem(at: shareURL.deletingLastPathComponent()) }
-        }
+    }
+    #endif
+
+    func close() {
+        if let onClose { onClose() } else { dismiss() }
     }
 
     // MARK: - Parts
 
-    private var header: some View {
+    var header: some View {
         HStack(spacing: 12) {
             ArtworkThumbnail(data: original?.artworkData,
                              artworkRef: .track(original?.id ?? track.id),
@@ -183,55 +188,11 @@ struct SongEditorSheet: View {
                     .background(Capsule().fill(Color.mixPrimary.opacity(0.15)))
                     .lineLimit(1)
             }
-            #if os(macOS)
-            Button { withAnimation(.snappy) { fillsWindow.toggle() } } label: {
-                Label(fillsWindow ? "Smaller" : "Fill Window",
-                      systemImage: fillsWindow ? "arrow.down.right.and.arrow.up.left"
-                                               : "arrow.up.left.and.arrow.down.right")
-                    .font(.mixLabel)
-                    .padding(.horizontal, 10).padding(.vertical, 5)
-                    .background(Capsule().fill(Color.primary.opacity(0.07)))
-            }
-            .buttonStyle(.plain).mixHandCursor()
-            .foregroundStyle(Color.mixTextSecondary)
-            .keyboardShortcut("f", modifiers: [.command, .shift])
-            .help(fillsWindow ? "Make the editor smaller (⇧⌘F)" : "Make the editor fill the window (⇧⌘F)")
-            #endif
         }
     }
 
-    // MARK: - Size
-
-    private var sheetSize: MixSheetSize {
-        #if os(macOS)
-        let width = fillsWindow ? room.width - 24 : min(940, room.width - 80)
-        let height = fillsWindow ? room.height - 24 : min(780, room.height - 60)
-        return .window(CGSize(width: max(width, 580), height: max(height, 480)))
-        #else
-        .large
-        #endif
-    }
-
-    /// Two columns of cards once there's room for them.
-    private var isWide: Bool {
-        #if os(macOS)
-        sheetSize.width >= 820
-        #else
-        false
-        #endif
-    }
-
-    #if os(macOS)
-    /// The app window under this sheet, past any sheet stacked on it.
-    private static func windowRoom() -> CGSize? {
-        var window = NSApp.keyWindow
-        while let parent = window?.sheetParent { window = parent }
-        return (window ?? NSApp.mainWindow)?.contentLayoutRect.size
-    }
-    #endif
-
     @ViewBuilder
-    private func savedView(_ saved: Track) -> some View {
+    func savedView(_ saved: Track) -> some View {
         MixSheetStatus(kind: .success, title: "Saved to Liked Songs", detail: saved.title)
         HStack(spacing: 18) {
             if saved.edit != nil {
@@ -249,41 +210,23 @@ struct SongEditorSheet: View {
         .foregroundStyle(Color.mixPrimary)
     }
 
-    private var controls: some View {
-        let columns = isWide ? AnyLayout(HStackLayout(alignment: .top, spacing: 14))
-                             : AnyLayout(VStackLayout(alignment: .leading, spacing: 14))
-        return VStack(alignment: .leading, spacing: 14) {
-            columns {
-                VStack(alignment: .leading, spacing: 14) {
-                    soundCard
-                    trimCard
-                }
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-                VStack(alignment: .leading, spacing: 14) {
-                    if StemSeparator.isAvailable {
-                        card("Stems", icon: "square.3.layers.3d",
-                             caption: "Turn the vocals, drums, bass or the rest up, down or off.") { stemControls }
-                    }
-                    #if os(macOS)
-                    card("Arrange", icon: "scissors",
-                         caption: "Cut the song into parts, then loop, reorder, copy or drop them.",
-                         trailing: arrangeButtons) { arrangeControls }
-                    #else
-                    Label("Stems and arranging are in Mixtape for Mac.", systemImage: "desktopcomputer")
-                        .font(.mixCaption)
-                        .foregroundStyle(Color.mixTextSecondary)
-                    #endif
-                }
-                .frame(maxWidth: .infinity, alignment: .topLeading)
+    var controls: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            soundCard
+            trimCard
+            if StemSeparator.isAvailable {
+                card("Stems", icon: "square.3.layers.3d",
+                     caption: "Turn the vocals, drums, bass or the rest up, down or off.") { stemControls }
             }
-
+            Label("Stems and arranging are in Mixtape for Mac.", systemImage: "desktopcomputer")
+                .font(.mixCaption)
+                .foregroundStyle(Color.mixTextSecondary)
             VStack(alignment: .leading, spacing: 6) {
                 Text("Name").font(.mixLabel).foregroundStyle(Color.mixTextSecondary)
-                TextField("Name", text: Binding(get: { name }, set: { name = $0; nameTouched = true }))
+                TextField("Name", text: nameBinding)
                     .mixSheetField()
                     .focused($naming)
             }
-
             if let progress {
                 MixSheetStatus(kind: .busy, title: "Saving…", progress: progress)
             } else if let saveError {
@@ -292,7 +235,11 @@ struct SongEditorSheet: View {
         }
     }
 
-    private var soundCard: some View {
+    var nameBinding: Binding<String> {
+        Binding(get: { name }, set: { name = $0; nameTouched = true })
+    }
+
+    var soundCard: some View {
         card("Sound", icon: "dial.medium", caption: "Pick a preset, or set it up yourself.") {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
@@ -320,7 +267,7 @@ struct SongEditorSheet: View {
         }
     }
 
-    private func presetChip(_ preset: SongEdit.Preset) -> some View {
+    func presetChip(_ preset: SongEdit.Preset) -> some View {
         chip(preset.name, selected: abs(speed - preset.speed) < 0.005 && abs(reverb - preset.reverb) < 0.005
                 && pitch == nil && bass < 0.005) {
             speed = preset.speed
@@ -330,14 +277,14 @@ struct SongEditorSheet: View {
         }
     }
 
-    private func semitones(_ value: Double) -> String {
+    func semitones(_ value: Double) -> String {
         let n = Int(value.rounded())
         return n == 0 ? "Original" : "\(n > 0 ? "+" : "")\(n) semitone\(abs(n) == 1 ? "" : "s")"
     }
 
     /// Start and end, while the song plays as one part once. More than that is the Arrange card's.
     @ViewBuilder
-    private var trimCard: some View {
+    var trimCard: some View {
         if preview.length > 0, sections.map({ $0.count == 1 && $0[0].times == 1 }) ?? true {
             let part = sections?.first ?? SongEdit.Section(start: 0, end: preview.length)
             card("Trim", icon: "timeline.selection", caption: "Start the song later or end it sooner.") {
@@ -350,13 +297,13 @@ struct SongEditorSheet: View {
     }
 
     /// Keeps at least a second. All of it is no trim.
-    private func trim(start: Double, end: Double) {
+    func trim(start: Double, end: Double) {
         let start = min(start, preview.length - 1), end = max(end, start + 1)
         sections = start < 0.05 && end > preview.length - 0.05 ? nil : [SongEdit.Section(start: start, end: end)]
     }
 
     @ViewBuilder
-    private var stemControls: some View {
+    var stemControls: some View {
         if let splitting {
             MixSheetStatus(kind: .busy, title: "Splitting into stems…", progress: splitting)
         } else if stemFiles == nil {
@@ -392,7 +339,7 @@ struct SongEditorSheet: View {
 
     #if os(macOS)
     @ViewBuilder
-    private var arrangeControls: some View {
+    var arrangeControls: some View {
         if let sections {
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(Array(sections.enumerated()), id: \.offset) { i, part in
@@ -411,7 +358,7 @@ struct SongEditorSheet: View {
     }
 
     @ViewBuilder
-    private var arrangeButtons: some View {
+    var arrangeButtons: some View {
         if sections != nil {
             Button("Reset") { sections = nil }
                 .font(.mixLabel)
@@ -422,7 +369,7 @@ struct SongEditorSheet: View {
     }
 
     /// One part: jump to it, loop it, move it, copy it, drop it.
-    private func sectionRow(_ i: Int, _ part: SongEdit.Section, count: Int) -> some View {
+    func sectionRow(_ i: Int, _ part: SongEdit.Section, count: Int) -> some View {
         let starts = arrangedStart(of: i)
         let playing = (starts..<starts + part.span).contains(preview.position)
         return HStack(spacing: 10) {
@@ -457,7 +404,7 @@ struct SongEditorSheet: View {
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(playing ? 0.08 : 0.04)))
     }
 
-    private func iconButton(_ symbol: String, _ label: String, action: @escaping () -> Void) -> some View {
+    func iconButton(_ symbol: String, _ label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol).font(.system(size: 12, weight: .semibold)).frame(width: 22, height: 22)
         }
@@ -468,7 +415,7 @@ struct SongEditorSheet: View {
     }
 
     /// Cuts the part under the playhead in two. Both halves keep its loop count.
-    private func splitAtPlayhead() {
+    func splitAtPlayhead() {
         guard let sections, sections.count < SongEdit.maxSections else { return }
         let now = preview.now
         var at: TimeInterval = 0
@@ -487,11 +434,11 @@ struct SongEditorSheet: View {
     #endif
 
     /// Where part `i` starts in the arrangement, before speed.
-    private func arrangedStart(of i: Int) -> TimeInterval {
+    func arrangedStart(of i: Int) -> TimeInterval {
         (sections ?? []).prefix(i).reduce(0) { $0 + $1.span }
     }
 
-    private func chip(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+    func chip(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: MixFontScale.size(12), weight: .semibold))
@@ -505,7 +452,7 @@ struct SongEditorSheet: View {
     }
 
     /// A nil step slides freely.
-    private func slider(_ title: String, value: Binding<Double>, in range: ClosedRange<Double>,
+    func slider(_ title: String, value: Binding<Double>, in range: ClosedRange<Double>,
                         step: Double? = 0.05, label: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
@@ -523,13 +470,13 @@ struct SongEditorSheet: View {
         .disabled(busy)
     }
 
-    private func card<Content: View>(_ title: String, icon: String, caption: String,
+    func card<Content: View>(_ title: String, icon: String, caption: String,
                                      @ViewBuilder content: () -> Content) -> some View {
         card(title, icon: icon, caption: caption, trailing: EmptyView(), content: content)
     }
 
     /// A titled box for one kind of change.
-    private func card<Trailing: View, Content: View>(_ title: String, icon: String, caption: String,
+    func card<Trailing: View, Content: View>(_ title: String, icon: String, caption: String,
                                                      trailing: Trailing,
                                                      @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -553,7 +500,7 @@ struct SongEditorSheet: View {
 
     /// The waveform as the scrubber, with the parts on it, and play. Times are in the edited
     /// song's clock, so a slowed song reads longer.
-    private var stage: some View {
+    var stage: some View {
         let total = preview.duration
         let edges = (1..<max(sections?.count ?? 0, 1)).map { arrangedStart(of: $0) / max(total, 0.01) }
         return VStack(spacing: 10) {
@@ -580,21 +527,6 @@ struct SongEditorSheet: View {
                 Text("\(clock(preview.position / speed)) / \(clock(total / speed))")
                     .font(.mixLabel.monospacedDigit()).foregroundStyle(Color.mixTextSecondary)
                 Spacer(minLength: 0)
-                #if os(macOS)
-                Text(sections == nil ? "Space plays, ← → skip" : "Space plays, ← → skip, ⌘T splits")
-                    .font(.mixCaption).foregroundStyle(Color.mixTextSecondary)
-                    .lineLimit(1)
-                if sections != nil {
-                    Button { splitAtPlayhead() } label: {
-                        Label("Split at Playhead", systemImage: "scissors").font(.mixLabel)
-                    }
-                    .buttonStyle(.plain).mixHandCursor()
-                    .foregroundStyle(Color.mixPrimary)
-                    .keyboardShortcut("t")
-                    .help("Split the part under the playhead (⌘T)")
-                    .disabled((sections?.count ?? 0) >= SongEdit.maxSections)
-                }
-                #endif
             }
             .disabled(source == nil || busy)
         }
@@ -603,7 +535,7 @@ struct SongEditorSheet: View {
     }
 
     /// Five seconds on the edited song's clock.
-    private func skipButton(_ seconds: TimeInterval) -> some View {
+    func skipButton(_ seconds: TimeInterval) -> some View {
         let back = seconds < 0
         return Button { preview.seek(to: preview.now + seconds * speed) } label: {
             Image(systemName: back ? "gobackward.5" : "goforward.5")
@@ -617,18 +549,12 @@ struct SongEditorSheet: View {
         .accessibilityLabel(back ? "Back 5 seconds" : "Forward 5 seconds")
     }
 
-    private var waveHeight: CGFloat {
-        #if os(macOS)
-        fillsWindow ? 180 : 120
-        #else
-        72
-        #endif
-    }
+    private let waveHeight: CGFloat = 72
 
     @ViewBuilder
-    private var footer: some View {
+    var footer: some View {
         if saved != nil || loadError != nil {
-            MixSheetActions(primary: MixSheetAction("Done") { dismiss() }, showsCancel: false)
+            MixSheetActions(primary: MixSheetAction("Done") { close() }, showsCancel: false)
         } else {
             MixSheetActions(
                 primary: MixSheetAction("Save",
@@ -640,14 +566,14 @@ struct SongEditorSheet: View {
         }
     }
 
-    private func clock(_ seconds: TimeInterval) -> String {
+    func clock(_ seconds: TimeInterval) -> String {
         let s = Int(seconds.isFinite ? seconds : 0)
         return String(format: "%d:%02d", s / 60, s % 60)
     }
 
     // MARK: - Work
 
-    private func load() async {
+    func load() async {
         deps.playbackEngine.pause()
         if let recipe = track.edit {
             speed = recipe.speed
@@ -674,6 +600,7 @@ struct SongEditorSheet: View {
             try preview.load([audio.url])
             changed()
             source = audio.url
+            opened = edit.map { var e = $0; e.stems = track.edit?.stems; return e }
             Task { peaks = await Waveform.peaks(of: audio.url, count: peakCount) }
         } catch {
             loadError = "Couldn't get this song's audio."
@@ -683,13 +610,13 @@ struct SongEditorSheet: View {
         if track.edit?.stems != nil { split() }
     }
 
-    private func changed() {
+    func changed() {
         guard let edit else { return }
         preview.apply(edit, levels: stemFiles == nil ? [1] : SongEdit.stemNames.map { levels[$0] ?? 1 })
         refreshName()
     }
 
-    private func split() {
+    func split() {
         guard let source, let original, splitting == nil else { return }
         splitError = nil
         splitting = 0
@@ -712,12 +639,12 @@ struct SongEditorSheet: View {
         }
     }
 
-    private func refreshName() {
+    func refreshName() {
         guard !nameTouched, let original, let edit else { return }
         name = edit.isOriginal ? original.displayTitle : "\(original.displayTitle) (\(edit.label))"
     }
 
-    private func save() {
+    func save() {
         guard let source, let original, let edit, progress == nil else { return }
         preview.pause()
         let title = trimmedName
