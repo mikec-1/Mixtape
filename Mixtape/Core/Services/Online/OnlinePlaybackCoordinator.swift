@@ -134,6 +134,7 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
         self.deviceID      = deviceID
         migrateLegacyCache()
         dropUngatedPicks()
+        engine.onlineCrossfaded = { [weak self] slot in self?.adoptCrossfade(to: slot) }
 
         // Probe whenever the queue changes, not when the preload depth reaches a
         // song, or the warning shows up too late to be useful.
@@ -1405,6 +1406,25 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
         // Warm the next neighbour unless it's another local file (nothing to warm).
         if context.indices.contains(index + 1) {
             let next = context[index + 1]
+            if localSubstitutes[next.id] == nil { prefetch(next) }
+        }
+    }
+
+    /// The engine crossfaded into the next row itself (a cached or owned song).
+    /// Catch up the way startPlayback would, without restarting it.
+    private func adoptCrossfade(to slot: Int) {
+        guard context.indices.contains(slot), contextDisplayTracks.indices.contains(slot),
+              contextDisplayTracks[slot].id == engine.queue.currentTrack?.id else { return }
+        contextIndex = slot
+        playingSlot = slot
+        awaitingHandoff = false
+        publishDisplayQueue()
+        let result = context[slot]
+        let owned = localSubstitutes[result.id] != nil
+        if !owned { UnavailableTracks.shared.clear(title: result.title, artist: result.artistName) }
+        nowPlayingID = owned ? nil : result.id
+        if context.indices.contains(slot + 1) {
+            let next = context[slot + 1]
             if localSubstitutes[next.id] == nil { prefetch(next) }
         }
     }

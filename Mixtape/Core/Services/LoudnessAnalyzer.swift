@@ -12,6 +12,7 @@ public enum LoudnessAnalyzer {
 
     /// Stored as an xattr on the file, so replacing the file drops a stale value.
     private nonisolated static let attribute = "tech.mixtaped.loudness.v1"
+    private nonisolated static let edgesAttribute = "tech.mixtaped.edges.v1"
 
     /// Running average gain, used before a song is measured.
     private nonisolated static let typicalKey = "playback.loudness.typicalGainDB"
@@ -30,10 +31,23 @@ public enum LoudnessAnalyzer {
         return value
     }
 
-    private nonisolated static func cache(_ gain: Float, for url: URL) {
+    /// Seconds into the file where the sound starts and stops, and where the ending
+    /// drops well below the song's level. Measured with the gain.
+    public nonisolated static func cachedEdges(for url: URL) -> (start: Double, end: Double, out: Double)? {
+        guard url.isFileURL else { return nil }
+        var values = [Float](repeating: 0, count: 3)
+        let read = getxattr(url.path, edgesAttribute, &values, 12, 0, 0)
+        guard read == 12, values.allSatisfy(\.isFinite) else { return nil }
+        return (Double(values[0]), Double(values[1]), Double(values[2]))
+    }
+
+    private nonisolated static func cache(_ gain: Float, edges: (start: Double, end: Double, out: Double),
+                                          for url: URL) {
         var value = gain
         // Read-only files are just measured again next time.
         _ = setxattr(url.path, attribute, &value, 4, 0, 0)
+        var values = [Float(edges.start), Float(edges.end), Float(edges.out)]
+        _ = setxattr(url.path, edgesAttribute, &values, 12, 0, 0)
 
         let defaults = UserDefaults.standard
         let typical = defaults.object(forKey: typicalKey) as? Float ?? gain
@@ -46,7 +60,7 @@ public enum LoudnessAnalyzer {
     /// actor; plain nonisolated async runs on the caller's.
     @discardableResult
     @concurrent public nonisolated static func measureGainDB(for url: URL) async -> Float? {
-        if let cached = cachedGainDB(for: url) { return cached }
+        if let cached = cachedGainDB(for: url), cachedEdges(for: url) != nil { return cached }
         guard let measured = integrated(url) else { return nil }
 
         var gain = targetLUFS - measured.lufs
@@ -56,13 +70,14 @@ public enum LoudnessAnalyzer {
             gain = min(gain, max(0, headroom))
         }
         let clamped = Float(max(-24, min(12, gain)))
-        cache(clamped, for: url)
+        cache(clamped, edges: measured.edges, for: url)
         return clamped
     }
 
     /// Integrated LUFS and sample peak. 400 ms blocks with 75% overlap, built
     /// from 100 ms bins so the file isn't held in memory.
-    private nonisolated static func integrated(_ url: URL) -> (lufs: Double, peak: Float)? {
+    private nonisolated static func integrated(_ url: URL)
+        -> (lufs: Double, peak: Float, edges: (start: Double, end: Double, out: Double))? {
         guard let file = try? AVAudioFile(forReading: url) else { return nil }
         let format = file.processingFormat
         let rate = format.sampleRate
@@ -121,7 +136,16 @@ public enum LoudnessAnalyzer {
         let relative = loudness(audible.reduce(0, +) / Double(audible.count)) - 10
         let kept = audible.filter { loudness($0) > relative }
         guard !kept.isEmpty else { return nil }
-        return (loudness(kept.reduce(0, +) / Double(kept.count)), peak)
+        let lufs = loudness(kept.reduce(0, +) / Double(kept.count))
+
+        // ponytail: fixed thresholds (35 LU down is silence, 10 LU down is an outro). Tune here if fades land wrong.
+        let hop = Double(binFrames) / rate
+        let silence = max(-60, lufs - 35)
+        let first = blocks.firstIndex { $0 > 0 && loudness($0) > silence } ?? 0
+        let last = blocks.lastIndex { $0 > 0 && loudness($0) > silence } ?? blocks.count - 1
+        let loud = blocks.lastIndex { $0 > 0 && loudness($0) > lufs - 10 } ?? last
+        let edges = (start: Double(first) * hop, end: Double(last + 4) * hop, out: Double(loud + 4) * hop)
+        return (lufs, peak, edges)
     }
 
     /// One biquad. Two make up K-weighting (+4 dB shelf and 38 Hz high-pass),

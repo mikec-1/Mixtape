@@ -111,6 +111,9 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     public var onlineNextHandler: (() async -> Void)?
     /// Companion to `onlineNextHandler` for backward skips.
     public var onlinePreviousHandler: (() async -> Void)?
+    /// A crossfade moved to this queue row during an online context. The coordinator mirrors the context into
+    /// the queue, so it catches up from the row.
+    public var onlineCrossfaded: ((Int) -> Void)?
 
     /// Routes a track with no playable local file (Spotify import, history replay, metadata-only sync) to the
     /// coordinator to resolve and stream. Set by AppDependencies; returns once routing takes over. When nil the
@@ -259,6 +262,8 @@ public final class PlaybackEngine: NSObject, ObservableObject {
 
     // Crossfade transition state
     private var crossfadeTask: Task<Void, Never>?
+    /// The next file already sent for measuring, so the progress timer asks once.
+    private var measuredAhead: URL?
     private var outgoingPlayer: AVAudioPlayerNode?
     private var isTransitioning = false
 
@@ -1940,19 +1945,40 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         return true
     }
 
+    /// Most of a quiet ending a crossfade may talk over.
+    private static let maxQuietTail: TimeInterval = 8
+
     /// From the progress timer: near the end of the track, with a local next track, start the overlap.
+    /// Trailing silence doesn't count, and a crossfade starts once the ending goes quiet.
     private func maybeStartCrossfade() {
         guard crossfadeMode != .off, !isTransitioning, state == .playing else { return }
-        guard audioFile != nil, duration > 0 else { return }
+        guard let current = audioFile?.url, duration > 0 else { return }
         let fade = effectiveFade
         // Don't crossfade tracks too short to absorb the overlap.
-        guard duration > fade + 1 else { return }
-        let remaining = duration - currentTime
-        // 0.55s slop covers the 0.5s timer resolution so we never miss the window.
-        guard remaining > 0, remaining <= fade + 0.55 else { return }
+        guard duration > fade + 1, currentTime < duration else { return }
+        let edges = LoudnessAnalyzer.cachedEdges(for: current)
+        let end = min(duration, edges?.end ?? duration)
+        var start = end - fade
+        if crossfadeMode == .crossfade, let out = edges?.out {
+            start = max(min(start, out), end - fade - Self.maxQuietTail)
+        }
+        // Edges can still move the start this early, once the measuring below lands.
+        guard currentTime >= start - 30 else { return }
         guard let next = queue.peekNext() else { return }
         // Only when the next file is local; never stall a transition on a download.
         guard let url = fileStorage.localURL(for: next) else { return }
+        // 0.55s slop covers the 0.5s timer resolution so we never miss the window.
+        guard currentTime >= start - 0.55 else {
+            // Measure both songs ahead so the switch knows their edges and levels.
+            if measuredAhead != url {
+                measuredAhead = url
+                Task {
+                    await LoudnessAnalyzer.measureGainDB(for: current)
+                    await LoudnessAnalyzer.measureGainDB(for: url)
+                }
+            }
+            return
+        }
         beginCrossfade(to: next, url: url, fade: max(fade, 0.2))
     }
 
@@ -1976,9 +2002,13 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         connectPlayer(incoming, bus: incomingBus, format: fmt)
         incoming.volume = 0
 
+        // Starts where the sound does, not at the file's leading silence.
+        let leadIn = LoudnessAnalyzer.cachedEdges(for: url)?.start ?? 0
+        let startFrame = min(AVAudioFramePosition(leadIn * fmt.sampleRate), max(0, lenFrames - 1))
+
         loadGeneration &+= 1
         let generation = loadGeneration
-        scheduleFullFile(file, on: incoming, length: lenFrames, generation: generation)
+        scheduleFullFile(file, on: incoming, from: startFrame, length: lenFrames, generation: generation)
         startEngineIfNeeded()
         incoming.play()
 
@@ -1994,14 +2024,15 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         fileSampleRate   = fmt.sampleRate
         fileLengthFrames = lenFrames
         canonicalDuration = next.duration
-        seekFrameOffset  = 0
+        seekFrameOffset  = startFrame
         duration         = lenFrames > 0 ? Double(lenFrames) / fmt.sampleRate : 0
-        currentTime      = 0
+        currentTime      = Double(startFrame) / fmt.sampleRate
         isNodePlaying    = true
         scrobbleStartedAt  = Date()
         didScrobbleCurrent = false
         rotateHistoryTracking()
         updateNowPlayingInfo(track: next)
+        if hasOnlineContext { onlineCrossfaded?(queue.currentIndex) }
         let nowPlayingTrack = next
         Task { await LastFmScrobbler.shared.updateNowPlaying(track: nowPlayingTrack) }
 
@@ -2040,10 +2071,11 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     /// Schedules a whole file on `player` with a generation-guarded auto-advance (like `scheduleSegment`).
     /// `length` is the trimmed length, not `file.length`, so padding doesn't play past a crossfade.
     private func scheduleFullFile(_ file: AVAudioFile, on player: AVAudioPlayerNode,
+                                  from start: AVAudioFramePosition,
                                   length: AVAudioFramePosition, generation: Int) {
-        let frames = AVAudioFrameCount(max(0, min(file.length, length)))
+        let frames = AVAudioFrameCount(max(0, min(file.length, length) - start))
         guard frames > 0 else { return }
-        player.scheduleSegment(file, startingFrame: 0, frameCount: frames, at: nil) { [weak self] in
+        player.scheduleSegment(file, startingFrame: start, frameCount: frames, at: nil) { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 guard self.loadGeneration == generation else { return }
