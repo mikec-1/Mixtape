@@ -588,6 +588,13 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
         guard prefetchTasks[result.id] == nil else { return }
         // Speculative work is capped so it doesn't starve the song the user tapped.
         guard speculativeInFlight < maxConcurrentPrefetches else { return }
+        // A song that just failed sits out the backoff, or every freed slot retries it.
+        if let failed = preloadFailedAt[result.id] {
+            guard Date.now.timeIntervalSince(failed) >= Self.preloadBackoff else { return }
+            // ponytail: a cancelled retry records nothing, so the next one runs at once.
+            // Only stand-downs cancel, and those need a tap each.
+            preloadFailedAt[result.id] = nil
+        }
 
         inFlightPrefetches += 1
         // Pinned when the upload is already known, which skips the search.
@@ -603,6 +610,8 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
                 _ = try await task.value
             } catch {
                 self?.prefetchTasks.removeValue(forKey: result.id)
+                // Cancelled means stood down, not failed.
+                if !task.isCancelled { self?.preloadFailedAt[result.id] = .now }
                 // Silent: nobody's waiting on it. The queue row shows the warning.
                 if isSongNotFound(error) {
                     UnavailableTracks.shared.mark(title: result.title,
@@ -615,6 +624,11 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
             self?.topUpQueuePrefetch()
         }
     }
+
+    /// When a preload last failed, by song. Separate from UnavailableTracks: this is
+    /// "back off", not "missing". Session only, like ClientPenaltyBox.
+    private var preloadFailedAt: [String: Date] = [:]
+    private static let preloadBackoff: TimeInterval = 5 * 60
 
     /// Prefetches as deep into the queue as the setting and budget allow. Cheap
     /// and idempotent; safe to call whenever a slot frees.
