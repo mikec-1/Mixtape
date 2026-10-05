@@ -1,19 +1,6 @@
-// ProfilePageView.swift
-// Mixtape — Features/Social
-//
-// A user's profile, as a real page rather than a sheet — yours or anyone
-// else's, same view.
-//
-// The shape is the familiar one: a hero band with a large round avatar and the
-// handle set big, a stat line under it, a row of top artists, then the public
-// playlists. What's deliberately NOT here is a follower count. Mixtape has no
-// follow graph, and a "0 Followers" that can never become 1 is worse than an
-// honest gap — the stat line shows only numbers that mean something today.
-//
-// Own profile vs. someone else's is one view because the content is the same
-// content; the difference is that you get told what other people can see (the
-// "Only visible to you" note when stats sharing is off, and the reminder that
-// private playlists are hidden) and a way to change it.
+// A user's profile as a page, yours or anyone's: hero with avatar, handle, follow counts and
+// Follow, top artists, their posts, reposts and likes, then public playlists. Same page as
+// mixtape-web src/pages/@[handle].astro. On your own profile it also says what others can see.
 
 import SwiftUI
 
@@ -27,38 +14,53 @@ public struct ProfilePageView: View {
     #endif
 
     private let profile: UserProfile
+    /// Where posts and other profiles open. Nil: a push on iOS, the content column on Mac.
+    private let onOpenPost: ((String) -> Void)?
+    private let onOpenProfile: ((UserProfile) -> Void)?
 
     @State private var stats: PublicProfileStats?
     @State private var playlists: [PublicPlaylistSummary] = []
     @State private var isLoading = true
     @State private var loadFailed = false
     @State private var showingAllPlaylists = false
-    /// iOS only — macOS routes through MacAppState so the playlist gets the whole
-    /// content column instead of a push inside whatever presented this page.
+    /// iOS only; macOS routes through MacAppState so the playlist gets the content column.
     @State private var openPlaylist: PublicPlaylistSummary?
 
-    /// The context menu's state. Held per-summary rather than as booleans so the
-    /// menu can act on any card in the grid without a selection concept.
+    /// Per summary, so the menu can act on any card without a selection.
     @State private var manageCollaborators: PublicPlaylistSummary?
     @State private var pendingDelete: PublicPlaylistSummary?
     @State private var editingPlaylist: Playlist?
     @State private var actionError: String?
-    /// Cards with a request in flight. Stops a second Delete landing on a row the
-    /// first one is already removing.
+    /// Cards with a request in flight, so a second Delete can't land.
     @State private var busyIDs: Set<UUID> = []
+    /// Their live Jam's code, when they've messaged you.
+    @State private var jamCode: String?
+    /// Their shared recaps. Your own come from RecapService.
+    @State private var recaps: [RecapService.Recap] = []
+    @State private var follows: (followers: Int, following: Int, mine: Bool)?
+    @State private var followBusy = false
+    @State private var blocked: Bool?
+    @State private var confirmingBlock = false
+    @State private var postsTab: ProfilePostsTab = .posts
+    #if os(iOS)
+    @State private var pushedPost: String?
+    @State private var pushedProfile: UserProfile?
+    #endif
 
-    /// The pictures this page draws. None of them are published; see
-    /// ProfileArtwork.swift for where they actually come from.
+    /// See ProfileArtwork.swift for where these come from.
     @StateObject private var artwork = ProfileArtworkStore()
 
-    public init(profile: UserProfile) {
+    public init(profile: UserProfile, onOpenPost: ((String) -> Void)? = nil,
+                onOpenProfile: ((UserProfile) -> Void)? = nil) {
         self.profile = profile
+        self.onOpenPost = onOpenPost
+        self.onOpenProfile = onOpenProfile
     }
 
-    private var isMe: Bool { deps.authService.currentUser?.id == profile.id }
+    private var viewer: UUID? { deps.authService.currentUser?.id }
+    private var isMe: Bool { viewer == profile.id }
 
-    /// Six fills two rows of the grid at most window widths — enough to show the
-    /// collection has depth without the page becoming a playlist browser.
+    /// Two rows at most window widths.
     private static let collapsedPlaylistCount = 6
 
     private var visiblePlaylists: [PublicPlaylistSummary] {
@@ -72,6 +74,11 @@ public struct ProfilePageView: View {
             VStack(alignment: .leading, spacing: 34) {
                 header
 
+                if let jamCode {
+                    JamBanner(name: profile.name, code: jamCode)
+                        .frame(maxWidth: 560)
+                }
+
                 if isLoading {
                     ProgressView()
                         .controlSize(.regular)
@@ -82,8 +89,10 @@ public struct ProfilePageView: View {
                     if let stats, !stats.topArtists.isEmpty {
                         topArtistsSection(stats.topArtists)
                     }
+                    postsSection
+                    RecapShelf(recap: deps.recap, profile: profile, isMe: isMe, others: recaps)
                     playlistsSection
-                    if isLoading == false, stats?.hasData != true, playlists.isEmpty {
+                    if loadFailed {
                         emptyState
                     }
                 }
@@ -93,32 +102,28 @@ public struct ProfilePageView: View {
             .padding(.horizontal, Metrics.pageInset)
             .padding(.bottom, 48)
         }
-        // Same wash every other detail page wears, for the same reason: applied
-        // out here it spans the whole window and runs up into the chrome, where
-        // the hand-rolled gradient this replaced was pinned inside the header's
-        // own 1000pt-capped column and stopped dead at its edges.
+        // Applied out here so the wash spans the whole window, like other detail pages.
         .artworkWash(source: artwork.avatar, fallback: ArtworkColors.brandGradient)
-        .background(Color.mixBackground.ignoresSafeArea())
+        .background(MixPageBackground())
         .navigationTitle(profile.name)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
         #if os(iOS)
-        // Pushed, not presented: this page always lives inside a NavigationStack
-        // on iOS, and a playlist opened from a profile is a place you go and come
-        // back from — the sheet it used to be had its own cramped 460pt world.
+        // Pushed, not presented: this page always lives in a NavigationStack on iOS.
         .navigationDestination(item: $openPlaylist) { summary in
             PublicPlaylistPage(summary: summary, ownerName: profile.name)
                 .environmentObject(deps)
         }
+        .navigationDestination(item: $pushedPost) { PushedPost(code: $0) }
+        .navigationDestination(item: $pushedProfile) { ProfilePageView(profile: $0) }
         #endif
         .sheet(item: $manageCollaborators) { summary in
             InviteCollaboratorsSheet(sharedPlaylistID: summary.id,
                                      localPlaylistID: localPlaylist(for: summary)?.id,
                                      name: summary.name,
                                      coverData: coverData(for: summary),
-                                     // Only reachable from `isMe`, and the rows on
-                                     // this page were fetched by owner id.
+                                     // Only reachable from `isMe`, and the rows were fetched by owner id.
                                      isOwner: true)
                 .environmentObject(deps)
         }
@@ -126,7 +131,7 @@ public struct ProfilePageView: View {
             PlaylistEditorSheet(editingPlaylist: playlist)
                 .environmentObject(deps)
         }
-        .confirmationDialog(
+        .mixConfirmationDialog(
             "Delete “\(pendingDelete?.name ?? "")”?",
             isPresented: Binding(get: { pendingDelete != nil },
                                  set: { if !$0 { pendingDelete = nil } }),
@@ -146,13 +151,25 @@ public struct ProfilePageView: View {
             Text(actionError ?? "")
         }
         .task(id: profile.id) { await load() }
+        .task(id: profile.id) {
+            jamCode = isMe ? nil : await deps.jam.profileJamCode(of: profile.id)
+        }
+        // Keyed on who's looking too, so signing in shows whether you follow them.
+        .task(id: [profile.id, viewer]) {
+            follows = try? await deps.community.follows(of: profile.id)
+            blocked = isMe || viewer == nil ? nil : await MessagesService.shared.isBlocked(profile.id)
+        }
+        .mixConfirmationDialog("Block \(profile.name)?", isPresented: $confirmingBlock, titleVisibility: .visible) {
+            Button("Block", role: .destructive) { Task { await setBlocked(true) } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("You won\u{2019}t see each other\u{2019}s posts or comments, follows between you end, and neither of you can message the other.")
+        }
     }
 
     // MARK: - Header
 
-    /// The hero band. The colour behind it isn't painted here — see the
-    /// `artworkWash` on the body, which has to sit outside this column to reach
-    /// the window's edges.
+    /// The hero band. Its colour comes from `artworkWash` on the body.
     private var header: some View {
         HStack(alignment: .bottom, spacing: Metrics.headerSpacing) {
             AvatarView(url: profile.avatarURL,
@@ -174,6 +191,15 @@ public struct ProfilePageView: View {
                     .mixTightened()
 
                 statLine
+
+                if !isMe, deps.authService.currentUser != nil {
+                    HStack(spacing: 8) {
+                        followButton
+                        messageButton
+                        if blocked != nil { moreMenu }
+                    }
+                    .padding(.top, 6)
+                }
             }
             .padding(.bottom, 6)
 
@@ -184,11 +210,99 @@ public struct ProfilePageView: View {
         .padding(.bottom, 8)
     }
 
-    /// Only counts that exist. Playlists are always true; plays come from
-    /// published stats and drop out when someone has sharing off.
+    private func pill(_ title: String, filled: Bool) -> some View {
+        Text(title)
+            .font(.mixLabel)
+            .foregroundStyle(filled ? Color.mixOnAccent : Color.mixTextPrimary)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 8)
+            .background(filled ? AnyShapeStyle(Color.mixAccentFill) : AnyShapeStyle(Color.mixSurface), in: Capsule())
+            .overlay { if !filled { Capsule().strokeBorder(Color.mixSeparator) } }
+    }
+
+    /// Optimistic; a failure puts it back and says so.
+    private var followButton: some View {
+        let on = follows?.mine == true
+        return Button {
+            Task { await setFollowing(!on) }
+        } label: { pill(on ? "Following" : "Follow", filled: !on) }
+            .buttonStyle(.plain)
+            .mixHandCursor()
+            .disabled(follows == nil || followBusy)
+    }
+
+    /// Opens Messages on this conversation: a page on Mac, the full-screen cover on iOS.
+    private var messageButton: some View {
+        Button {
+            #if os(macOS)
+            appState.openMessages(with: profile)
+            #else
+            iosAppState.openMessages(with: profile)
+            #endif
+        } label: { pill("Message", filled: false) }
+            .buttonStyle(.plain)
+            .mixHandCursor()
+    }
+
+    private var moreMenu: some View {
+        Menu {
+            if blocked == true {
+                Button("Unblock \(profile.name)") { Task { await setBlocked(false) } }
+            } else {
+                Button("Block \(profile.name)\u{2026}", role: .destructive) { confirmingBlock = true }
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.mixLabel)
+                .foregroundStyle(Color.mixTextPrimary)
+                .frame(width: 34, height: 34)
+                .background(Color.mixSurface, in: Circle())
+                .overlay { Circle().strokeBorder(Color.mixSeparator) }
+        }
+        #if os(macOS)
+        .menuStyle(.button)
+        .buttonStyle(.plain).mixHandCursor()
+        .menuIndicator(.hidden)
+        #endif
+        .fixedSize()
+        .accessibilityLabel("More")
+    }
+
+    private func setBlocked(_ on: Bool) async {
+        do {
+            try await MessagesService.shared.setBlocked(profile.id, on)
+            blocked = on
+            follows = try? await deps.community.follows(of: profile.id)
+            deps.showToast(.done(on ? "Blocked \(profile.name)." : "Unblocked \(profile.name)."))
+        } catch {
+            actionError = "Couldn\u{2019}t \(on ? "block" : "unblock") @\(profile.username)."
+        }
+    }
+
+    private func setFollowing(_ on: Bool) async {
+        guard var f = follows else { return }
+        let before = f
+        f.mine = on
+        f.followers += on ? 1 : -1
+        follows = f
+        followBusy = true
+        defer { followBusy = false }
+        do {
+            try await deps.community.setFollowing(profile.id, on)
+        } catch {
+            follows = before
+            actionError = "Couldn\u{2019}t \(on ? "follow" : "unfollow") @\(profile.username)."
+        }
+    }
+
+    /// Only counts that exist. Plays drop out when stats sharing is off.
     private var statLine: some View {
         let parts: [String] = {
-            var out = ["@\(profile.username)", pluralised(playlists.count, "Public Playlist")]
+            var out = ["@\(profile.username)"]
+            if let follows {
+                out += [pluralised(follows.followers, "Follower"), "\(follows.following.formatted()) Following"]
+            }
+            out.append(pluralised(playlists.count, "Public Playlist"))
             if let stats, stats.shared, stats.hasData {
                 out.append(pluralised(stats.totalPlays, "Play"))
             }
@@ -209,9 +323,7 @@ public struct ProfilePageView: View {
                     .font(.mixTitle)
                     .foregroundStyle(Color.mixTextPrimary)
 
-                // Spotify's own wording, and it earns its place: without it you
-                // can't tell whether you're looking at a public boast or a
-                // private readout.
+                // Says whether others can see this.
                 if isMe {
                     Text(deps.profileStatsService.isSharingEnabled
                          ? "Visible on your profile"
@@ -235,6 +347,52 @@ public struct ProfilePageView: View {
             }
             .scrollBounceBehavior(.basedOnSize)
         }
+    }
+
+    // MARK: - Posts
+
+    private var postsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                ForEach(ProfilePostsTab.allCases) { tab in
+                    SectionChip(title: tab.title, isSelected: postsTab == tab) { postsTab = tab }
+                }
+            }
+            PostList(key: "\(profile.id)\(postsTab)\(viewer?.uuidString ?? "")",
+                     empty: postsEmpty,
+                     load: { [id = profile.id, tab = postsTab, community = deps.community] in
+                         try await community.profile(id, tab, after: $0)
+                     },
+                     onOpenPost: openPost, onOpenProfile: openProfile)
+        }
+    }
+
+    private var postsEmpty: (title: String, message: String) {
+        let who = isMe ? "You haven\u{2019}t" : "@\(profile.username) hasn\u{2019}t"
+        switch postsTab {
+        case .posts:   return ("No posts yet", isMe ? "Post an edit from your library and it shows up here." : "\(who) posted an edit yet.")
+        case .reposts: return ("No reposts yet", "\(who) reposted anything yet.")
+        case .likes:   return ("No likes yet", "\(who) liked any posts yet.")
+        }
+    }
+
+    private func openPost(_ code: String) {
+        if let onOpenPost { return onOpenPost(code) }
+        #if os(macOS)
+        appState.showPost(code: code, from: profile)
+        #else
+        pushedPost = code
+        #endif
+    }
+
+    private func openProfile(_ other: UserProfile) {
+        guard other.id != profile.id else { return }
+        if let onOpenProfile { return onOpenProfile(other) }
+        #if os(macOS)
+        appState.showProfile(other)
+        #else
+        pushedProfile = other
+        #endif
     }
 
     // MARK: - Public playlists
@@ -289,9 +447,7 @@ public struct ProfilePageView: View {
                         }
                         .buttonStyle(.plain).mixHandCursor()
 
-                        // Only on your own profile: everything in this menu is an
-                        // owner action, and an empty `.contextMenu` on someone
-                        // else's page would still eat the long-press on iOS.
+                        // Owner actions only. An empty `.contextMenu` still eats the long-press on iOS.
                         if isMe {
                             card.contextMenu { playlistMenu(summary) }
                         } else {
@@ -305,15 +461,8 @@ public struct ProfilePageView: View {
         }
     }
 
-    /// Right-click on macOS, long-press on iOS — the same menu, because these are
-    /// the same actions the playlist's own "…" offers.
-    ///
-    /// It exists because that "…" isn't always reachable. Every removal path in
-    /// the playlist page runs through the local `Playlist`, so a published row
-    /// whose local copy is gone — library cleared, app reinstalled, account
-    /// switched — had nowhere to be deleted from. It sat on the profile offering
-    /// only to restore the thing you were trying to get rid of. The two service
-    /// calls below address the shared row by id and need no local copy at all.
+    /// Same actions as the playlist page's "...", addressing the shared row by id so a
+    /// published row with no local copy can still be deleted.
     @ViewBuilder
     private func playlistMenu(_ summary: PublicPlaylistSummary) -> some View {
         let local = localPlaylist(for: summary)
@@ -329,15 +478,12 @@ public struct ProfilePageView: View {
 
         Divider()
 
-        // The invite screen is the only place a code or a link is handed out.
-        // It used to be copyable straight from here too, which meant two routes
-        // to the same secret that could disagree about what it currently is.
+        // Codes and links only come from the invite screen.
         Button { manageCollaborators = summary } label: {
             Label("Manage Collaborators", systemImage: "person.2")
         }
 
-        // Editing needs the real playlist — the published row is a snapshot, and
-        // renaming that would leave the library disagreeing with the profile.
+        // Editing needs the local playlist; the published row is only a snapshot.
         if let local {
             Divider()
             Button { editingPlaylist = local } label: {
@@ -357,16 +503,12 @@ public struct ProfilePageView: View {
         }
     }
 
-    // MARK: - Empty / error
+    // MARK: - Error
 
     private var emptyState: some View {
-        HintCard(
-            icon: loadFailed ? "wifi.exclamationmark" : "waveform",
-            title: loadFailed ? "Couldn't load this profile" : "Nothing here yet",
-            message: loadFailed
-                ? "Check your connection and try again."
-                : "\(isMe ? "You haven't" : "@\(profile.username) hasn't") made anything public."
-        )
+        HintCard(icon: "wifi.exclamationmark",
+                 title: "Couldn't load this profile",
+                 message: "Check your connection and try again.")
     }
 
     // MARK: - Load
@@ -375,34 +517,27 @@ public struct ProfilePageView: View {
         isLoading = true
         loadFailed = false
 
-        // Detached from the two fetches below and never awaited with them: the
-        // wash is the first thing anyone sees, and holding it behind the stats
-        // request would leave the page grey for the whole round trip and then
-        // flash into colour once the numbers happen to land.
+        // Not awaited with the fetches below, so the wash doesn't wait for stats.
         Task { await artwork.resolveAvatar(profile.avatarURL) }
 
         async let s = deps.profileStatsService.fetchStats(for: profile.id)
         async let p = deps.profileStatsService.fetchPublicPlaylists(for: profile.id)
+        async let r = isMe ? nil : deps.recap.fetchRecaps(userID: profile.id)
 
-        // The two halves fail independently: stats being unavailable shouldn't
-        // wipe out the playlists, and vice versa. Only a total miss is an error.
+        // Stats and playlists fail independently. Only a total miss is an error.
         let loadedStats     = try? await s
         let loadedPlaylists = try? await p
 
         stats     = loadedStats ?? nil
         playlists = loadedPlaylists ?? []
+        recaps    = await r ?? []
         loadFailed = loadedStats == nil && loadedPlaylists == nil
         isLoading  = false
 
-        // Only now: the names and counts are already on screen, and the pictures
-        // come from the local library and the catalogue rather than from the two
-        // requests above. Resolving them before dropping the spinner would hold
-        // the whole page behind a lookup for a photo.
+        // After the spinner drops: pictures come from the library and catalogue, not these requests.
         await resolveArtwork()
 
-        // Your own profile is the one place a missing published cover can be
-        // repaired — it's the only device that holds the image. Costs nothing on
-        // a profile whose covers are already up.
+        // Only the owner's device holds the image, so repair missing published covers here.
         if isMe {
             let repaired = await PlaylistSharingService.shared.backfillPublishedCovers(
                 playlists, library: deps.libraryService
@@ -425,8 +560,7 @@ public struct ProfilePageView: View {
         _ = await (artists, covers)
     }
 
-    /// A public playlist is a full page on both platforms — the content column on
-    /// macOS, a push on iOS.
+    /// A full page on both platforms: the content column on macOS, a push on iOS.
     private func open(_ summary: PublicPlaylistSummary) {
         #if os(macOS)
         appState.showPublicPlaylist(summary, ownerName: profile.name)
@@ -437,12 +571,8 @@ public struct ProfilePageView: View {
 
     // MARK: - Playlist actions
 
-    /// The local playlist behind a published row, if this device still has one.
-    ///
-    /// Two lookups because the id can be either: the owner's own row carries its
-    /// local `playlistID`, and a playlist that arrived here as a share is linked
-    /// the other way round. Both miss on a device that no longer holds the
-    /// playlist, which is the case the menu is here for.
+    /// The local playlist behind a published row, if this device has one. The owner's row
+    /// carries its `playlistID`; a share is linked the other way, so check both.
     private func localPlaylist(for summary: PublicPlaylistSummary) -> Playlist? {
         if let mine = deps.libraryService.playlist(id: summary.playlistID) { return mine }
         if let localID = PlaylistSharingService.shared.localPlaylistID(forSharedPlaylist: summary.id) {
@@ -451,8 +581,7 @@ public struct ProfilePageView: View {
         return nil
     }
 
-    /// The cover the grid already drew, when it came from local data — the sheet
-    /// shows it rather than fetching its own.
+    /// The cover the grid already drew, if it came from local data.
     private func coverData(for summary: PublicPlaylistSummary) -> Data? {
         if case .data(let bytes) = artwork.playlistCovers[summary.id] { return bytes }
         return nil
@@ -466,15 +595,13 @@ public struct ProfilePageView: View {
         do {
             try await PlaylistSharingService.shared.unpublish(sharedPlaylistID: summary.id)
             remove(summary)
-            deps.showToast("“\(summary.name)” is private again")
+            deps.showToast(.done("“\(summary.name)” is private again"))
         } catch {
             actionError = "Couldn't make “\(summary.name)” private."
         }
     }
 
-    /// Two deletions in one press, and the message has to cover both: the row on
-    /// the profile, and — when this device is also the one holding the playlist —
-    /// the library copy, which now takes its orphaned songs with it.
+    /// Covers both deletions: the profile row and, if present, the library copy.
     private func deleteMessage(for summary: PublicPlaylistSummary) -> String {
         guard let local = localPlaylist(for: summary) else {
             return "This removes it from your profile for good, along with anyone's access to it. It isn't in this library, so there's nothing else to delete."
@@ -484,11 +611,8 @@ public struct ProfilePageView: View {
             + PlaylistDeletionPrompt.message(songCount: songs, isReadOnly: false)
     }
 
-    /// Deletes the published row, and the local playlist too when there is one.
-    ///
-    /// Server first: if that fails there's nothing to undo, whereas deleting
-    /// locally first and then failing would strand the row on the profile with
-    /// the only thing that could remove it now gone.
+    /// Deletes the published row, then the local playlist. Server first, so a failure
+    /// doesn't strand the row with nothing left to remove it.
     private func deletePlaylist(_ summary: PublicPlaylistSummary) async {
         pendingDelete = nil
         guard busyIDs.insert(summary.id).inserted else { return }
@@ -504,6 +628,7 @@ public struct ProfilePageView: View {
         }
 
         if let local {
+            SupabaseSyncService.allowBulk("delete-playlists")
             deps.libraryService.deletePlaylist(id: local.id)
             #if os(macOS)
             if appState.selectedPlaylist?.id == local.id { appState.selectedPlaylist = nil }
@@ -511,22 +636,15 @@ public struct ProfilePageView: View {
         }
 
         remove(summary)
-        deps.showToast("Deleted “\(summary.name)”")
+        deps.showToast(.done("Deleted “\(summary.name)”"))
     }
 
-    /// Drops the card without a round trip. Re-fetching would work, but it would
-    /// read a row we just deleted, and a card that lingers for the length of a
-    /// request reads as the action having failed.
+    /// Drops the card locally; a refetch could still read the deleted row.
     private func remove(_ summary: PublicPlaylistSummary) {
         playlists.removeAll { $0.id == summary.id }
     }
 
-    /// A top artist opens in Discover, not in the local library.
-    ///
-    /// Deliberately not routed through the "local artist first" rule the mini
-    /// player uses: this is a stat off someone else's profile, and the interesting
-    /// page is the artist as they exist online — which is also the only page that
-    /// exists at all when you don't own a note of their music.
+    /// Opens the artist in Discover, not the local library.
     private func openArtist(_ name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
@@ -561,9 +679,7 @@ public struct ProfilePageView: View {
         static let pageInset: CGFloat     = 18
         static let cardMin: CGFloat       = 140
         static let cardMax: CGFloat       = 180
-        // Computed, not stored: a `static let` is initialised once per process,
-        // so it would freeze whatever text size was set the first time this
-        // page opened and never follow a change made in Settings afterwards.
+        // Computed so it follows text size changes; a `static let` would freeze it.
         static var nameFont: Font         { .system(size: MixFontScale.size(30), weight: .bold) }
         #endif
     }
@@ -571,9 +687,7 @@ public struct ProfilePageView: View {
 
 // MARK: - Artist circle
 
-/// A top artist. The stat itself is a name and a play count — the photo is
-/// resolved separately (ProfileArtwork.swift) and arrives a moment later, so the
-/// monogram is what's drawn until it does and what stays if it never comes.
+/// A top artist. The photo arrives later (ProfileArtwork.swift); the monogram stays if it never does.
 private struct ArtistCircle: View {
 
     let name: String
@@ -598,9 +712,7 @@ private struct ArtistCircle: View {
                     .overlay(
                         Circle().strokeBorder(Color.mixSeparator, lineWidth: 0.5)
                     )
-                    // Lifts on hover the way the Discover circles do — the whole
-                    // point of the change is that this is now the same kind of
-                    // thing as those, and it should read as one before it's clicked.
+                    // Hover lift, like the Discover circles.
                     .scaleEffect(isHovering ? 1.04 : 1)
                     .mixAnimation(.easeOut(duration: 0.2), value: photo)
                     .mixAnimation(.easeOut(duration: 0.14), value: isHovering)
@@ -644,8 +756,7 @@ private struct PublicPlaylistCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            // The cover comes from the viewer's side — nothing published carries
-            // one. See ProfileArtwork.swift.
+            // Resolved on the viewer's side. See ProfileArtwork.swift.
             Color.clear
                 .aspectRatio(1, contentMode: .fit)
                 .overlay {
@@ -689,8 +800,7 @@ private struct PublicPlaylistCard: View {
             )
     }
 
-    /// The description if there is one, because the owner wrote it on purpose;
-    /// the count only when there's nothing better to say.
+    /// The owner's description, else the song count.
     private var subtitle: String {
         if let d = summary.description, !d.isEmpty { return d }
         return "\(summary.trackCount) song\(summary.trackCount == 1 ? "" : "s")"
@@ -737,3 +847,16 @@ private struct HintCard: View {
         )
     }
 }
+
+#if os(iOS)
+/// A post pushed from a profile with no route of its own. Its authors push from here.
+private struct PushedPost: View {
+    let code: String
+    @State private var profile: UserProfile?
+
+    var body: some View {
+        PostPageView(code: code, onOpenProfile: { profile = $0 })
+            .navigationDestination(item: $profile) { ProfilePageView(profile: $0) }
+    }
+}
+#endif

@@ -1,18 +1,5 @@
-// FindPeopleView.swift
-// Mixtape — Features/Social
-//
-// Username discovery: search public profiles by handle (prefix match) and open
-// a read-only profile for any result. Presented as a sheet from Settings.
-//
-// The window is small on purpose. It used to open at 460×520 with a full-bleed
-// empty state — a 40pt icon and two lines of instruction floating in the middle
-// of a void, under a search box that had 16pt of padding on every side. All of
-// that shouted, and the loudest thing on screen was the filled orange Done
-// button, which is the one control nobody opens this window to press.
-//
-// So: the field is the view, the prompt under it is quiet, and Done is plain
-// text in the title bar. The window is sized to fit a handful of results rather
-// than to fit the largest thing it might ever show.
+// Search public profiles by handle (prefix match) and open a read-only profile.
+// Presented as a sheet from Settings, sized for a handful of results.
 
 import SwiftUI
 
@@ -21,9 +8,7 @@ public struct FindPeopleView: View {
     @Environment(\.dismiss) private var dismiss
 
     private let authService: any AuthServiceProtocol
-    /// Where a chosen person should open. When nil the profile is pushed inside
-    /// this window; macOS passes a closure instead, because a 420pt sheet is the
-    /// wrong frame for a page built to be looked at.
+    /// Where a chosen person opens. Nil pushes inside this window; macOS opens a page in the main window.
     private let onSelect: ((UserProfile) -> Void)?
 
     @State private var query: String = ""
@@ -39,10 +24,7 @@ public struct FindPeopleView: View {
     }
 
     public var body: some View {
-        // Only iOS pushes: both macOS call sites hand in `onSelect` so the
-        // chosen profile opens as a page in the main window. A navigation stack
-        // that never navigates was most of what made this look like a phone
-        // screen in a Mac window, so on the Mac there isn't one.
+        // Only iOS pushes; on the Mac both callers pass `onSelect`, so no navigation stack.
         #if os(macOS)
         sheet
         #else
@@ -71,8 +53,7 @@ public struct FindPeopleView: View {
 
     // MARK: - Content
 
-    // `scroll: false` above — the results own their scroll view, and the
-    // search field has to stay pinned above it rather than scrolling away.
+    // The results own their scroll view so the search field stays pinned.
     private var content: some View {
         VStack(spacing: 0) {
             MixSearchField(text: $query,
@@ -158,9 +139,7 @@ public struct FindPeopleView: View {
         .scrollBounceBehavior(.basedOnSize)
     }
 
-    /// The quiet version of an empty state: it sits near the field it's talking
-    /// about instead of being centred in whatever space is left over, and it's
-    /// sized like a hint rather than a headline.
+    /// A small inline hint by the field rather than a centred empty state.
     private func prompt(icon: String,
                         title: String,
                         subtitle: String,
@@ -199,8 +178,7 @@ public struct FindPeopleView: View {
             return
         }
 
-        // Debounce: wait for typing to settle. Cancellation (new keystroke)
-        // throws and bails out before hitting the network.
+        // Debounce. A new keystroke cancels and throws before the network call.
         do {
             try await Task.sleep(for: .milliseconds(350))
         } catch {
@@ -228,8 +206,7 @@ public struct FindPeopleView: View {
 
 // MARK: - Row
 
-/// One search hit. The join date isn't decoration — a list of bare handles gives
-/// you nothing to tell two similar names apart by.
+/// One search hit. The join date tells similar handles apart.
 private struct PersonRow: View {
 
     let profile: UserProfile

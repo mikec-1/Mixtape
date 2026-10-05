@@ -1,17 +1,6 @@
-// PeopleSearch.swift
-// Mixtape — Features/Social
-//
-// People results for the app's ordinary search field.
-//
-// Library search is local, synchronous and instant; people search is a network
-// round trip. Mixing them would make the fast thing wait for the slow one, so
-// this is a separate object with its own debounce that the search views render
-// as their own section — songs, albums and artists appear on the keystroke, and
-// people drop in underneath a moment later.
-//
-// Shared by the Discover search on both platforms — and still by the older
-// library-only search views — so the debounce, the minimum query length and the
-// stale-result guard are written once.
+// People results for the search field. A network search with its own debounce, drawn
+// as its own section so the local results don't wait. Shared by the Discover and library
+// searches on both platforms.
 
 import SwiftUI
 import Combine
@@ -21,13 +10,10 @@ final class PeopleSearch: ObservableObject {
 
     @Published private(set) var results: [UserProfile] = []
     @Published private(set) var isSearching = false
-    /// Set only when a search actually failed. A network error here must never
-    /// take over the view — the library results beside it are still perfectly
-    /// good — so it renders as a single quiet line, or not at all.
+    /// Set only on failure, drawn as one quiet line at most.
     @Published private(set) var failed = false
 
-    /// Handles are short; one character matches most of the directory and costs
-    /// a round trip to say so.
+    /// One character matches most of the directory.
     static let minimumQueryLength = 2
 
     private var lastQuery = ""
@@ -40,12 +26,8 @@ final class PeopleSearch: ObservableObject {
         lastQuery = ""
     }
 
-    /// The service is handed in per call rather than held: the views that own one
-    /// of these get theirs from the environment, which isn't available at the
-    /// moment a `@StateObject` is constructed.
-    ///
-    /// Runs inside a `.task(id: query)`, so a new keystroke cancels the previous
-    /// call before it reaches the network.
+    /// The service is passed per call: the owning views get it from the environment,
+    /// which isn't available when a `@StateObject` is built. Runs inside `.task(id: query)`.
     func search(_ raw: String,
                 using authService: any AuthServiceProtocol,
                 limit: Int = 20) async {
@@ -84,9 +66,7 @@ final class PeopleSearch: ObservableObject {
 
 // MARK: - Row
 
-/// One person in a results list. Sized to sit next to song rows without
-/// out-shouting them: circular avatar, handle, and the join date as the only
-/// thing distinguishing two similar names.
+/// One person in a results list: avatar, handle and join date.
 struct PersonResultRow: View {
 
     let profile: UserProfile

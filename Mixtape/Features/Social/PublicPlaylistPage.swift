@@ -1,32 +1,14 @@
-// PublicPlaylistPage.swift
-// Mixtape — Features/Social
-//
-// Somebody else's public playlist, read-only.
-//
-// It used to be a 460×520 sheet with hand-rolled rows, which made the one place
-// you go to look at a *playlist* the one place that looked nothing like the
-// playlist screen. This is the same page shape as PlaylistDetailView — the
-// shared DetailHero, the same column table — with everything a visitor has no
-// business doing taken out.
-//
-// What's gone, and why: no play or shuffle, because these are the owner's files
-// and a visitor has none of them; no edit, no delete, no cover picker, no
-// visibility toggle, because none of it is theirs to change. What's left is the
-// one thing a visitor actually wants — a copy in their own library.
-//
-// Reusing PlaylistDetailView with a read-only flag was the other option and a
-// worse one: it's a thousand lines wired to a local Playlist, the engine, the
-// download manager, favourites and the public toggle, and every one of those
-// would need a branch for a playlist that exists only as a published snapshot.
+// Someone else's public playlist, read-only. Same shape as PlaylistDetailView (DetailHero
+// and the column table) minus play, edit, delete and visibility: a visitor has none of the
+// files, so all they can do is add it to their library.
+// A separate view because PlaylistDetailView is wired to a local Playlist throughout.
 
 import Foundation
 import SwiftUI
 
 // MARK: - Navigation target
 
-/// A public playlist plus whose it is. macOS routes through this because the
-/// owner's handle is on the page and on its back button, and the summary alone
-/// doesn't carry it.
+/// A public playlist plus its owner, whose handle the summary doesn't carry.
 public struct PublicPlaylistTarget: Identifiable, Hashable, Sendable {
     public let summary: PublicPlaylistSummary
     public let ownerName: String
@@ -50,27 +32,17 @@ public struct PublicPlaylistPage: View {
 
     @StateObject private var artwork = ProfileArtworkStore()
 
-    /// The cover as bytes. Resolved through `ProfileArtworkStore` and then
-    /// downloaded if it came back as a URL, because the same image feeds the
-    /// colour wash and the copy saved to the library — and both need real bytes,
-    /// not a link.
+    /// The cover as bytes: the wash and the library copy both need data, not a URL.
     @State private var cover: Data?
-    /// Set the moment the playlist is written to the library. There is no
-    /// "adding…" state any more to go with it — saving is a local write now, so
-    /// there is no interval to show a spinner in.
+    /// Set once the playlist is in the library. Saving is local, so there's no in-progress state.
     @State private var didAdd = false
-    /// Measured so the table drops columns it can't fit rather than crushing
-    /// them, exactly as the library's own playlist table does.
+    /// Measured so the table drops columns it can't fit, like the library's table.
     @State private var listWidth: CGFloat = 0
 
     @State private var showInvite = false
-    /// Shown in the metadata line, and only ever loaded for our own playlist —
-    /// the collaborator policies return nothing to a visitor, so asking would be
-    /// a round trip that always answers zero.
+    /// Only loaded for our own playlist; visitors get nothing from the collaborator policies.
     @State private var collaboratorCount = 0
-    /// How many people are holding this playlist. Nil while unknown — before the
-    /// first read, or on a server without `get_playlist_save_count` — and the
-    /// header shows nothing at all rather than claiming zero.
+    /// Nil while unknown (or without `get_playlist_save_count`), so the header never claims zero.
     @State private var saveCount: Int?
     @State private var notes: PlaylistNotes?
     @State private var isHiding = false
@@ -85,7 +57,7 @@ public struct PublicPlaylistPage: View {
 
     /// What the single button on this page is for.
     private enum LibraryState {
-        /// Here already — your own row, or a copy you adopted earlier.
+        /// Here already: your own row, or a copy you adopted earlier.
         case present
         /// Yours, still published, and not in this library. See `save()`.
         case missing
@@ -93,13 +65,8 @@ public struct PublicPlaylistPage: View {
         case absent
     }
 
-    /// Whether the signed-in viewer is the one who published this.
-    ///
-    /// Ownership is a fact about the row, not about this device. `summary.playlistID`
-    /// names a playlist in the owner's library, and that playlist can be absent
-    /// here — an account switch, a restore from an older backup — while the
-    /// published row is still, plainly, theirs. Answering from presence alone is
-    /// what had your own profile offering to add your own playlist.
+    /// Whether the viewer published this. Decided by the row's owner, not by whether this
+    /// device has the playlist.
     private var isMine: Bool {
         guard let ownerID = summary.ownerID,
               let viewer = deps.authService.currentUser?.id
@@ -107,25 +74,17 @@ public struct PublicPlaylistPage: View {
         return ownerID == viewer
     }
 
-    /// Two ways this playlist can already be here, and they are not the same one.
-    ///
-    /// `summary.playlistID` is the OWNER's local id — it matches only on your own
-    /// profile. A copy adopted from someone else got a fresh uuid at creation and
-    /// shares nothing with the original, so it has to be found through the link
-    /// recorded when it was added. Checking only the first is why the button kept
-    /// offering to add a playlist that was already sitting in the sidebar, twice.
+    /// `summary.playlistID` is the owner's local id, so it only matches on your own profile.
+    /// An adopted copy has a fresh id and is found through its stored link.
     private var libraryState: LibraryState {
         if didAdd || localCopyID != nil { return .present }
         return isMine ? .missing : .absent
     }
 
-    /// This device's copy of the playlist, under either of the two ids it can
-    /// have. Nil means there genuinely isn't one — which is the only thing that
-    /// should ever put "Restore to Library" in front of the owner.
+    /// This device's copy under either id. Nil is the only case that offers Restore.
     private var localCopyID: UUID? {
         if deps.libraryService.playlist(id: summary.playlistID) != nil { return summary.playlistID }
-        // The link outlives the playlist — someone can add a copy and then delete
-        // it, and a stale link would leave the button permanently disabled.
+        // The link can outlive the playlist, so check it still exists.
         if let localID = PlaylistSharingService.shared.localPlaylistID(forSharedPlaylist: summary.id),
            deps.libraryService.playlist(id: localID) != nil {
             return localID
@@ -140,10 +99,7 @@ public struct PublicPlaylistPage: View {
             VStack(alignment: .leading, spacing: 0) {
                 header
 
-                // Demoted from the primary button it used to be. On your own
-                // profile the thing you came to do is share the playlist, not
-                // repair a device that's missing it — so restoring says its piece
-                // here and gets out of the way of Invite.
+                // Secondary on your own profile: sharing is the main action here.
                 if isMine, libraryState == .missing, !summary.tracks.isEmpty {
                     restoreNote
                         .padding(.horizontal, Metrics.inset)
@@ -190,7 +146,7 @@ public struct PublicPlaylistPage: View {
             }
         }
         .artworkWash(source: cover)
-        .background(Color.mixBackground.ignoresSafeArea())
+        .background(MixPageBackground())
         .navigationTitle(summary.name)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
@@ -217,7 +173,7 @@ public struct PublicPlaylistPage: View {
 
     private var header: some View {
         DetailHero(
-            eyebrow: "Public Playlist",
+            eyebrow: summary.isDub ? "Dub from @\(ownerName)" : "Public Playlist",
             title: summary.name,
             subtitle: summary.description,
             metadata: metadataLine
@@ -231,8 +187,7 @@ public struct PublicPlaylistPage: View {
         }
     }
 
-    /// Whose it is comes first — it's the fact that makes this page different
-    /// from the identical-looking one in your own library.
+    /// Owner first: it's what distinguishes this from your own library page.
     private var metadataLine: String {
         let count = max(summary.trackCount, summary.tracks.count)
         var parts = ["@\(ownerName)", "\(count) song\(count == 1 ? "" : "s")"]
@@ -254,13 +209,7 @@ public struct PublicPlaylistPage: View {
 
     // MARK: Owner actions
 
-    /// What the owner gets instead of an add button, and the point of this whole
-    /// screen for them: Spotify's plus button, which is an invite and nothing else.
-    ///
-    /// The previous primary action here was "Restore to Library" — an offer to
-    /// re-download your own playlist, sitting where the only genuinely useful
-    /// control belongs. Restore still exists (in the overflow, and as a note under
-    /// the header) but only when the playlist is really missing from this device.
+    /// The owner's primary action: invite. Restore is in the overflow, only when missing.
     private var ownerActions: some View {
         HStack(spacing: 10) {
             inviteButton
@@ -291,9 +240,7 @@ public struct PublicPlaylistPage: View {
         .accessibilityLabel("Invite collaborators to \(summary.name)")
     }
 
-    /// Everything that isn't the one thing. The code and the link are not here:
-    /// they belong to the invite screen, which is the single place that shows
-    /// what's currently being handed out and can change it.
+    /// Everything else. Codes and links live on the invite screen.
     private var overflowMenu: some View {
         Menu {
             ShareMenuItems(.playlist(summary))
@@ -314,9 +261,7 @@ public struct PublicPlaylistPage: View {
                 .disabled(isHiding)
             }
 
-            // Only when the playlist genuinely isn't here. The published snapshot
-            // is the only surviving record of what was in it, so this is a real
-            // recovery path — it just isn't what you came to this page for.
+            // Only when missing here. The snapshot is the only record of what was in it.
             if libraryState == .missing, !summary.tracks.isEmpty {
                 Divider()
                 Button {
@@ -329,8 +274,7 @@ public struct PublicPlaylistPage: View {
             HeroCircleLabel(systemImage: "ellipsis")
         }
         #if os(macOS)
-        // Left alone a Menu draws itself as a bordered pop-up button, complete
-        // with a chevron — the wrong shape entirely next to a capsule.
+        // Otherwise a Menu draws as a bordered pop-up with a chevron.
         .menuStyle(.button)
         .buttonStyle(.plain).mixHandCursor()
         .menuIndicator(.hidden)
@@ -339,9 +283,7 @@ public struct PublicPlaylistPage: View {
         .help("More options for this playlist")
     }
 
-    /// Sits under the header when the owner's own playlist isn't on this device.
-    /// Same card as `unpublishedNote`, because it's the same kind of statement —
-    /// something about this page's state that you'd otherwise have to infer.
+    /// Under the header when the owner's playlist isn't on this device. Same card as `unpublishedNote`.
     private var restoreNote: some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: "arrow.counterclockwise")
@@ -386,15 +328,8 @@ public struct PublicPlaylistPage: View {
 
     // MARK: Visitor actions
 
-    /// Two different things, and the difference is the point of this whole
-    /// screen for a visitor.
-    ///
-    /// The button *saves*: the playlist joins your library and stays theirs — you
-    /// can play it and download it, you can't edit it, and when they change it,
-    /// your copy changes. The menu *copies*: you get your own playlist, editable,
-    /// frozen at today, that never hears from them again. Spotify draws the same
-    /// distinction and it's the one people actually reach for — most of the time
-    /// you want the playlist, not a photograph of it.
+    /// The button saves: it joins your library, stays theirs, and follows their edits.
+    /// The menu copies: your own editable playlist, frozen at today.
     private var visitorActions: some View {
         HStack(spacing: 10) {
             addButton
@@ -433,8 +368,7 @@ public struct PublicPlaylistPage: View {
         .help("More options for this playlist")
     }
 
-    /// This device's *saved* copy — the one that follows the owner — as opposed to
-    /// a detached copy, which is an ordinary playlist and is removed like one.
+    /// This device's saved copy (follows the owner), not a detached copy.
     private var savedPlaylistID: UUID? {
         guard let id = localCopyID,
               deps.libraryService.playlist(id: id)?.followsRemoteSource == true
@@ -442,10 +376,7 @@ public struct PublicPlaylistPage: View {
         return id
     }
 
-    /// Wording matters more than usual here. "Add to Library" on your own playlist
-    /// is a lie about what the button does — it would make a second one — so the
-    /// owner's version says restore, and puts the playlist back where it was
-    /// rather than beside itself.
+    /// The owner's version says Restore and puts the playlist back, rather than adding a second one.
     private var addButton: some View {
         let state = libraryState
         let isDone = state == .present
@@ -456,9 +387,7 @@ public struct PublicPlaylistPage: View {
             HStack(spacing: 7) {
                 Image(systemName: icon(for: state))
                     .font(.system(size: 13, weight: .bold))
-                    // The plus turning into a tick, rather than one label being
-                    // swapped for another. It's the whole feedback the press
-                    // gets now that there's no waiting to report.
+                    // Plus turns into a tick.
                     .mixSymbolReplace()
                 Text(title(for: state))
                     .font(.mixButtonSmall)
@@ -506,8 +435,7 @@ public struct PublicPlaylistPage: View {
         }
     }
 
-    /// Rows published before the snapshot column existed carry a count and
-    /// nothing else. Saying so beats an empty page that looks broken.
+    /// Rows published before the snapshot column carry only a count.
     private var unpublishedNote: some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: "music.note.list")
@@ -540,16 +468,8 @@ public struct PublicPlaylistPage: View {
 
     // MARK: Actions
 
-    /// The button. Restores the owner's own playlist, or saves someone else's —
-    /// two genuinely different operations behind one control, because from the
-    /// user's side it's the same sentence: put this in my library.
-    ///
-    /// Not `async`, and that's the fix: everything that has to happen before the
-    /// playlist is in the library is local, so it all happens inside this call
-    /// and the button is done by the time the press ends. The errands that used
-    /// to be strung in front of it — a round trip to read the row, a cover GET,
-    /// a full sync, then artwork for every song one at a time — now run behind
-    /// it, where nobody is waiting.
+    /// Restores the owner's playlist or saves someone else's. Synchronous: everything
+    /// before the playlist lands is local, and the network errands run behind it.
     private func save() {
         let state = libraryState
         guard state != .present, !summary.tracks.isEmpty else { return }
@@ -561,13 +481,8 @@ public struct PublicPlaylistPage: View {
         }
     }
 
-    /// Saves someone else's public playlist: a real playlist in the library that
-    /// goes on belonging to them.
-    ///
-    /// Everything that makes that true lives in `savePublicPlaylist` — the
-    /// `.subscribed` origin that refuses edits, the viewer link that pulls and
-    /// never pushes, and the absence of any server-side membership, which is what
-    /// keeps a saver out of the collaborator byline.
+    /// Saves someone else's playlist, still theirs. `savePublicPlaylist` sets the `.subscribed`
+    /// origin, the pull-only link, and no server membership (so no collaborator byline).
     private func subscribe() {
         let localID = PlaylistSharingService.shared.savePublicPlaylist(
             sharedPlaylistID: summary.id,
@@ -580,16 +495,13 @@ public struct PublicPlaylistPage: View {
             libraryService: deps.libraryService
         )
         didAdd = true
-        deps.showToast("Added \u{201C}\(summary.name)\u{201D} to your library")
-        // Moved before the round trip so the header answers the press, not the
-        // network. Only when a real count is already in hand: bumping nil to 1
-        // would turn "the server hasn't told us" into "one person has this".
+        deps.showToast(Toast.done("Added \u{201C}\(summary.name)\u{201D} to your library")
+            .action("View") { Toast.openPlaylist(localID) })
+        // Bump before the round trip, but only a known count: nil must not become 1.
         if let known = saveCount { saveCount = known + 1 }
 
-        // The server has the last word, it just doesn't get to hold the door.
-        // This is what upgrades the songs the profile snapshot couldn't prove
-        // were streamable, adopts the owner's own cover, and picks up anything
-        // they changed between the page loading and the press.
+        // Server refresh in the background: upgrades streamable songs, adopts the owner's cover,
+        // picks up any recent edits.
         Task {
             await PlaylistSharingService.shared.recordSave(sharedPlaylistID: summary.id)
             await loadSaveCount()
@@ -602,23 +514,16 @@ public struct PublicPlaylistPage: View {
             case .available:
                 try? await deps.syncService.sync()
             case .unavailable:
-                // Privated in the seconds between this page loading and the
-                // press. Rare enough to be worth undoing rather than explaining.
+                // Made private since the page loaded.
                 rollBackSave(localID, reason: "@\(ownerName) has made this playlist private.")
             case .unknown:
-                // Offline, or the server had a bad minute — deliberately not
-                // undone. The same rule the rest of subscribing follows: a
-                // device with no connection doesn't get to decide a playlist is
-                // gone. What's here is a real snapshot, and opening it once
-                // there's a connection refreshes it in place.
+                // Offline or a server error: keep the save. Opening it later refreshes it.
                 break
             }
         }
     }
 
-    /// Undoes a save the server then refused. Guarded on the playlist still being
-    /// the one we saved: a user who reached the library and deleted it in the
-    /// meantime has already said what they wanted.
+    /// Undoes a save the server refused, unless the user already deleted it.
     private func rollBackSave(_ localID: UUID, reason: String) {
         guard deps.libraryService.playlist(id: localID)?.origin == .subscribed else { return }
         PlaylistSharingService.shared.unsavePublicPlaylist(localPlaylistID: localID,
@@ -627,13 +532,8 @@ public struct PublicPlaylistPage: View {
         actionError = reason
     }
 
-    /// The owner's own playlist, back on a device that lost it.
-    ///
-    /// Reuses the published id so the existing shared row names this playlist
-    /// again, and carries a fresh sync timestamp — which is what lets it win
-    /// last-write-wins against whatever tombstone removed it. The published
-    /// snapshot is the only surviving record of what was in there, so this
-    /// reconciliation *is* the recovery.
+    /// The owner's own playlist, back on a device that lost it. Reuses the published id and a
+    /// fresh sync timestamp so it wins last-write-wins against the tombstone.
     private func restore() {
         let library = deps.libraryService
         let local = library.createPlaylist(id: summary.playlistID,
@@ -641,20 +541,14 @@ public struct PublicPlaylistPage: View {
                                            description: summary.description,
                                            artworkData: cover,
                                            imported: true)
-        // With the owner — themselves — so the reconciler's own artwork pass can
-        // read the covers they published instead of guessing at the catalogue for
-        // every song it just imported.
+        // With the owner as themselves, so the artwork pass uses their published covers.
         library.reconcileSharedPlaylist(localPlaylistID: local.id,
                                         remoteTrackIDs: summary.tracks.map(\.id),
                                         remoteTrackMeta: sharedTrackMeta,
                                         ownerID: summary.ownerID,
                                         notes: notes)
 
-        // Marked "owner" because the role is load-bearing and not just a label:
-        // `setPublic` refuses to publish anything whose link says otherwise, and
-        // creates a *second* shared row when there's no link at all. This way the
-        // restored playlist's visibility toggle goes on driving the row it always
-        // drove.
+        // "owner" matters: `setPublic` refuses to publish otherwise, and with no link it creates a second row.
         PlaylistSharingService.shared.setLinkedShare(
             PlaylistSharingService.LinkedShare(sharedPlaylistID: summary.id,
                                                shareCode: "",
@@ -663,13 +557,9 @@ public struct PublicPlaylistPage: View {
         )
 
         didAdd = true
-        deps.showToast("Restored \u{201C}\(summary.name)\u{201D} to your library")
+        deps.showToast(.done("Restored \u{201C}\(summary.name)\u{201D} to your library"))
 
-        // Both errands, and both behind the playlist rather than in front of it.
-        // The empty code above leaves the playlist recognisable but not invitable,
-        // and gives `refreshSharedPlaylist` nothing to look up; `inviteCode`
-        // rewrites the link with the real one. Neither is anything the user is
-        // waiting to see.
+        // In the background: `inviteCode` replaces the empty code above with the real one.
         Task {
             _ = try? await PlaylistSharingService.shared
                 .inviteCode(forSharedPlaylist: summary.id, localPlaylistID: local.id)
@@ -677,13 +567,7 @@ public struct PublicPlaylistPage: View {
         }
     }
 
-    /// Takes today's version and makes it yours.
-    ///
-    /// Deliberately linked to nothing. A copy is an ordinary playlist — rename
-    /// it, reorder it, throw half of it out — and the owner's later edits never
-    /// arrive, which is the entire difference from Save. Copying also doesn't
-    /// count as saving: the button still offers to save afterwards, because you
-    /// haven't.
+    /// Today's version as your own playlist, linked to nothing. Doesn't count as saving.
     private func makeCopy() {
         guard !summary.tracks.isEmpty else { return }
 
@@ -693,8 +577,7 @@ public struct PublicPlaylistPage: View {
                                            description: summary.description,
                                            artworkData: cover,
                                            imported: true)
-        // A copy is an ordinary playlist and pushes nothing back, so songs the
-        // user already owns are linked rather than duplicated into Songs.
+        // Songs the user already owns are linked rather than duplicated.
         library.reconcileSharedPlaylist(localPlaylistID: local.id,
                                         remoteTrackIDs: summary.tracks.map(\.id),
                                         remoteTrackMeta: sharedTrackMeta,
@@ -702,43 +585,38 @@ public struct PublicPlaylistPage: View {
                                         dedupeAgainstLibrary: true,
                                         notes: notes)
 
-        deps.showToast("Copied \u{201C}\(summary.name)\u{201D} to your library")
+        deps.showToast(Toast.done("Copied \u{201C}\(summary.name)\u{201D} to your library")
+            .action("View") { Toast.openPlaylist(local.id) })
         Task { try? await deps.syncService.sync() }
     }
 
-    /// Unsaves. The playlist leaves the library here and now; the counter row
-    /// behind it is withdrawn in the background by `unsavePublicPlaylist`, and
-    /// whether that succeeds has no bearing on the playlist being gone.
+    /// Unsaves locally now; `unsavePublicPlaylist` withdraws the counter row in the background.
     private func removeSaved() {
         guard let id = savedPlaylistID else { return }
         PlaylistSharingService.shared.unsavePublicPlaylist(localPlaylistID: id,
                                                            libraryService: deps.libraryService)
         didAdd = false
         if let known = saveCount { saveCount = max(known - 1, 0) }
-        deps.showToast("Removed \u{201C}\(summary.name)\u{201D} from your library")
+        deps.showToast(Toast.done("Removed \u{201C}\(summary.name)\u{201D} from your library")
+            .action("Undo") { subscribe() })
     }
 
-    /// The published snapshot in the shape the library's reconciler wants. Songs
-    /// the viewer already owns get linked to their real files; the rest land as
-    /// unavailable placeholders, so the playlist reads correctly now and fills in
-    /// if those songs ever arrive.
+    /// The snapshot as reconciler input. Owned songs link to real files, the rest become placeholders.
     private var sharedTrackMeta: [PlaylistSharingService.SharedTrackMeta] {
         summary.tracks.map {
-            PlaylistSharingService.SharedTrackMeta(id: $0.id,
-                                                   title: $0.title,
-                                                   artist: $0.artist,
-                                                   album: $0.album,
-                                                   duration: $0.duration)
+            var meta = PlaylistSharingService.SharedTrackMeta(id: $0.id,
+                                                              title: $0.title,
+                                                              artist: $0.artist,
+                                                              album: $0.album,
+                                                              duration: $0.duration,
+                                                              sourceKey: $0.sourceKey)
+            meta.edit = $0.edit
+            return meta
         }
     }
 
-    /// Fetches covers for the local copies of these songs.
-    ///
-    /// Also runs for a playlist that's *already* in the library, which is the
-    /// only repair path for a copy adopted before covers were published — those
-    /// tracks are sitting in the library blank and nothing else will ever revisit
-    /// them. Placeholders keep the owner's track ids, so the same lookup works on
-    /// a copy that was made months ago. Costs nothing when they all have covers.
+    /// Fetches covers for the local copies of these songs. Also repairs copies adopted
+    /// before covers were published; placeholders keep the owner's ids.
     private func fillInCovers() async {
         await deps.libraryService.backfillPlaceholderArtwork(
             trackIDs: summary.tracks.map(\.id),
@@ -747,9 +625,7 @@ public struct PublicPlaylistPage: View {
         )
     }
 
-    /// Takes the playlist off the profile. Needs the local copy — `setPublic`
-    /// republishes the track snapshot on its way through, so it works from the
-    /// playlist rather than from the row.
+    /// Takes it off the profile. Needs the local copy, since `setPublic` republishes the snapshot.
     private func hideFromProfile() async {
         guard let localID = localCopyID,
               let playlist = deps.libraryService.playlist(id: localID)
@@ -765,17 +641,13 @@ public struct PublicPlaylistPage: View {
                 tracks: playlist.trackIDs.compactMap { deps.libraryService.track(id: $0) },
                 deviceID: AppDependencies.deviceID
             )
-            deps.showToast("Hidden from your profile")
+            deps.showToast(.done("Hidden from your profile"))
         } catch {
             actionError = "Couldn't hide this playlist from your profile."
         }
     }
 
-    /// The owner is filtered out rather than assumed absent. They have no
-    /// collaborator row when they publish, but `refreshSharedPlaylist` goes
-    /// through the same join RPC as everyone else, so opening your own shared
-    /// playlist once is enough to enrol you in it — and "1 collaborator" on a
-    /// playlist nobody has joined is a lie you'd never think to check.
+    /// Filters out the owner: opening your own shared playlist enrols you through the join RPC.
     private func loadCollaborators() async {
         guard isMine else { return }
         let rows = (try? await PlaylistSharingService.shared
@@ -818,8 +690,7 @@ public struct PublicPlaylistPage: View {
 
 // MARK: - Columns
 
-/// Chosen by measured width rather than by platform, matching the library's own
-/// playlist table so a Mac window dragged narrow degrades the same way.
+/// By measured width, not platform, like the library's playlist table.
 private struct PublicTrackColumns {
 
     var showsAlbum = false
@@ -827,11 +698,10 @@ private struct PublicTrackColumns {
 
     var isTable: Bool { showsAlbum }
 
-    /// Four digits — a shared playlist is as long as its owner made it.
+    /// Room for four digits.
     static let index:    CGFloat = 32
     static let duration: CGFloat = 44
-    /// Artwork (40) plus the gap before the title — how far the header's "Title"
-    /// has to be pushed to sit over the song titles.
+    /// Artwork (40) plus the gap, so the "Title" header sits over the titles.
     static let titleInset: CGFloat = 52
 
     init(width: CGFloat) {
@@ -875,19 +745,15 @@ private struct PublicTrackListHeader: View {
 
 // MARK: - Row
 
-/// One published song. Inert on purpose — there is nothing behind it to play, so
-/// it gets no hover pill and no selection either; a row that lights up under the
-/// cursor is promising a click that does something.
+/// One published song. Inert: nothing to play, so no hover or selection.
 private struct PublicTrackRow: View {
 
     let track: PublicPlaylistTrack
     let index: Int
     let columns: PublicTrackColumns
-    /// The viewer's own copy of this song, when they happen to have one. Usually
-    /// nil on someone else's playlist.
+    /// The viewer's own copy's artwork, if any.
     let artwork: Data?
-    /// The owner's cover, published with the playlist. What fills the row in the
-    /// usual case, where the viewer owns none of these songs.
+    /// The owner's published cover, the usual fill.
     let remoteArtwork: URL?
 
     var body: some View {

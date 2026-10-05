@@ -1,23 +1,8 @@
-// InviteCollaboratorsSheet.swift
-// Mixtape — Features/Social
-//
-// "Invite collaborators to <playlist>" — the owner's side of a shared playlist.
-//
-// Replaces ShareCollaborativeSheet, which showed a 6-character code and nothing
-// else. The code still exists and is still the thing being redeemed, but it is no
-// longer the interface: a link you can send is, and the code is what's left when
-// the link can't travel — read down a phone, typed off a screen.
-//
-// Three ways in, because there is no one channel that works for everyone:
-//   • the link, copied on open and shareable through the system sheet
-//   • the QR, for the person standing next to you while you're on a Mac
-//   • by username, which hands out nothing at all — the owner writes the
-//     membership row directly, so no code is ever exposed
-//
-// Everything here runs against the RLS already in place (20260613 + the 20260807
-// policy rewrite). The owner may add and remove anyone; an editor who opens this
-// gets the member list and nothing else, which is the honest read of what the
-// policies let them do.
+// "Invite collaborators to <playlist>": the owner's side of a shared playlist.
+// Three ways in: a link (copied on open), a QR for someone in the room, or by username,
+// which writes the membership row directly so no code is exposed.
+// Runs against the existing RLS. The owner can add and remove anyone; an editor only sees
+// the member list.
 
 import SwiftUI
 import CoreImage
@@ -33,14 +18,12 @@ struct InviteCollaboratorsSheet: View {
 
     // MARK: Inputs
 
-    /// The local playlist, when we came from the library. Its shared row may not
-    /// exist yet — opening this sheet is what publishes it.
+    /// The local playlist, when opened from the library. Opening this sheet publishes it.
     private let localPlaylist: Playlist?
     private let tracks: [Track]
     /// The shared row, when we came from a public playlist page and already know it.
     private let knownSharedID: UUID?
-    /// The local copy's id, if this device has one. Only used to repair the stored
-    /// link, which a restore leaves holding an empty share code.
+    /// Only used to repair the stored link, which a restore leaves with an empty share code.
     private let localPlaylistID: UUID?
     private let name: String
     private let coverData: Data?
@@ -69,9 +52,8 @@ struct InviteCollaboratorsSheet: View {
     @State private var showsQR = false
     @State private var confirmRegenerate = false
 
-    /// A collaborator with their profile resolved. Two queries rather than one:
-    /// `playlist_collaborators.user_id` points at `auth.users`, so there's no
-    /// foreign key for PostgREST to embed `profiles` through.
+    /// Two queries: `playlist_collaborators.user_id` points at `auth.users`, so PostgREST
+    /// can't embed `profiles`.
     private struct Member: Identifiable, Hashable {
         let profile: UserProfile
         let role: String
@@ -79,9 +61,7 @@ struct InviteCollaboratorsSheet: View {
         var id: UUID { profile.id }
         var isOwner: Bool { role == "owner" }
 
-        /// What the owner is actually asking when they open this list: has this
-        /// person taken it up? The role is the less interesting half — everyone
-        /// invited is an editor — so it only gets said when the answer is yes.
+        /// Whether they've taken it up. The role (always editor) only shows once joined.
         var standing: String {
             if isOwner { return "Owner" }
             switch status {
@@ -103,9 +83,7 @@ struct InviteCollaboratorsSheet: View {
 
     // MARK: Init
 
-    /// From the library. Publishing on open is deliberate — a playlist you're
-    /// inviting someone to has to exist server-side before the invite means
-    /// anything, and `shareToSupabase` is get-or-create, so re-opening is free.
+    /// From the library. Publishes on open; `shareToSupabase` is get-or-create.
     init(playlist: Playlist, tracks: [Track]) {
         self.localPlaylist   = playlist
         self.tracks          = tracks
@@ -116,10 +94,8 @@ struct InviteCollaboratorsSheet: View {
         self.declaredOwner   = nil
     }
 
-    /// From a public playlist page, where the row is known to exist and the local
-    /// copy may not. `isOwner` comes from the caller because the page already
-    /// answered it against `owner_id`, and re-deriving it here from a stored link
-    /// would get it wrong on a device that has never had the playlist.
+    /// From a public playlist page, where the row exists and the local copy may not.
+    /// `isOwner` comes from the caller, which checked `owner_id`.
     init(sharedPlaylistID: UUID,
          localPlaylistID: UUID?,
          name: String,
@@ -143,9 +119,6 @@ struct InviteCollaboratorsSheet: View {
     // MARK: Body
 
     var body: some View {
-        // The sentence that used to sit under the playlist name is the sheet's
-        // subtitle now — it describes the sheet, not the playlist, so it was
-        // being said in the wrong place and at the wrong size.
         MixSheet(title: isOwner ? "Invite" : "Collaborators",
                  subtitle: isOwner
                      ? "Anyone you invite can add and remove songs."
@@ -159,8 +132,7 @@ struct InviteCollaboratorsSheet: View {
 
     @ViewBuilder
     private var content: some View {
-        // No ScrollView and no margins here — the chrome owns both, which is
-        // what lets the header hairline know when this has scrolled under it.
+        // No ScrollView or margins: the chrome owns both.
         VStack(alignment: .leading, spacing: 18) {
             playlistRow
 
@@ -182,8 +154,7 @@ struct InviteCollaboratorsSheet: View {
 
     // MARK: Playlist
 
-    /// Which playlist this is about. Just the cover and the name — the
-    /// explanation moved up into the sheet's own subtitle.
+    /// Which playlist this is about: cover and name.
     private var playlistRow: some View {
         HStack(spacing: 14) {
             ArtworkThumbnail(data: coverData,
@@ -228,9 +199,7 @@ struct InviteCollaboratorsSheet: View {
 
     // MARK: Link
 
-    /// The link is copied the moment this sheet opens, so this card is confirming
-    /// something that already happened rather than offering it. Spotify copies
-    /// silently on click; doing only that leaves you unsure whether it worked.
+    /// The link is already copied on open; this card confirms it.
     private func linkCard(_ link: String) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Invite link")
@@ -253,7 +222,7 @@ struct InviteCollaboratorsSheet: View {
             HStack(spacing: 8) {
                 actionChip("Copy", icon: "doc.on.doc") {
                     copyToClipboard(link)
-                    deps.showToast("Invite link copied")
+                    deps.showToast(.done("Invite link copied"))
                 }
 
                 ShareLink(item: link,
@@ -289,7 +258,7 @@ struct InviteCollaboratorsSheet: View {
 
                         actionChip("Copy", icon: "doc.on.doc") {
                             copyToClipboard(code)
-                            deps.showToast("Code copied")
+                            deps.showToast(.done("Code copied"))
                         }
                     }
                 }
@@ -304,8 +273,7 @@ struct InviteCollaboratorsSheet: View {
         )
     }
 
-    /// Chiefly for a Mac: the person you want to invite is in the room, and
-    /// pointing a phone at the screen beats reading six characters aloud.
+    /// For a Mac: the invitee can scan the screen with their phone.
     private func qrCard(_ link: String) -> some View {
         VStack(spacing: 10) {
             if let image = Self.qrImage(for: link) {
@@ -333,9 +301,7 @@ struct InviteCollaboratorsSheet: View {
 
     // MARK: Invite by username
 
-    /// The only path here that hands out nothing. A link can be forwarded to
-    /// anyone; this writes the membership row directly, so there's no code in
-    /// flight to leak and nothing to regenerate afterwards.
+    /// Writes the membership row directly, so there's no code to leak.
     private var inviteByUsername: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Invite someone")
@@ -379,9 +345,7 @@ struct InviteCollaboratorsSheet: View {
     }
 
     private func inviteRow(_ profile: UserProfile) -> some View {
-        // Someone who declined is deliberately still invitable — that's a "no" to
-        // one invite, not a standing refusal, and the alternative is an owner
-        // staring at a greyed-out "Added" for a person who isn't in the playlist.
+        // Someone who declined can be invited again.
         let alreadyIn = members.contains { $0.id == profile.id && $0.status != .declined }
             || invitedIDs.contains(profile.id)
         let isBusy    = busyIDs.contains(profile.id)
@@ -434,10 +398,6 @@ struct InviteCollaboratorsSheet: View {
     private var memberList: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                // Not "In this playlist" any more: the list now also holds people
-                // who have been asked and people who said no, and calling those
-                // "in" is the sort of thing that makes an owner re-invite someone
-                // who is already there.
                 Text("People")
                     .font(.mixCaptionBold)
                     .textCase(.uppercase)
@@ -529,7 +489,7 @@ struct InviteCollaboratorsSheet: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.top, 4)
-        .confirmationDialog("Reset the invite link?",
+        .mixConfirmationDialog("Reset the invite link?",
                             isPresented: $confirmRegenerate,
                             titleVisibility: .visible) {
             Button("Reset Link", role: .destructive) {
@@ -561,8 +521,7 @@ struct InviteCollaboratorsSheet: View {
 
     // MARK: Actions
 
-    /// Resolves the shared row and its code, then copies the link. Publishing here
-    /// is what makes "Invite" work on a playlist that has never left this device.
+    /// Resolves the shared row and its code, then copies the link. Publishes if needed.
     private func prepare() async {
         guard isPreparing else { return }
         defer { isPreparing = false }
@@ -574,9 +533,7 @@ struct InviteCollaboratorsSheet: View {
                 let link = service.linkedShare(forLocalPlaylist: playlist.id)
 
                 if let link, link.role != "owner" {
-                    // Joined from someone else's code. Publishing would mint a
-                    // second, competing row owned by *us* for a playlist that
-                    // isn't ours — so read, don't write.
+                    // Joined from someone else's code: read, don't publish a competing row.
                     role     = link.role
                     sharedID = link.sharedPlaylistID
                     code     = link.shareCode.isEmpty
@@ -604,7 +561,7 @@ struct InviteCollaboratorsSheet: View {
 
         if let link = inviteLink, isOwner {
             copyToClipboard(link)
-            deps.showToast("Invite link copied")
+            deps.showToast(.done("Invite link copied"))
         }
 
         await loadMembers()
@@ -623,12 +580,8 @@ struct InviteCollaboratorsSheet: View {
             guard let profile = try? await deps.authService.fetchProfile(id: row.userID) else { continue }
             resolved.append(Member(profile: profile, role: row.role, status: row.status))
         }
-        // The owner has no collaborator row — ownership lives on the shared row
-        // itself — so on our own playlist we're missing from our own member list.
-        // Our profile is fetched rather than built from `currentUser`, whose
-        // `displayName` falls back to the email when no name is set; everyone
-        // else in this list is an @username, and one row reading "@mike@gmail.com"
-        // would look like a different kind of thing entirely.
+        // The owner has no collaborator row, so add ourselves. Fetched rather than built from
+        // `currentUser`, whose `displayName` can fall back to the email.
         if isOwner, let me = deps.authService.currentUser {
             let profile = (try? await deps.authService.fetchProfile(id: me.id))
                 ?? UserProfile(id: me.id, username: me.username ?? me.displayName, displayName: me.displayName, avatarURL: me.avatarURL)
@@ -664,7 +617,7 @@ struct InviteCollaboratorsSheet: View {
             invitedIDs.insert(profile.id)
             switch outcome {
             case .invited, .reinvited:
-                deps.showToast("Invited @\(profile.username)")
+                deps.showToast(.done("Invited @\(profile.username)"))
             case .alreadyMember:
                 deps.showToast("@\(profile.username) is already in this playlist")
             case .alreadyInvited:
@@ -672,7 +625,7 @@ struct InviteCollaboratorsSheet: View {
             }
             await loadMembers()
         } catch {
-            deps.showToast("Couldn't invite @\(profile.username)")
+            deps.showToast(.failed("Couldn't invite @\(profile.username)", error))
         }
     }
 
@@ -686,9 +639,9 @@ struct InviteCollaboratorsSheet: View {
                                                                        fromSharedPlaylist: sharedID)
             invitedIDs.remove(member.id)
             members.removeAll { $0.id == member.id }
-            deps.showToast("Removed @\(member.profile.username)")
+            deps.showToast(.done("Removed @\(member.profile.username)"))
         } catch {
-            deps.showToast("Couldn't remove @\(member.profile.username)")
+            deps.showToast(.failed("Couldn't remove @\(member.profile.username)", error))
         }
     }
 
@@ -698,16 +651,15 @@ struct InviteCollaboratorsSheet: View {
             code = try await PlaylistSharingService.shared
                 .regenerateShareCode(forSharedPlaylist: sharedID, localPlaylistID: localPlaylistID)
             if let link = inviteLink { copyToClipboard(link) }
-            deps.showToast("New invite link copied")
+            deps.showToast(.done("New invite link copied"))
         } catch {
-            deps.showToast("Couldn't reset the link")
+            deps.showToast(.failed("Couldn't reset the link", error))
         }
     }
 
     // MARK: QR
 
-    /// `.interpolation(.none)` at the call site matters as much as this does — a
-    /// smoothed QR is a blurry QR, and cameras stop reading it.
+    /// Needs `.interpolation(.none)` at the call site; a smoothed QR won't scan.
     static func qrImage(for string: String) -> Image? {
         let filter = CIFilter.qrCodeGenerator()
         filter.message = Data(string.utf8)

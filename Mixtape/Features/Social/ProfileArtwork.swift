@@ -1,20 +1,6 @@
-// ProfileArtwork.swift
-// Mixtape — Features/Social
-//
-// Artist photos and playlist covers for the profile page.
-//
-// Nothing a profile publishes carries an image. `profile_stats.top_artists` is a
-// name and a play count; `shared_playlists` has no artwork column at all, and
-// couldn't usefully gain one as things stand — the `artwork` storage bucket is
-// private and its policy keys on the owner's user id, so a visitor can't read
-// the owner's cover even when told exactly where it is. The page drew a monogram
-// and a grey square because that was genuinely all it had.
-//
-// So the pictures are resolved on the *viewer's* side, cheapest source first:
-// whatever the local library already holds (free, and on your own profile it's
-// precisely the right image), then the same catalogue lookups the rest of the
-// app uses for artist photos and album art. Publishing real covers would take a
-// migration and a storage-policy change; this takes neither.
+// Artist photos and playlist covers for the profile page. Nothing a profile publishes
+// carries an image, so they're resolved on the viewer's side: the local library first,
+// then the catalogue lookups used elsewhere.
 
 import Combine
 import Foundation
@@ -22,9 +8,7 @@ import SwiftUI
 
 // MARK: - Resolved artwork
 
-/// An image that arrived as bytes or as a URL. Both happen here — the library
-/// hands over data, the catalogue hands over a link — and the difference matters
-/// only at the point something draws it.
+/// Artwork as bytes (library) or a URL (catalogue).
 enum ResolvedArtwork: Equatable, Sendable {
     case data(Data)
     case remote(URL)
@@ -32,42 +16,30 @@ enum ResolvedArtwork: Equatable, Sendable {
 
 // MARK: - Store
 
-/// Resolves and caches the images for one profile page.
-///
-/// One store per page rather than per tile: the artist lookups batch into a
-/// single Spotify round trip, and a tile that owns its own request re-fires it
-/// every time the grid re-lays out.
+/// Resolves and caches images for one profile page. One store per page so artist lookups
+/// batch into a single Spotify request.
 @MainActor
 final class ProfileArtworkStore: ObservableObject {
 
-    /// Artist name (exactly as the stat spells it) → photo.
+    /// Artist name (exactly as the stat spells it) -> photo.
     @Published private(set) var artistImages: [String: ResolvedArtwork] = [:]
-    /// `shared_playlists` row id → cover.
+    /// `shared_playlists` row id -> cover.
     @Published private(set) var playlistCovers: [UUID: ResolvedArtwork] = [:]
 
-    /// The avatar's actual bytes.
-    ///
-    /// `AvatarView` draws the same image straight from its URL and never needs
-    /// this — the page's colour wash does, and no amount of link is a colour.
-    /// It's the one image here fetched for something other than drawing.
+    /// The avatar's bytes, for the page's colour wash. `AvatarView` draws from the URL.
     @Published private(set) var avatar: Data?
     private var triedAvatar = false
 
-    /// Everything asked about, hit or miss. Without it, a name the catalogue
-    /// has never heard of is looked up again on every redraw.
+    /// Hits and misses, so unknown names aren't looked up on every redraw.
     private var triedArtists:   Set<String> = []
     private var triedPlaylists: Set<UUID>   = []
 
-    /// Cover lookups are one network round trip each and the grid shows six.
-    /// Someone with forty public playlists doesn't need forty requests fired the
-    /// moment their profile opens.
+    /// One request per cover, so cap how many fire on open.
     private static let coverLookupLimit = 12
 
     // MARK: Avatar
 
-    /// Fetched once per page. A failure is silent and final: the wash has a
-    /// brand-coloured fallback, and retrying a 404 avatar on every redraw would
-    /// cost more than the picture is worth.
+    /// Fetched once per page. Failure is final; the wash has a fallback colour.
     func resolveAvatar(_ url: URL?) async {
         guard !triedAvatar, let url else { return }
         triedAvatar = true
@@ -99,9 +71,8 @@ final class ProfileArtworkStore: ObservableObject {
         }
         guard !unresolved.isEmpty else { return }
 
-        // The stat records the credit — "Drake feat. 21 Savage" — and there is no
-        // Spotify artist by that name. Several credits often reduce to the same
-        // person, so they share one lookup and one answer.
+        // Stats record the full credit ("Drake feat. 21 Savage"), so credits that reduce to
+        // the same artist share one lookup.
         var byQuery: [String: [String]] = [:]
         for name in unresolved {
             let query = ImportService.primaryArtistName(from: name)
@@ -124,9 +95,7 @@ final class ProfileArtworkStore: ObservableObject {
                        catalogue: ITunesSearchClient) async {
         var needsLookup: [PublicPlaylistSummary] = []
 
-        // Strict best-first. The published cover is the real one and outranks any
-        // local guess, but the owner's own copy is the same image for free, so it
-        // goes first and saves a download on the profile you look at most.
+        // Best-first: the owner's own copy, then the published cover, then local guesses.
         for summary in summaries where !triedPlaylists.contains(summary.id) {
             triedPlaylists.insert(summary.id)
             if let data = library.playlist(id: summary.playlistID)?.displayArtwork {
@@ -154,17 +123,13 @@ final class ProfileArtworkStore: ObservableObject {
         for (id, url) in found { playlistCovers[id] = .remote(url) }
     }
 
-    /// Last resort before the network: anyone who happens to own some of these
-    /// songs already gets the album art from their own copy. Ranked below the
-    /// published cover, because a song from the playlist is not the playlist.
+    /// The album art of a song the viewer owns. Below the published cover.
     private func localTrackCover(for summary: PublicPlaylistSummary,
                                  library: LibraryService) -> Data? {
         summary.tracks.lazy.compactMap { library.track(id: $0.id)?.displayArtwork }.first
     }
 
-    /// Stands in the first song's album art for a cover nobody published. Not the
-    /// playlist's real cover, but it's the playlist's actual music, which beats a
-    /// grey square by more than it costs.
+    /// The first song's album art for a cover nobody published.
     private static func catalogueCover(for summary: PublicPlaylistSummary,
                                        catalogue: ITunesSearchClient) async -> URL? {
         guard let first = summary.tracks.first,
@@ -177,8 +142,7 @@ final class ProfileArtworkStore: ObservableObject {
 
 // MARK: - View
 
-/// Draws whichever shape the artwork arrived in, falling back to `placeholder`
-/// while a remote image loads or when there was never anything to draw.
+/// Draws either artwork shape, or `placeholder` while loading or when there's nothing.
 struct ProfileArtworkView<Placeholder: View>: View {
 
     let artwork: ResolvedArtwork?
