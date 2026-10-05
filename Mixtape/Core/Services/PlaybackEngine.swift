@@ -1967,8 +1967,8 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         guard let next = queue.peekNext() else { return }
         // Only when the next file is local; never stall a transition on a download.
         guard let url = fileStorage.localURL(for: next) else { return }
-        // 0.55s slop covers the 0.5s timer resolution so we never miss the window.
-        guard currentTime >= start - 0.55 else {
+        // Beat matching decides 1.5s early so the start can be scheduled on a beat.
+        guard currentTime >= start - 1.5 else {
             // Measure both songs ahead so the switch knows their edges and levels.
             if measuredAhead != url {
                 measuredAhead = url
@@ -1979,12 +1979,26 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             }
             return
         }
-        beginCrossfade(to: next, url: url, fade: max(fade, 0.2))
+        var aligned: TimeInterval?
+        // The shared speed control would skew the host-time schedule, so beats only match at 1x. A padded file's
+        // grid was fitted to the padding, so those don't match either.
+        if crossfadeMode == .crossfade, playbackRate == 1, (edges?.end ?? 0) <= duration + 2,
+           let out = LoudnessAnalyzer.cachedBeats(for: current), let into = LoudnessAnalyzer.cachedBeats(for: url),
+           let at = LoudnessAnalyzer.alignedStart(out: out, into: into,
+                                                  leadIn: LoudnessAnalyzer.cachedEdges(for: url)?.start ?? 0,
+                                                  near: start, after: currentTime + 0.3, fade: fade),
+           at < end {
+            aligned = at
+        }
+        // 0.55s slop covers the timer resolution so we never miss the window.
+        guard aligned != nil || currentTime >= start - 0.55 else { return }
+        beginCrossfade(to: next, url: url, fade: max(fade, 0.2), at: aligned)
     }
 
     /// Overlaps the active track with `next`: schedule it on the idle player, flip the active player now (so
-    /// progress and now-playing show the new track), then ramp volumes over `fade` seconds.
-    private func beginCrossfade(to next: Track, url: URL, fade: TimeInterval) {
+    /// progress and now-playing show the new track), then ramp volumes over `fade` seconds. With `at` (seconds
+    /// into the current file) the next track starts then instead of now, so its beats land on this one's.
+    private func beginCrossfade(to next: Track, url: URL, fade: TimeInterval, at: TimeInterval? = nil) {
         let file: AVAudioFile
         do { file = try AVAudioFile(forReading: url) }
         catch { return }  // bad file: let the normal completion handler advance
@@ -2010,7 +2024,15 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         let generation = loadGeneration
         scheduleFullFile(file, on: incoming, from: startFrame, length: lenFrames, generation: generation)
         startEngineIfNeeded()
-        incoming.play()
+        var delay: TimeInterval = 0
+        if let at, let nodeTime = outgoing.lastRenderTime, nodeTime.isHostTimeValid,
+           let playerTime = outgoing.playerTime(forNodeTime: nodeTime) {
+            // Host time is shared by both players whatever their file's sample rate.
+            delay = max(0, at - Double(seekFrameOffset + playerTime.sampleTime) / fileSampleRate)
+            incoming.play(at: AVAudioTime(hostTime: nodeTime.hostTime + AVAudioTime.hostTime(forSeconds: delay)))
+        } else {
+            incoming.play()
+        }
 
         // `playerNode` is now the incoming player, so the clock and seek follow the new track.
         usingA.toggle()
@@ -2047,6 +2069,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         crossfadeTask?.cancel()
         crossfadeTask = Task { @MainActor [weak self] in
             guard let self else { return }
+            if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
             let steps = max(1, Int(fade / 0.03))
             for i in 1...steps {
                 if Task.isCancelled { return }
