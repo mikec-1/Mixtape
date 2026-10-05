@@ -38,6 +38,8 @@ struct SongEditorSheet: View {
     /// Each stem's peaks once split, so the shape follows the levels.
     @State private var stemPeaks: [String: [Float]]?
     @State private var posting: Track?
+    /// Plain-key shortcuts stand down while the name is being typed.
+    @FocusState private var naming: Bool
 
     @State private var progress: Double?
     @State private var saveTask: Task<Void, Never>?
@@ -76,6 +78,15 @@ struct SongEditorSheet: View {
 
     private var trimmedName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
 
+    private var canSave: Bool {
+        source != nil && splitting == nil && edit?.isOriginal == false && !trimmedName.isEmpty
+    }
+
+    /// A shortcut with no modifier, off while typing.
+    private func plainKey(_ key: KeyEquivalent) -> KeyboardShortcut? {
+        naming ? nil : KeyboardShortcut(key, modifiers: [])
+    }
+
     var body: some View {
         MixSheet(title: "Edit Song",
                  subtitle: "Saved as a new song. The original stays as it is.",
@@ -108,6 +119,13 @@ struct SongEditorSheet: View {
             }
         } footer: {
             footer
+                .background {
+                    // Return saves through the footer button; this adds Command-S.
+                    Button("Save", action: save)
+                        .keyboardShortcut("s")
+                        .disabled(!canSave || saved != nil || loadError != nil)
+                        .opacity(0).allowsHitTesting(false).accessibilityHidden(true)
+                }
         }
         #if os(macOS)
         .onAppear { room = Self.windowRoom() ?? room }
@@ -176,7 +194,8 @@ struct SongEditorSheet: View {
             }
             .buttonStyle(.plain).mixHandCursor()
             .foregroundStyle(Color.mixTextSecondary)
-            .help(fillsWindow ? "Make the editor smaller" : "Make the editor fill the window")
+            .keyboardShortcut("f", modifiers: [.command, .shift])
+            .help(fillsWindow ? "Make the editor smaller (⇧⌘F)" : "Make the editor fill the window (⇧⌘F)")
             #endif
         }
     }
@@ -262,6 +281,7 @@ struct SongEditorSheet: View {
                 Text("Name").font(.mixLabel).foregroundStyle(Color.mixTextSecondary)
                 TextField("Name", text: Binding(get: { name }, set: { name = $0; nameTouched = true }))
                     .mixSheetField()
+                    .focused($naming)
             }
 
             if let progress {
@@ -544,6 +564,7 @@ struct SongEditorSheet: View {
                          height: waveHeight,
                          onSeek: source == nil || busy ? nil : { preview.seek(to: $0 * total) })
             HStack(spacing: 12) {
+                skipButton(-5).keyboardShortcut(plainKey(.leftArrow))
                 Button { preview.toggle() } label: {
                     Image(systemName: preview.isPlaying ? "pause.fill" : "play.fill")
                         .font(.system(size: 15, weight: .semibold))
@@ -552,17 +573,25 @@ struct SongEditorSheet: View {
                         .background(Circle().fill(Color.mixPrimary))
                 }
                 .buttonStyle(.plain).mixHandCursor()
+                .keyboardShortcut(plainKey(.space))
+                .help(preview.isPlaying ? "Pause (Space)" : "Play (Space)")
                 .accessibilityLabel(preview.isPlaying ? "Pause preview" : "Play preview")
+                skipButton(5).keyboardShortcut(plainKey(.rightArrow))
                 Text("\(clock(preview.position / speed)) / \(clock(total / speed))")
                     .font(.mixLabel.monospacedDigit()).foregroundStyle(Color.mixTextSecondary)
                 Spacer(minLength: 0)
                 #if os(macOS)
+                Text(sections == nil ? "Space plays, ← → skip" : "Space plays, ← → skip, ⌘T splits")
+                    .font(.mixCaption).foregroundStyle(Color.mixTextSecondary)
+                    .lineLimit(1)
                 if sections != nil {
                     Button { splitAtPlayhead() } label: {
                         Label("Split at Playhead", systemImage: "scissors").font(.mixLabel)
                     }
                     .buttonStyle(.plain).mixHandCursor()
                     .foregroundStyle(Color.mixPrimary)
+                    .keyboardShortcut("t")
+                    .help("Split the part under the playhead (⌘T)")
                     .disabled((sections?.count ?? 0) >= SongEdit.maxSections)
                 }
                 #endif
@@ -571,6 +600,21 @@ struct SongEditorSheet: View {
         }
         .padding(14)
         .background(RoundedRectangle(cornerRadius: 12).fill(Color.primary.opacity(0.04)))
+    }
+
+    /// Five seconds on the edited song's clock.
+    private func skipButton(_ seconds: TimeInterval) -> some View {
+        let back = seconds < 0
+        return Button { preview.seek(to: preview.now + seconds * speed) } label: {
+            Image(systemName: back ? "gobackward.5" : "goforward.5")
+                .font(.system(size: 16, weight: .semibold))
+                .frame(width: 32, height: 36)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).mixHandCursor()
+        .foregroundStyle(Color.mixTextSecondary)
+        .help(back ? "Back 5 seconds (←)" : "Forward 5 seconds (→)")
+        .accessibilityLabel(back ? "Back 5 seconds" : "Forward 5 seconds")
     }
 
     private var waveHeight: CGFloat {
@@ -588,8 +632,7 @@ struct SongEditorSheet: View {
         } else {
             MixSheetActions(
                 primary: MixSheetAction("Save",
-                                        isEnabled: source != nil && splitting == nil
-                                            && edit?.isOriginal == false && !trimmedName.isEmpty,
+                                        isEnabled: canSave,
                                         isBusy: progress != nil,
                                         action: save),
                 secondary: progress != nil ? MixSheetAction("Stop") { saveTask?.cancel() } : nil
