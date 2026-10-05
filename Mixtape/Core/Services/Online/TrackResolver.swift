@@ -113,6 +113,17 @@ public protocol TrackResolver: Sendable {
                   preferExplicit: Bool,
                   onProgress: @escaping @Sendable (ResolveProgress) -> Void) async throws -> ResolvedAudio
 
+    /// With exclusions too. A requirement so `any TrackResolver` reaches the
+    /// resolver's own version, not the extension default. iOS keeps the default
+    /// on purpose: it already forwards `excluding` to its own download.
+    func download(query: String,
+                  name: String,
+                  to destinationDir: URL,
+                  expectedDuration: TimeInterval,
+                  preferExplicit: Bool,
+                  excluding: Set<String>,
+                  onProgress: @escaping @Sendable (ResolveProgress) -> Void) async throws -> ResolvedAudio
+
     /// `download(videoID:)` with progress, used when a stream came back dead.
     func download(videoID: String,
                   fallbackQuery: String,
