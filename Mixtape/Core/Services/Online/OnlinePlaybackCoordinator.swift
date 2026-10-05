@@ -10,6 +10,7 @@
 import Foundation
 import Combine
 import AVFoundation
+import OSLog
 
 @MainActor
 public final class OnlinePlaybackCoordinator: ObservableObject {
@@ -193,6 +194,9 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
                 if stream != nil {
                     UnavailableTracks.shared.markFound(title: online.title, artist: online.artistName)
                 }
+            } catch is StreamUnavailable {
+                // Found, just not streamable.
+                UnavailableTracks.shared.markFound(title: online.title, artist: online.artistName)
             } catch {
                 if isSongNotFound(error) {
                     UnavailableTracks.shared.mark(title: online.title, artist: online.artistName)
@@ -1242,13 +1246,46 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
         // The video this song resolved to last time, skipping the search. Not used
         // if the user rejected it.
         let known = videoIDIndex[result.id]
-        let pinned = known.flatMap { exclusions(for: result.id).contains($0) ? nil : $0 }
+        var pinned = known.flatMap { exclusions(for: result.id).contains($0) ? nil : $0 }
 
-        if let stream = try? await ytdlp.resolveStream(query: result.searchQuery,
-                                                       expectedDuration: result.duration,
-                                                       preferExplicit: result.isExplicit,
-                                                       excluding: exclusions(for: result.id),
-                                                       pinnedVideoID: pinned) {
+        // Marks the song missing and skips it, or says why it can't play.
+        func giveUp(_ error: Error) async {
+            if isSongNotFound(error) {
+                UnavailableTracks.shared.mark(title: result.title, artist: result.artistName,
+                                              announce: true)
+                // The skip below bumps playToken, so the deferred clear wouldn't run.
+                endPreparing(result.id)
+                if token == playToken, !takenOver() { await skipUnfindable(from: index) }
+            } else if token == playToken {
+                setError(userFacingPlaybackMessage(for: error, title: result.title))
+            }
+            ResolveTrace.shared.end("FAILED — \(error.localizedDescription)")
+        }
+
+        // Not `try?`: a no-match ends here instead of searching again in the
+        // download, and a found-but-unstreamable video pins that download.
+        var resolved: StreamResolution?
+        do {
+            resolved = try await ytdlp.resolveStream(query: result.searchQuery,
+                                                     expectedDuration: result.duration,
+                                                     preferExplicit: result.isExplicit,
+                                                     excluding: exclusions(for: result.id),
+                                                     pinnedVideoID: pinned)
+        } catch let unstreamable as StreamUnavailable {
+            pinned = unstreamable.videoID
+        } catch {
+            MixLog.playback.notice("""
+                stream resolve failed: \(error.localizedDescription, privacy: .public)
+                """)
+            // The search itself failed, and a fresh download would run it again
+            // (the same /resolve on iOS). Only wait on a prefetch already running.
+            if isSongNotFound(error) || prefetchTasks[result.id] == nil {
+                await giveUp(error)
+                return
+            }
+        }
+
+        if let stream = resolved {
             guard token == playToken else { return }
             ResolveTrace.shared.mark("stream resolve TOTAL")
             // Cancelling stops the yt-dlp child. warmAfterPlayback restarts it as a
@@ -1336,11 +1373,12 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
                                                     : "engine handoff (fresh download)")
         } catch {
             // A press never inherits a prefetch's failure: retry once with a fresh
-            // download. Only for a reused task, so a real failure doesn't loop.
+            // download, pinned when the video is known so it skips the search. Only for
+            // a reused task, so a real failure doesn't loop.
             prefetchTasks.removeValue(forKey: result.id)
             if reusedPrefetch, token == playToken, !takenOver(), !(error is CancellationError) {
                 ResolveTrace.shared.mark("stale prefetch failed — downloading fresh")
-                let retry = makeDownloadTask(for: result)
+                let retry = makeDownloadTask(for: result, pinnedVideoID: pinned)
                 prefetchTasks[result.id] = retry
                 do {
                     _ = try await retry.value
@@ -1354,30 +1392,12 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
                     prefetchTasks.removeValue(forKey: result.id)
                     return
                 } catch {
-                    if isSongNotFound(error) {
-                        UnavailableTracks.shared.mark(title: result.title,
-                                                     artist: result.artistName, announce: true)
-                        endPreparing(result.id)
-                        // Skip to the next song instead of stopping on a missing one.
-                        if token == playToken, !takenOver() { await skipUnfindable(from: index) }
-                    } else if token == playToken {
-                        setError(userFacingPlaybackMessage(for: error, title: result.title))
-                    }
-                    ResolveTrace.shared.end("FAILED — \(error.localizedDescription)")
+                    await giveUp(error)
                     prefetchTasks.removeValue(forKey: result.id)
                     return
                 }
             }
-            if isSongNotFound(error) {
-                UnavailableTracks.shared.mark(title: result.title, artist: result.artistName,
-                                              announce: true)
-                // The skip below bumps playToken, so the deferred clear wouldn't run.
-                endPreparing(result.id)
-                if token == playToken, !takenOver() { await skipUnfindable(from: index) }
-            } else if token == playToken {
-                setError(userFacingPlaybackMessage(for: error, title: result.title))
-            }
-            ResolveTrace.shared.end("FAILED — \(error.localizedDescription)")
+            await giveUp(error)
         }
         prefetchTasks.removeValue(forKey: result.id)
     }

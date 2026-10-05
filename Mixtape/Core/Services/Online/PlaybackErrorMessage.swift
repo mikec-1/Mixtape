@@ -32,8 +32,10 @@ func userFacingPlaybackMessage(for error: Error) -> String {
         switch remote {
         case .notConfigured:
             return "Streaming isn't set up on this device yet. Add your resolver in Settings → Discover."
-        case .badResponse:
+        case .notFound:
             return "Couldn't find this song to stream. Try another version."
+        case .badResponse:
+            return "Couldn't play this song right now. Please try again."
         case .busy:
             // Not "couldn't find this song": the server was just out of slots.
             return "The streaming server is busy. Try again in a moment."
@@ -64,7 +66,7 @@ func isSongNotFound(_ error: Error) -> Bool {
     #if os(macOS)
     if let ytdlp = error as? YTDLPError, case .noResult = ytdlp { return true }
     #else
-    if let remote = error as? RemoteResolverError, case .badResponse = remote { return true }
+    if let remote = error as? RemoteResolverError, case .notFound = remote { return true }
     #endif
     return false
 }

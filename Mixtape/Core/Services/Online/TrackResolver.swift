@@ -29,6 +29,12 @@ public struct StreamResolution: Sendable {
     }
 }
 
+/// Thrown by `resolveStream` when the search found a video but it can't be
+/// streamed. The fallback download pins `videoID` instead of searching again.
+public struct StreamUnavailable: Error {
+    public let videoID: String
+}
+
 /// How far along a resolve is. Only the local resolver sees bytes, so a nil
 /// fraction means "working".
 public nonisolated struct ResolveProgress: Sendable, Equatable {

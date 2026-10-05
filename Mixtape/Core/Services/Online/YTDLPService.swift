@@ -69,7 +69,8 @@ public final class YTDLPService: TrackResolver {
     // MARK: - Public API
 
     /// Resolves a directly playable audio URL so AVPlayer starts on the first
-    /// buffer. Nil on failure, callers then `download`. Bounded by a deadline so a
+    /// buffer. Throws `StreamUnavailable` when the video was found but won't stream,
+    /// so callers `download` it without searching again. Bounded by a deadline so a
     /// wedged resolve can't outlast the download it's meant to beat.
     public func resolveStream(query: String,
                               expectedDuration: TimeInterval,
@@ -103,7 +104,6 @@ public final class YTDLPService: TrackResolver {
             ResolveTrace.shared.mark("search skipped (video already known)", owner: query)
         } else {
             // Not `try?`: "no match" must propagate so the song is marked unfindable.
-            // nil below means found but not streamable.
             videoID = try await selectBestVideo(query: query,
                                                 expectedDuration: expectedDuration,
                                                 preferExplicit: preferExplicit,
@@ -113,7 +113,7 @@ public final class YTDLPService: TrackResolver {
         // This video already refused the streaming client, so go straight to download.
         if await ClientPenaltyBox.shared.isDemoted(Self.preferredClient, for: videoID) {
             ResolveTrace.shared.mark("stream skipped (client blocked for this video)", owner: query)
-            return nil
+            throw StreamUnavailable(videoID: videoID)
         }
 
         let args = [
@@ -135,7 +135,7 @@ public final class YTDLPService: TrackResolver {
                             .map({ $0.trimmingCharacters(in: .whitespaces) })
                             .first(where: { $0.hasPrefix("http") }),
               let url = URL(string: line)
-        else { return nil }
+        else { throw StreamUnavailable(videoID: videoID) }
 
         return StreamResolution(url: url, videoID: videoID)
     }
