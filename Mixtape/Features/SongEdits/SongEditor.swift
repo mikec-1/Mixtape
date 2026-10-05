@@ -53,6 +53,21 @@ struct SongEditor: View {
     @State var confirmingClose = false
     /// The edit as it opened, to tell whether anything changed.
     @State var opened: SongEdit?
+    #if os(macOS)
+    @Environment(\.undoManager) var undoManager
+    /// The studio timeline: how far in, and where the visible stretch starts (0...1 of the arrangement).
+    @State var zoom = 1.0
+    @State var scroll = 0.0
+    /// The part being dragged and how far, in points.
+    @State var dragging: Int?
+    @State var dragOffset: CGFloat = 0
+    /// Changes close together undo as one.
+    @State var lastChange = Date.distantPast
+    /// Set while undo puts settings back, so that isn't recorded as a change.
+    @State var restoring: Snapshot?
+    /// Bumped when the undo stack changes, to refresh the buttons.
+    @State var undoTick = 0
+    #endif
 
     var edit: SongEdit? {
         guard let original else { return nil }

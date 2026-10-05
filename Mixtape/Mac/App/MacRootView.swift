@@ -840,9 +840,10 @@ private struct ViewMenuCommands: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .onReceive(NotificationCenter.default.publisher(for: .mixZoomIn))     { _ in appState.zoomIn() }
-            .onReceive(NotificationCenter.default.publisher(for: .mixZoomOut))    { _ in appState.zoomOut() }
-            .onReceive(NotificationCenter.default.publisher(for: .mixActualSize)) { _ in appState.resetZoom() }
+            // The song studio zooms its timeline instead.
+            .onReceive(NotificationCenter.default.publisher(for: .mixZoomIn))     { _ in if appState.editTrack == nil { appState.zoomIn() } }
+            .onReceive(NotificationCenter.default.publisher(for: .mixZoomOut))    { _ in if appState.editTrack == nil { appState.zoomOut() } }
+            .onReceive(NotificationCenter.default.publisher(for: .mixActualSize)) { _ in if appState.editTrack == nil { appState.resetZoom() } }
             .onReceive(NotificationCenter.default.publisher(for: .mixGoBack))     { _ in appState.goBack() }
             .onReceive(NotificationCenter.default.publisher(for: .mixGoForward))  { _ in appState.goForward() }
             .onReceive(NotificationCenter.default.publisher(for: .mixShowInfo)) { _ in

@@ -4,6 +4,7 @@
 #if os(macOS)
 import SwiftUI
 import AppKit
+import Combine
 
 extension SongEditor {
 
@@ -40,6 +41,59 @@ extension SongEditor {
         }
         // Takes the keyboard from whatever list had it underneath.
         .onAppear { DispatchQueue.main.async { NSApp.keyWindow?.makeFirstResponder(nil) } }
+        .onDisappear { undos?.removeAllActions(withTarget: preview) }
+        .onChange(of: snapshot) { old, new in record(old, new) }
+        .onChange(of: preview.position) { old, new in follow(old, new) }
+        // View > Zoom works on the timeline while the studio is open.
+        .onReceive(NotificationCenter.default.publisher(for: .mixZoomIn)) { _ in setZoom(zoom * 2) }
+        .onReceive(NotificationCenter.default.publisher(for: .mixZoomOut)) { _ in setZoom(zoom / 2) }
+        .onReceive(NotificationCenter.default.publisher(for: .mixActualSize)) { _ in setZoom(1) }
+        .onReceive(NotificationCenter.default.publisher(for: .NSUndoManagerDidCloseUndoGroup)
+            .merge(with: NotificationCenter.default.publisher(for: .NSUndoManagerDidUndoChange),
+                   NotificationCenter.default.publisher(for: .NSUndoManagerDidRedoChange))) { _ in undoTick += 1 }
+    }
+
+    // MARK: - Undo
+
+    /// Everything undo puts back.
+    struct Snapshot: Equatable {
+        var speed, reverb, bass: Double
+        var pitch: Double?
+        var levels: [String: Double]
+        var sections: [SongEdit.Section]?
+    }
+
+    var snapshot: Snapshot {
+        Snapshot(speed: speed, reverb: reverb, bass: bass, pitch: pitch, levels: levels, sections: sections)
+    }
+
+    /// Changes less than a moment apart, like one slider drag, undo in one step.
+    func record(_ old: Snapshot, _ new: Snapshot) {
+        if new == restoring { restoring = nil; return }
+        guard opened != nil else { return }
+        if Date().timeIntervalSince(lastChange) > 0.6 { registerUndo(back: old) }
+        lastChange = Date()
+    }
+
+    /// The window's undo manager, so Edit > Undo and ⌘Z work, and the Name field keeps its own undo.
+    var undos: UndoManager? { undoManager ?? NSApp.keyWindow?.undoManager }
+
+    func registerUndo(back state: Snapshot) {
+        undos?.registerUndo(withTarget: preview) { _ in restore(state) }
+    }
+
+    func restore(_ state: Snapshot) {
+        // Registered while undoing, this becomes the redo.
+        registerUndo(back: snapshot)
+        lastChange = .distantPast
+        guard state != snapshot else { return }
+        restoring = state
+        speed = state.speed
+        reverb = state.reverb
+        bass = state.bass
+        pitch = state.pitch
+        levels = state.levels
+        sections = state.sections
     }
 
     /// Changed since it opened and not saved yet.
@@ -89,6 +143,14 @@ extension SongEditor {
 
                 Spacer(minLength: 0)
 
+                // The undo stack isn't observable; this reads the tick its notifications bump.
+                let _ = undoTick
+                iconButton("arrow.uturn.backward", "Undo (⌘Z)") { undos?.undo() }
+                    .disabled(progress != nil || undos?.canUndo != true)
+                iconButton("arrow.uturn.forward", "Redo (⇧⌘Z)") { undos?.redo() }
+                    .disabled(progress != nil || undos?.canRedo != true)
+                    .padding(.trailing, 6)
+
                 if progress != nil {
                     Button("Stop") { saveTask?.cancel() }
                 }
@@ -117,6 +179,17 @@ extension SongEditor {
     /// Skip, play and the time, centred on the window.
     var transport: some View {
         HStack(spacing: 10) {
+            Button { naming = false; preview.seek(to: 0) } label: {
+                Image(systemName: "backward.end.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(width: 28, height: 36)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).mixHandCursor()
+            .foregroundStyle(Color.mixTextSecondary)
+            .keyboardShortcut(plainKey(.return))
+            .help("Back to the start (Return)")
+            .accessibilityLabel("Back to the start")
             skipButton(-5).keyboardShortcut(plainKey(.leftArrow))
             Button { preview.toggle() } label: {
                 Image(systemName: preview.isPlaying ? "pause.fill" : "play.fill")
@@ -136,7 +209,8 @@ extension SongEditor {
                 .padding(.horizontal, 10).frame(height: 26)
                 .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.06)))
         }
-        .disabled(source == nil || busy)
+        // The saved card owns Return.
+        .disabled(source == nil || busy || saved != nil)
     }
 
     // MARK: - Timeline
@@ -170,16 +244,75 @@ extension SongEditor {
                 }
             }
             .overlay { playhead }
+            .overlay(alignment: .bottom) { if zoom > 1 { scroller } }
+            .background(TimelineScroll(onScroll: { scrollTo(scroll + $0 / zoom) },
+                                       onZoom: { setZoom(zoom * $0, anchor: $1) }))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     var rowLine: some View { Rectangle().fill(Color.mixSeparator).frame(height: 1) }
 
-    /// 0...1 of the arrangement to its time, then play from there.
+    /// 0...1 across the visible timeline to its time in the arrangement, then play from there.
     func seek(fraction: Double) {
         naming = false
-        preview.seek(to: fraction * preview.duration)
+        preview.seek(to: (scroll + fraction / zoom) * preview.duration)
+    }
+
+    // MARK: - Zoom
+
+    static let maxZoom = 16.0
+
+    /// 0...1 of the arrangement to 0...1 across the visible timeline.
+    func visible(_ fraction: Double) -> Double { (fraction - scroll) * zoom }
+
+    func scrollTo(_ start: Double) {
+        scroll = min(max(start, 0), 1 - 1 / zoom)
+    }
+
+    /// Zooms around `anchor`, 0...1 across the timeline: the playhead when it's on screen, else the middle.
+    func setZoom(_ level: Double, anchor: Double? = nil) {
+        let playhead = preview.duration > 0 ? visible(preview.position / preview.duration) : 0
+        let a = anchor ?? ((0...1).contains(playhead) ? playhead : 0.5)
+        let at = scroll + a / zoom
+        zoom = min(max(level, 1), Self.maxZoom)
+        scrollTo(at - a / zoom)
+    }
+
+    /// Keeps the playhead on screen when it runs off the edge or jumps, but leaves you be if you scrolled away.
+    func follow(_ old: TimeInterval, _ new: TimeInterval) {
+        guard zoom > 1, preview.duration > 0, dragging == nil else { return }
+        let was = visible(old / preview.duration), now = visible(new / preview.duration)
+        guard !(0...1).contains(now), (0...1).contains(was) || abs(new - old) > 1 else { return }
+        scrollTo(new / preview.duration - 0.05 / zoom)
+    }
+
+    /// The part of a whole-arrangement waveform that's on screen.
+    func window(_ peaks: [Float]) -> [Float] {
+        guard zoom > 1, !peaks.isEmpty else { return peaks }
+        let n = Double(peaks.count)
+        let from = min(max(Int(scroll * n), 0), peaks.count - 1)
+        let to = min(max(Int(((scroll + 1 / zoom) * n).rounded(.up)), from + 1), peaks.count)
+        return Array(peaks[from..<to])
+    }
+
+    /// Which stretch is on screen. Drag it, or click along it, to move.
+    var scroller: some View {
+        GeometryReader { geo in
+            let w = max(geo.size.width, 1)
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.primary.opacity(0.08))
+                Capsule().fill(Color.primary.opacity(0.3))
+                    .frame(width: w / zoom)
+                    .offset(x: scroll * w)
+            }
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0).onChanged { v in scrollTo(v.location.x / w - 0.5 / zoom) })
+        }
+        .frame(height: 6)
+        .padding(.horizontal, 4)
+        .padding(.bottom, 2)
+        .help("Scroll sideways, or pinch to zoom")
     }
 
     var canSeek: Bool { source != nil && !busy }
@@ -215,20 +348,21 @@ extension SongEditor {
     /// Minutes and seconds on the edited song's clock. Click to jump.
     var ruler: some View {
         let total = preview.duration / max(speed, 0.01)
+        let from = scroll * total, shown = total / zoom
         return GeometryReader { geo in
             Canvas { ctx, size in
                 guard total > 0 else { return }
-                let step = [1.0, 2, 5, 10, 15, 30, 60, 120, 300].first { $0 / total * size.width >= 70 } ?? 600
-                var t = 0.0
-                while t <= total {
-                    let x = t / total * size.width
+                let step = [1.0, 2, 5, 10, 15, 30, 60, 120, 300].first { $0 / shown * size.width >= 70 } ?? 600
+                var t = (from / step).rounded(.down) * step
+                while t <= from + shown {
+                    let x = (t - from) / shown * size.width
                     ctx.fill(Path(CGRect(x: x, y: size.height - 8, width: 1, height: 8)),
                              with: .color(Color.mixTextTertiary))
                     ctx.draw(Text(clock(t)).font(.system(size: 10, weight: .medium).monospacedDigit())
                                 .foregroundStyle(Color.mixTextSecondary),
                              at: CGPoint(x: x + 4, y: 4), anchor: .topLeading)
-                    let half = x + step / 2 / total * size.width
-                    if half < size.width {
+                    let half = x + step / 2 / shown * size.width
+                    if half >= 0, half < size.width {
                         ctx.fill(Path(CGRect(x: half, y: size.height - 4, width: 1, height: 4)),
                                  with: .color(Color.mixTextTertiary.opacity(0.6)))
                     }
@@ -242,16 +376,17 @@ extension SongEditor {
 
     var playhead: some View {
         GeometryReader { geo in
-            let x = preview.duration > 0 ? preview.position / preview.duration * geo.size.width : 0
+            let x = preview.duration > 0 ? visible(preview.position / preview.duration) * geo.size.width : 0
             ZStack(alignment: .topLeading) {
                 ForEach(partEdges, id: \.self) { edge in
                     Rectangle().fill(Color.mixPrimary.opacity(0.35)).frame(width: 1)
-                        .offset(x: edge * geo.size.width)
+                        .offset(x: visible(edge) * geo.size.width)
                 }
                 Rectangle().fill(Color.mixPrimary).frame(width: 1.5).offset(x: x)
                 PlayheadCap().fill(Color.mixPrimary).frame(width: 11, height: 7).offset(x: x - 5)
             }
         }
+        .clipped()
         .allowsHitTesting(false)
     }
 
@@ -265,27 +400,58 @@ extension SongEditor {
                 iconButton("square.split.2x1", "Split at the playhead (⌘T)") { splitAtPlayhead() }
                     .keyboardShortcut("t")
                     .disabled(busy || (sections?.count ?? 0) >= SongEdit.maxSections)
-                iconButton("arrow.uturn.backward", "Back to the whole song") { sections = nil }
+                iconButton("trash", "Remove the part under the playhead (⌫)") { removeCurrentPart() }
+                    .keyboardShortcut(plainKey(.delete))
+                    .disabled(busy || (sections?.count ?? 0) < 2)
+                iconButton("arrow.counterclockwise", "Back to the whole song") { sections = nil }
                     .disabled(busy)
             }
         }
         .padding(.horizontal, 12)
     }
 
+    func removeCurrentPart() {
+        guard let sections, sections.count > 1 else { return }
+        let now = preview.now
+        let i = sections.indices.first { now < arrangedStart(of: $0) + sections[$0].span } ?? sections.count - 1
+        self.sections?.remove(at: i)
+    }
+
     @ViewBuilder
     var partsStrip: some View {
         if let sections, preview.duration > 0 {
             GeometryReader { geo in
+                let w = geo.size.width
+                // Points per second of the arrangement.
+                let scale = w * zoom / preview.duration
                 ZStack(alignment: .topLeading) {
                     ForEach(Array(sections.enumerated()), id: \.offset) { i, part in
-                        let start = arrangedStart(of: i)
-                        partBlock(i, part, count: sections.count)
-                            .frame(width: max(part.span / preview.duration * geo.size.width - 2, 4))
-                            .offset(x: start / preview.duration * geo.size.width + 1)
+                        let x = (arrangedStart(of: i) - scroll * preview.duration) * scale + (dragging == i ? dragOffset : 0)
+                        let full = part.span * scale
+                        // Only the part that's on screen, so nothing off screen takes clicks.
+                        let from = max(x, 0), to = min(x + full, w)
+                        if to - from > 1 || dragging == i {
+                            partBlock(i, part, count: sections.count, full: full - 2, cut: from - x)
+                                .frame(width: max(to - from - 2, 2))
+                                .offset(x: from + 1)
+                                .zIndex(dragging == i ? 1 : 0)
+                                .gesture(partDrag(i, scale: scale))
+                        }
+                    }
+                    if let i = dragging {
+                        let slot = dropSlot(i, scale: scale)
+                        if slot != i {
+                            let at = arrangedStart(of: slot < i ? slot : slot + 1)
+                            Capsule().fill(Color.mixPrimary)
+                                .frame(width: 3)
+                                .offset(x: (at - scroll * preview.duration) * scale - 1.5)
+                                .allowsHitTesting(false)
+                        }
                     }
                 }
                 .frame(maxHeight: .infinity)
                 .padding(.vertical, 6)
+                .coordinateSpace(name: "parts")
             }
             .disabled(busy)
         } else {
@@ -303,22 +469,50 @@ extension SongEditor {
         }
     }
 
-    /// One part on the strip. Click jumps to it; the menu loops, moves, copies or drops it.
-    func partBlock(_ i: Int, _ part: SongEdit.Section, count: Int) -> some View {
+    /// Where part `i` lands if let go now, counted among the others.
+    func dropSlot(_ i: Int, scale: CGFloat) -> Int {
+        guard let sections, scale > 0 else { return i }
+        let middle = arrangedStart(of: i) + sections[i].span / 2 + dragOffset / scale
+        return sections.indices.filter { $0 != i && arrangedStart(of: $0) + sections[$0].span / 2 < middle }.count
+    }
+
+    /// Drag a part along the strip to play it somewhere else.
+    func partDrag(_ i: Int, scale: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 4, coordinateSpace: .named("parts"))
+            .onChanged { v in
+                naming = false
+                dragging = i
+                dragOffset = v.translation.width
+            }
+            .onEnded { _ in
+                let slot = dropSlot(i, scale: scale)
+                dragging = nil
+                dragOffset = 0
+                guard slot != i, var moved = sections else { return }
+                moved.insert(moved.remove(at: i), at: slot)
+                sections = moved
+            }
+    }
+
+    /// One part on the strip. Click jumps to it, drag moves it, the menu loops, moves, copies or drops it.
+    /// `full` is its whole width; `cut` how much of that is off the left edge of the timeline.
+    func partBlock(_ i: Int, _ part: SongEdit.Section, count: Int, full: CGFloat, cut: CGFloat) -> some View {
         let starts = arrangedStart(of: i)
         let playing = (starts..<starts + part.span).contains(preview.position)
+        let lifted = dragging == i
         return RoundedRectangle(cornerRadius: 6)
-            .fill(Color.mixPrimary.opacity(playing ? 0.32 : 0.16))
-            .overlay {
+            .fill(Color.mixPrimary.opacity(playing || lifted ? 0.32 : 0.16))
+            .overlay(alignment: .leading) {
                 // A line where each loop starts again.
-                GeometryReader { geo in
+                ZStack(alignment: .leading) {
                     ForEach(1..<max(part.times, 1), id: \.self) { k in
                         Rectangle().fill(Color.mixPrimary.opacity(0.5)).frame(width: 1)
-                            .offset(x: geo.size.width * Double(k) / Double(part.times))
+                            .offset(x: full * Double(k) / Double(part.times) - cut)
                     }
                 }
+                .allowsHitTesting(false)
             }
-            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.mixPrimary.opacity(playing ? 0.9 : 0.45), lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.mixPrimary.opacity(playing || lifted ? 0.9 : 0.45), lineWidth: 1))
             .overlay(alignment: .topLeading) {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(part.times > 1 ? "\(i + 1)  ×\(part.times)" : "\(i + 1)")
@@ -335,7 +529,7 @@ extension SongEditor {
             .contentShape(Rectangle())
             .onTapGesture { naming = false; preview.seek(to: starts) }
             .mixHandCursor()
-            .help("Part \(i + 1). Click to play from here; right-click to loop, move, copy or remove it")
+            .help("Part \(i + 1). Click to play from here, drag to move it, right-click to loop, copy or remove it")
             .contextMenu {
                 Button("Play from Here") { preview.seek(to: starts); preview.play() }
                 Divider()
@@ -448,8 +642,8 @@ extension SongEditor {
             stemPeaks?[name].map { p in p.map { $0 * Float(levels[name] ?? 1) } }
         } ?? peaks
         return GeometryReader { geo in
-            WaveformView(peaks: shape.map { Waveform.arranged($0, length: preview.length, isWholeSong ? nil : sections) },
-                         progress: preview.duration > 0 ? preview.position / preview.duration : 0,
+            WaveformView(peaks: shape.map { window(Waveform.arranged($0, length: preview.length, isWholeSong ? nil : sections)) },
+                         progress: preview.duration > 0 ? min(max(visible(preview.position / preview.duration), 0), 1) : 0,
                          height: geo.size.height - 12,
                          onSeek: canSeek ? { seek(fraction: $0) } : nil)
                 .padding(.vertical, 6)
@@ -465,7 +659,7 @@ extension SongEditor {
                 soundCard
                 trimCard
                 card("Parts", icon: "scissors",
-                     caption: "Loop, reorder, copy or drop parts. Right-click one on the timeline too.",
+                     caption: "Loop, reorder, copy or drop parts. On the timeline, drag one to move it or right-click it.",
                      trailing: arrangeButtons) { arrangeControls }
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Name").font(.mixLabel).foregroundStyle(Color.mixTextSecondary)
@@ -487,7 +681,7 @@ extension SongEditor {
 
     var statusBar: some View {
         HStack(spacing: 10) {
-            Text("Space plays   ← → skip 5s   ⌘T cuts   ⌘S saves   Esc leaves")
+            Text("Space plays   ← → skip   ⌘T cuts   ⌫ removes   ⌘Z undoes   Pinch or ⌘ scroll zooms")
                 .font(.mixCaption)
                 .foregroundStyle(Color.mixTextTertiary)
                 .lineLimit(1)
@@ -506,6 +700,16 @@ extension SongEditor {
             } else if let edit, !edit.isOriginal {
                 Text(edit.label).font(.mixCaptionBold).foregroundStyle(Color.mixPrimary).lineLimit(1)
             }
+            Rectangle().fill(Color.mixSeparator).frame(width: 1, height: 14)
+            iconButton("minus.magnifyingglass", "Zoom out (⌘−)") { setZoom(zoom / 2) }
+                .disabled(zoom <= 1)
+            Slider(value: Binding(get: { log2(zoom) }, set: { setZoom(pow(2, $0)) }), in: 0...log2(Self.maxZoom))
+                .controlSize(.mini)
+                .frame(width: 90)
+                .accessibilityLabel("Timeline zoom")
+            iconButton("plus.magnifyingglass", "Zoom in (⌘+)") { setZoom(zoom * 2) }
+                .keyboardShortcut("+", modifiers: .command)
+                .disabled(zoom >= Self.maxZoom)
         }
         .padding(.horizontal, 14)
         .frame(height: 28)
@@ -557,6 +761,58 @@ extension SongEditor {
             .shadow(color: .black.opacity(0.3), radius: 30, y: 10)
         }
         .transition(.opacity)
+    }
+}
+
+/// Trackpad and mouse wheel over the timeline: scroll sideways, pinch or ⌘-scroll to zoom.
+/// A local monitor, since SwiftUI on macOS 14 has no scroll-wheel or pinch events for a plain view.
+private struct TimelineScroll: NSViewRepresentable {
+    /// How far to move, in widths of the visible timeline.
+    var onScroll: (Double) -> Void
+    /// How much to zoom by, and where, 0...1 across.
+    var onZoom: (Double, Double) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        context.coordinator.start()
+        return context.coordinator.view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) { context.coordinator.parent = self }
+
+    static func dismantleNSView(_ view: NSView, coordinator: Coordinator) { coordinator.stop() }
+
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+
+    final class Coordinator {
+        var parent: TimelineScroll
+        let view = NSView()
+        private var monitor: Any?
+
+        init(parent: TimelineScroll) { self.parent = parent }
+
+        func start() {
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .magnify]) { [weak self] event in
+                guard let self, let window = view.window, event.window === window else { return event }
+                let at = view.convert(event.locationInWindow, from: nil)
+                let width = view.bounds.width
+                guard width > 0, view.bounds.contains(at) else { return event }
+                if event.type == .magnify {
+                    parent.onZoom(1 + event.magnification, at.x / width)
+                } else if event.modifierFlags.contains(.command) {
+                    parent.onZoom(1 + event.scrollingDeltaY * (event.hasPreciseScrollingDeltas ? 0.01 : 0.1), at.x / width)
+                } else {
+                    // A mouse wheel only goes up and down, so that moves sideways too.
+                    let delta = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) ? event.scrollingDeltaX : event.scrollingDeltaY
+                    parent.onScroll(-delta * (event.hasPreciseScrollingDeltas ? 1 : 12) / width)
+                }
+                return nil
+            }
+        }
+
+        func stop() {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
+        }
     }
 }
 
