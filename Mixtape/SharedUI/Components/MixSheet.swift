@@ -86,6 +86,8 @@ enum MixSheetSize {
     case medium
     /// A list you scroll: search results, collaborators, a queue.
     case large
+    /// Exactly this size, worked out by the caller. The song editor fits it to the app window.
+    case window(CGSize)
 
     #if os(macOS)
     var width: CGFloat {
@@ -93,6 +95,7 @@ enum MixSheetSize {
         case .compact: return 460
         case .medium:  return 540
         case .large:   return 580
+        case .window(let size): return size.width
         }
     }
 
@@ -102,6 +105,7 @@ enum MixSheetSize {
         case .compact: return 240
         case .medium:  return 320
         case .large:   return 460
+        case .window(let size): return size.height
         }
     }
 
@@ -110,6 +114,7 @@ enum MixSheetSize {
         case .compact: return 420
         case .medium:  return 560
         case .large:   return 680
+        case .window(let size): return size.height
         }
     }
     #else
@@ -117,7 +122,7 @@ enum MixSheetSize {
         switch self {
         case .compact: return [.height(380), .large]
         case .medium:  return [.medium, .large]
-        case .large:   return [.large]
+        case .large, .window:  return [.large]
         }
     }
     #endif
@@ -160,6 +165,8 @@ struct MixSheet<Content: View, Footer: View>: View {
     var showsFooter: Bool = true
     /// Blocks the close button, outside click and swipe while work can't be interrupted.
     var dismissDisabled: Bool = false
+    /// False for a workspace, so a stray click beside it doesn't throw the work away.
+    var closesOnOutsideClick: Bool = true
     /// False when the footer has no Esc button of its own, so the header X takes Esc.
     var footerCancels: Bool = true
 
@@ -185,7 +192,7 @@ struct MixSheet<Content: View, Footer: View>: View {
         .frame(width: size.width)
         .frame(minHeight: size.minHeight, maxHeight: size.maxHeight)
         .background {
-            if !dismissDisabled { MixSheetOutsideClick { dismiss() } }
+            if !dismissDisabled && closesOnOutsideClick { MixSheetOutsideClick { dismiss() } }
         }
         #else
         .presentationDetents(size.detents)

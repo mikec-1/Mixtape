@@ -45,6 +45,13 @@ struct SongEditorSheet: View {
     @State private var saved: Track?
     /// The rendered file under a readable name, for sharing. Its folder is deleted on close.
     @State private var shareURL: URL?
+    #if os(macOS)
+    /// Grows the editor to the app window. Remembered on this Mac.
+    @AppStorage("songEditor.fillsWindow") private var fillsWindow = false
+    /// The app window's content size, which the editor fits itself to.
+    @State private var room = CGSize(width: 1200, height: 860)
+    private static let resized = NotificationCenter.default.publisher(for: NSWindow.didResizeNotification)
+    #endif
 
     private var edit: SongEdit? {
         guard let original else { return nil }
@@ -72,21 +79,42 @@ struct SongEditorSheet: View {
     var body: some View {
         MixSheet(title: "Edit Song",
                  subtitle: "Saved as a new song. The original stays as it is.",
-                 size: .large,
-                 dismissDisabled: busy) {
-            VStack(alignment: .leading, spacing: 14) {
-                header
-                if let loadError {
-                    MixSheetStatus(kind: .failure, title: loadError)
-                } else if let saved {
-                    savedView(saved)
-                } else {
-                    controls
+                 size: sheetSize,
+                 scroll: false,
+                 dismissDisabled: busy,
+                 closesOnOutsideClick: false) {
+            // The waveform stays put while the controls scroll under it.
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 14) {
+                    header
+                    if let loadError {
+                        MixSheetStatus(kind: .failure, title: loadError)
+                    } else if let saved {
+                        savedView(saved)
+                    } else {
+                        stage
+                    }
+                }
+                .padding(.horizontal, MixSheetMetrics.margin)
+                .padding(.vertical, MixSheetMetrics.contentVertical)
+                if loadError == nil && saved == nil {
+                    ScrollView {
+                        controls
+                            .padding(.horizontal, MixSheetMetrics.margin)
+                            .padding(.bottom, MixSheetMetrics.contentVertical)
+                    }
+                    .scrollBounceBehavior(.basedOnSize)
                 }
             }
         } footer: {
             footer
         }
+        #if os(macOS)
+        .onAppear { room = Self.windowRoom() ?? room }
+        .onReceive(Self.resized) { _ in room = Self.windowRoom() ?? room }
+        #else
+        .editorPageSizing()
+        #endif
         .sheet(item: $posting) { track in
             PostSheet(track: track, onOpen: { code in dismiss(); onOpenPost?(code) })
                 .environmentObject(deps)
@@ -137,8 +165,51 @@ struct SongEditorSheet: View {
                     .background(Capsule().fill(Color.mixPrimary.opacity(0.15)))
                     .lineLimit(1)
             }
+            #if os(macOS)
+            Button { withAnimation(.snappy) { fillsWindow.toggle() } } label: {
+                Label(fillsWindow ? "Smaller" : "Fill Window",
+                      systemImage: fillsWindow ? "arrow.down.right.and.arrow.up.left"
+                                               : "arrow.up.left.and.arrow.down.right")
+                    .font(.mixLabel)
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(Capsule().fill(Color.primary.opacity(0.07)))
+            }
+            .buttonStyle(.plain).mixHandCursor()
+            .foregroundStyle(Color.mixTextSecondary)
+            .help(fillsWindow ? "Make the editor smaller" : "Make the editor fill the window")
+            #endif
         }
     }
+
+    // MARK: - Size
+
+    private var sheetSize: MixSheetSize {
+        #if os(macOS)
+        let width = fillsWindow ? room.width - 24 : min(940, room.width - 80)
+        let height = fillsWindow ? room.height - 24 : min(780, room.height - 60)
+        return .window(CGSize(width: max(width, 580), height: max(height, 480)))
+        #else
+        .large
+        #endif
+    }
+
+    /// Two columns of cards once there's room for them.
+    private var isWide: Bool {
+        #if os(macOS)
+        sheetSize.width >= 820
+        #else
+        false
+        #endif
+    }
+
+    #if os(macOS)
+    /// The app window under this sheet, past any sheet stacked on it.
+    private static func windowRoom() -> CGSize? {
+        var window = NSApp.keyWindow
+        while let parent = window?.sheetParent { window = parent }
+        return (window ?? NSApp.mainWindow)?.contentLayoutRect.size
+    }
+    #endif
 
     @ViewBuilder
     private func savedView(_ saved: Track) -> some View {
@@ -159,10 +230,49 @@ struct SongEditorSheet: View {
         .foregroundStyle(Color.mixPrimary)
     }
 
-    @ViewBuilder
     private var controls: some View {
-        stage
+        let columns = isWide ? AnyLayout(HStackLayout(alignment: .top, spacing: 14))
+                             : AnyLayout(VStackLayout(alignment: .leading, spacing: 14))
+        return VStack(alignment: .leading, spacing: 14) {
+            columns {
+                VStack(alignment: .leading, spacing: 14) {
+                    soundCard
+                    trimCard
+                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                VStack(alignment: .leading, spacing: 14) {
+                    if StemSeparator.isAvailable {
+                        card("Stems", icon: "square.3.layers.3d",
+                             caption: "Turn the vocals, drums, bass or the rest up, down or off.") { stemControls }
+                    }
+                    #if os(macOS)
+                    card("Arrange", icon: "scissors",
+                         caption: "Cut the song into parts, then loop, reorder, copy or drop them.",
+                         trailing: arrangeButtons) { arrangeControls }
+                    #else
+                    Label("Stems and arranging are in Mixtape for Mac.", systemImage: "desktopcomputer")
+                        .font(.mixCaption)
+                        .foregroundStyle(Color.mixTextSecondary)
+                    #endif
+                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
 
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Name").font(.mixLabel).foregroundStyle(Color.mixTextSecondary)
+                TextField("Name", text: Binding(get: { name }, set: { name = $0; nameTouched = true }))
+                    .mixSheetField()
+            }
+
+            if let progress {
+                MixSheetStatus(kind: .busy, title: "Saving…", progress: progress)
+            } else if let saveError {
+                MixSheetStatus(kind: .failure, title: saveError)
+            }
+        }
+    }
+
+    private var soundCard: some View {
         card("Sound", icon: "dial.medium", caption: "Pick a preset, or set it up yourself.") {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
@@ -187,34 +297,6 @@ struct SongEditorSheet: View {
                    label: "\(Int((reverb * 100).rounded()))%")
             slider("Bass", value: $bass, in: 0...1,
                    label: bass < 0.005 ? "Off" : "+\(Int((bass * 100).rounded()))%")
-        }
-
-        trimCard
-
-        if StemSeparator.isAvailable {
-            card("Stems", icon: "square.3.layers.3d",
-                 caption: "Turn the vocals, drums, bass or the rest up, down or off.") { stemControls }
-        }
-        #if os(macOS)
-        card("Arrange", icon: "scissors",
-             caption: "Cut the song into parts, then loop, reorder, copy or drop them.",
-             trailing: arrangeButtons) { arrangeControls }
-        #else
-        Label("Stems and arranging are in Mixtape for Mac.", systemImage: "desktopcomputer")
-            .font(.mixCaption)
-            .foregroundStyle(Color.mixTextSecondary)
-        #endif
-
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Name").font(.mixLabel).foregroundStyle(Color.mixTextSecondary)
-            TextField("Name", text: Binding(get: { name }, set: { name = $0; nameTouched = true }))
-                .mixSheetField()
-        }
-
-        if let progress {
-            MixSheetStatus(kind: .busy, title: "Saving…", progress: progress)
-        } else if let saveError {
-            MixSheetStatus(kind: .failure, title: saveError)
         }
     }
 
@@ -493,7 +575,7 @@ struct SongEditorSheet: View {
 
     private var waveHeight: CGFloat {
         #if os(macOS)
-        96
+        fillsWindow ? 180 : 120
         #else
         72
         #endif
@@ -621,3 +703,13 @@ struct SongEditorSheet: View {
         }
     }
 }
+
+#if os(iOS)
+private extension View {
+    /// The bigger iPad sheet where there is one. iPhone already gets the full height.
+    @ViewBuilder
+    func editorPageSizing() -> some View {
+        if #available(iOS 18, *) { presentationSizing(.page) } else { self }
+    }
+}
+#endif
