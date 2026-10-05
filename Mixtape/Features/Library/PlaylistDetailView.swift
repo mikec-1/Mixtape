@@ -78,6 +78,7 @@ public struct PlaylistDetailView: View {
     /// Observed so a sort changed on another device lands on an open page.
     /// Equality guards stop this and `setSort` looping.
     @ObservedObject private var trackSorts = PlaylistTrackSortService.shared
+    @ObservedObject private var transitions = PlaylistTransitionService.shared
 
     /// Resolved/filtered/sorted rows, recomputed only on real changes. See `TrackListMemo`.
     @State private var memo = TrackListMemo()
@@ -1357,6 +1358,18 @@ public struct PlaylistDetailView: View {
             Label("Add to Queue", systemImage: "text.append")
         }
         .disabled(playableTracks.isEmpty)
+
+        // How this playlist's songs run into each other while it plays. Default follows Settings.
+        Picker(selection: Binding(
+            get: { transitions.modes[playlist.id] },
+            set: { transitions.setMode($0, for: playlist.id) }
+        )) {
+            Text("Default").tag(CrossfadeMode?.none)
+            ForEach(CrossfadeMode.allCases) { Text($0.title).tag(Optional($0)) }
+        } label: {
+            Label("Transitions", systemImage: "wand.and.rays")
+        }
+        .pickerStyle(.menu)
 
         Divider()
 

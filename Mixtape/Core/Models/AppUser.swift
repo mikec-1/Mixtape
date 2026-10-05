@@ -21,6 +21,8 @@ public struct AppUser: Identifiable, Codable, Hashable, Sendable {
     public var playlistSortOrder: String?
     /// Per-playlist track sorts, synced via user_metadata.
     public var playlistTrackSorts: String?
+    /// Per-playlist transitions, synced via user_metadata. See PlaylistTransitionService.
+    public var playlistTransitions: String?
     /// Imported Spotify playlists, synced via user_metadata. See SpotifyImportLedger.
     public var spotifyImports: String?
     /// Saved albums JSON, `user_metadata.saved_albums`. See `SavedAlbumsService`.
@@ -62,6 +64,7 @@ public struct AppUser: Identifiable, Codable, Hashable, Sendable {
         role: String? = nil,
         playlistSortOrder: String? = nil,
         playlistTrackSorts: String? = nil,
+        playlistTransitions: String? = nil,
         spotifyImports: String? = nil,
         savedAlbums: String? = nil,
         crates: String? = nil,
@@ -83,6 +86,7 @@ public struct AppUser: Identifiable, Codable, Hashable, Sendable {
         self.role             = role
         self.playlistSortOrder = playlistSortOrder
         self.playlistTrackSorts = playlistTrackSorts
+        self.playlistTransitions = playlistTransitions
         self.spotifyImports = spotifyImports
         self.savedAlbums = savedAlbums
         self.crates = crates

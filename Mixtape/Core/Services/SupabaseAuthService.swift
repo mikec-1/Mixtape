@@ -25,6 +25,7 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
                 // Account-wide preferences follow the user across devices.
                 PlaylistSortSyncService.shared.adoptRemote(user.playlistSortOrder)
                 PlaylistTrackSortService.shared.adoptRemote(user.playlistTrackSorts)
+                PlaylistTransitionService.shared.adoptRemote(user.playlistTransitions)
                 SpotifyImportLedger.shared?.adoptRemote(user.spotifyImports)
                 SavedAlbumsService.shared.adoptRemote(user.savedAlbums)
                 CrateService.shared.adoptRemote(user.crates)
@@ -645,6 +646,14 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
         ]))
     }
 
+    /// Per-playlist transitions. Silent on failure.
+    public func updatePlaylistTransitions(_ raw: String) async {
+        guard currentUser != nil else { return }
+        _ = try? await client.auth.update(user: UserAttributes(data: [
+            "playlist_transitions": .string(raw)
+        ]))
+    }
+
     /// Spotify import ledger. Silent on failure.
     public func updateSpotifyImports(_ raw: String) async {
         guard currentUser != nil else { return }
@@ -849,6 +858,10 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
             role:        role,
             playlistSortOrder: sortOrder,
             playlistTrackSorts: trackSorts,
+            playlistTransitions: {
+                if case .string(let raw) = session.user.userMetadata["playlist_transitions"], !raw.isEmpty { return raw }
+                return nil
+            }(),
             spotifyImports: spotifyImports,
             savedAlbums: savedAlbums,
             crates: crates,

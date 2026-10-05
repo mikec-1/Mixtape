@@ -1922,9 +1922,14 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         UserDefaults.standard.set(clamped, forKey: DefaultsKey.crossfadeDuration)
     }
 
+    /// The playing playlist's own transition, else the Settings one.
+    private var transitionMode: CrossfadeMode {
+        queue.sourcePlaylistID.flatMap { PlaylistTransitionService.shared.modes[$0] } ?? crossfadeMode
+    }
+
     /// The overlap length actually used for the active mode.
     private var effectiveFade: TimeInterval {
-        switch crossfadeMode {
+        switch transitionMode {
         case .off:       return 0
         case .gapless:   return 0.4          // short equal-power fade to hide the load gap
         case .crossfade: return crossfadeDuration
@@ -1935,7 +1940,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     /// (Settings > Playback > Crossfade on Skip), `.crossfade` mode only. Returns false to fall back to the
     /// normal advance.
     private func beginSkipCrossfade() -> Bool {
-        guard crossfadeMode == .crossfade, UserDefaults.standard.bool(forKey: DefaultsKey.crossfadeOnSkip),
+        guard transitionMode == .crossfade, UserDefaults.standard.bool(forKey: DefaultsKey.crossfadeOnSkip),
               !isTransitioning, state == .playing else { return false }
         guard let next = queue.peekNext() else { return false }
         // Leave unfindable songs to the walk below, which badges and explains them.
@@ -1951,7 +1956,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     /// From the progress timer: near the end of the track, with a local next track, start the overlap.
     /// Trailing silence doesn't count, and a crossfade starts once the ending goes quiet.
     private func maybeStartCrossfade() {
-        guard crossfadeMode != .off, !isTransitioning, state == .playing else { return }
+        guard transitionMode != .off, !isTransitioning, state == .playing else { return }
         guard let current = audioFile?.url, duration > 0 else { return }
         let fade = effectiveFade
         // Don't crossfade tracks too short to absorb the overlap.
@@ -1959,7 +1964,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         let edges = LoudnessAnalyzer.cachedEdges(for: current)
         let end = min(duration, edges?.end ?? duration)
         var start = end - fade
-        if crossfadeMode == .crossfade, let out = edges?.out {
+        if transitionMode == .crossfade, let out = edges?.out {
             start = max(min(start, out), end - fade - Self.maxQuietTail)
         }
         // Edges can still move the start this early, once the measuring below lands.
@@ -1982,7 +1987,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         var aligned: TimeInterval?
         // The shared speed control would skew the host-time schedule, so beats only match at 1x. A padded file's
         // grid was fitted to the padding, so those don't match either.
-        if crossfadeMode == .crossfade, playbackRate == 1, (edges?.end ?? 0) <= duration + 2,
+        if transitionMode == .crossfade, playbackRate == 1, (edges?.end ?? 0) <= duration + 2,
            let out = LoudnessAnalyzer.cachedBeats(for: current), let into = LoudnessAnalyzer.cachedBeats(for: url),
            let at = LoudnessAnalyzer.alignedStart(out: out, into: into,
                                                   leadIn: LoudnessAnalyzer.cachedEdges(for: url)?.start ?? 0,

@@ -1213,8 +1213,11 @@ public final class LibraryService: ObservableObject {
         let targets = ids.filter { $0 != Playlist.favouritesID && $0 != Playlist.allSongsID }
         guard !targets.isEmpty else { return }
 
-        // Its stored sort goes with it.
-        for id in targets { PlaylistTrackSortService.shared.forget(playlistID: id) }
+        // Its stored sort and transition go with it.
+        for id in targets {
+            PlaylistTrackSortService.shared.forget(playlistID: id)
+            PlaylistTransitionService.shared.forget(playlistID: id)
+        }
 
         coalescingRefreshes {
             var held: [UUID] = []

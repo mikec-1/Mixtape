@@ -462,6 +462,9 @@ public final class AppDependencies: ObservableObject {
         PlaylistTrackSortService.shared.pushWriter = { raw in
             Task { await auth.updatePlaylistTrackSorts(raw) }
         }
+        PlaylistTransitionService.shared.pushWriter = { raw in
+            Task { await auth.updatePlaylistTransitions(raw) }
+        }
         SavedAlbumsService.shared.pushWriter = { raw in
             Task { await auth.updateSavedAlbums(raw) }
         }
