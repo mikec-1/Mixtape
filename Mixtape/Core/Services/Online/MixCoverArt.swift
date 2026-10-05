@@ -1,17 +1,5 @@
-// MixCoverArt.swift
-// Mixtape — Core/Services/Online
-//
-// The 2×2 mosaic a mix wears, baked into a single image.
-//
-// On the Discover page a mix's cover is four remote images arranged by SwiftUI.
-// A library playlist can't wear that: it has one `artworkData`, and everything
-// that draws a playlist — the sidebar, the library grid, search results, the
-// Mac command palette — reads exactly that field. So a saved mix arrived with
-// nothing and fell back to the generic playlist glyph, which is the one cover
-// it definitely shouldn't have had.
-//
-// Flattening the mosaic here is what makes the saved copy look like the thing
-// that was saved, everywhere, without teaching a dozen views what a mix is.
+// A mix's 2x2 mosaic baked into one image, so a saved mix looks the same
+// everywhere a playlist's artworkData is drawn.
 
 import Foundation
 import CoreGraphics
@@ -21,15 +9,8 @@ import CoreText
 
 public nonisolated enum MixCoverArt {
 
-    /// Downloads up to four covers and composes them into one square JPEG.
-    ///
-    /// Nil when nothing could be fetched — the caller leaves the playlist's
-    /// cover alone rather than writing a blank tile over it.
-    /// The colour band a mix wears on its cover, baked in.
-    ///
-    /// Saved mixes keep the look they had on the Discover card — a plain 2×2 in
-    /// the library next to a banded card on Discover read as two different
-    /// playlists. Library playlists pass nil and stay plain.
+    /// A mix's colour band, baked in so a saved mix matches its Discover card.
+    /// Library playlists pass nil.
     public struct Band: Sendable {
         let title: String
         let red:   Double
@@ -42,13 +23,13 @@ public nonisolated enum MixCoverArt {
         }
     }
 
+    /// Fetches up to four covers into one square JPEG. Nil if none could be fetched.
     static func compose(from urls: [URL], side: Int = 640, band: Band? = nil) async -> Data? {
         var seen = Set<URL>()
         let picks = urls.filter { seen.insert($0).inserted }.prefix(4)
         guard !picks.isEmpty else { return nil }
 
-        // Fetched before any Core Graphics object exists, so nothing that isn't
-        // `Sendable` ever crosses an await.
+        // Fetch everything before creating any Core Graphics objects.
         var sources: [Data] = []
         for url in picks {
             if let data = await fetch(url) { sources.append(data) }
@@ -56,11 +37,7 @@ public nonisolated enum MixCoverArt {
         return render(sources, side: side, band: band)
     }
 
-    /// The same composition from covers you already hold.
-    ///
-    /// A library playlist's songs carry their artwork in the row, so there is
-    /// nothing to download — `LibraryService.coverData(for:)` uses this to give
-    /// a coverless playlist the 2×2 a mix wears, out of its own first songs.
+    /// Same composition from covers already in hand. Used for coverless playlists.
     static func compose(tiles: [Data], side: Int = 640) -> Data? {
         render(Array(tiles.prefix(4)), side: side)
     }
@@ -73,10 +50,7 @@ public nonisolated enum MixCoverArt {
         return data
     }
 
-    /// Four images make a 2×2; anything less is a single full-bleed tile.
-    ///
-    /// The same rule the card itself uses, so a saved mix and the mix it came
-    /// from don't disagree about what they look like.
+    /// Four images make a 2x2, fewer make one full-bleed tile. Same rule as the card.
     private static func render(_ sources: [Data], side: Int, band: Band? = nil) -> Data? {
         guard !sources.isEmpty else { return nil }
 
@@ -118,8 +92,7 @@ public nonisolated enum MixCoverArt {
         return encode(composed)
     }
 
-    /// The same band the card draws: a bottom-up ramp into the mix's colour,
-    /// with the title sitting on it. Proportions mirror `MixCoverBand`.
+    /// Same band as the card. Proportions mirror MixCoverBand.
     private static func draw(_ band: Band, side: Int, in context: CGContext) {
         let side   = CGFloat(side)
         let height = side * 0.42
@@ -157,8 +130,7 @@ public nonisolated enum MixCoverArt {
         context.restoreGState()
     }
 
-    /// Aspect-fill: cover the frame and let the overflow be clipped, rather than
-    /// squashing a square cover into a rectangle.
+    /// Aspect-fill.
     private static func draw(_ image: CGImage, filling frame: CGRect, in context: CGContext) {
         let width  = CGFloat(image.width)
         let height = CGFloat(image.height)

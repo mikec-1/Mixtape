@@ -1,6 +1,3 @@
-// SettingsViewModel.swift
-// Mixtape — Features/Settings
-
 import Foundation
 import SwiftUI
 import Combine
@@ -37,8 +34,7 @@ public final class SettingsViewModel: ObservableObject {
     // Restore missing songs
     @Published public private(set) var isRestoringSongs:      Bool = false
     @Published public private(set) var restoreSongsResult:    String? = nil
-    // Songs left behind by playlists that were deleted before the delete
-    // started taking its orphans with it.
+    // Songs left behind by playlists deleted before deletes took their orphans with them.
     @Published public private(set) var isCleaningOrphans:     Bool = false
     @Published public private(set) var orphanCount:           Int  = 0
 
@@ -100,10 +96,8 @@ public final class SettingsViewModel: ObservableObject {
         deleteTracksError = nil
         defer { isDeletingTracks = false }
 
-        // Same reasoning as `clearLibrary`: an import or a sync already under
-        // way would go on writing songs back in behind the delete. Downloads
-        // already on disk are left alone here — that is this command's promise —
-        // but ones still arriving are for songs about to stop existing.
+        // Stop imports, syncs and incoming downloads so they don't write songs back in.
+        // Downloads already on disk are kept.
         SpotifyImportService.cancelAllRuns()
         syncService.cancelAllWork()
         downloadManager.stopAllDownloads()
@@ -114,45 +108,29 @@ public final class SettingsViewModel: ObservableObject {
             try await syncService.deleteAllServerTracks()
         } catch {
             deleteTracksError = "Couldn't delete from server: \(error.localizedDescription)"
-            MixLog.library.error("[Settings] ❌ deleteAllServerTracks failed: \(error)")
+            MixLog.library.error("[Settings] deleteAllServerTracks failed: \(error)")
             return
         }
 
         libraryService.deleteAllTracks()
-        // The history survives this on purpose, but everything that assumed the
-        // songs were still there doesn't. See `UserDataReset`.
+        // History survives this, but anything assuming the songs exist is reset. See `UserDataReset`.
         UserDataReset.announce(.library)
-        // Reset per-table pull timestamps for tracks, albums, artists so
-        // a subsequent sync doesn't re-download deleted items.
+        // So the next sync doesn't re-download deleted items.
         syncService.resetSyncTimestamps()
-        MixLog.library.debug("[Settings] ✅ All music deleted on server and locally")
+        MixLog.library.debug("[Settings] All music deleted on server and locally")
     }
 
-    /// Forces the next sync to pull every server record rather than only what
-    /// changed since the last one.
-    ///
-    /// The recovery hatch for a local store that has drifted from the server.
-    /// Pulls are incremental against a stored per-table timestamp, so anything
-    /// that vanishes locally without the server row changing — an interrupted
-    /// account switch, a restore, a store rebuilt underneath us — leaves the
-    /// client permanently not asking for records the server still has. Purely
-    /// additive: nothing is deleted, here or on the server.
+    /// Forces the next sync to pull every server record. Recovers a local store that drifted
+    /// from the server. Additive only; nothing is deleted.
     public func resyncFromServer() async {
         syncService.resetSyncTimestamps()
         libraryService.prepareForFullResync()
         await triggerSync()
     }
 
-    /// Fills in artwork for songs that don't have any, from the user's own
-    /// published covers first and the iTunes catalogue second.
-    ///
-    /// Sync can't do this. `artwork_key` is only ever written *after* a device
-    /// uploads a cover it already had, so artwork only ever travels between
-    /// devices that already have it — a song that arrived without one (imported
-    /// from a file with no embedded art, or pulled onto a fresh device) has
-    /// nothing to download and stays blank through any number of re-syncs.
-    /// Whatever this finds is uploaded on the next sync, so the repair only has
-    /// to happen on one device.
+    /// Fills in missing artwork from the user's published covers, then iTunes. Sync can't:
+    /// a song that arrived with no cover has nothing to download. Found covers upload on
+    /// the next sync.
     public func findMissingCovers(using catalogue: ITunesSearchClient) async {
         isFindingCovers  = true
         findCoversResult = nil
@@ -175,16 +153,10 @@ public final class SettingsViewModel: ObservableObject {
         findCoversResult = remaining == 0
             ? "Found artwork for all \(found)."
             : "Found \(found) of \(missing.count). The other \(remaining) aren't in the catalogue."
-        MixLog.library.debug("[Settings] 🖼️ Cover repair: found \(found), \(remaining) still missing")
+        MixLog.library.debug("[Settings] Cover repair: found \(found), \(remaining) still missing")
     }
 
-    /// Fetches full-size covers again for songs stored at the old ceilings.
-    ///
-    /// Sync compressed every cover it uploaded to 300 px, and local writes
-    /// capped at 512 — which is why a song that arrived from another device
-    /// looked pixelated. New covers are 1024; the ones already on disk can only
-    /// be fixed by asking the catalogue again, so this is a button and not a
-    /// silent pass.
+    /// Refetches full-size covers for songs stored at the old 300/512 px limits.
     public func upgradeCoverQuality(using catalogue: ITunesSearchClient) async {
         isUpgradingCovers  = true
         upgradeCoversResult = nil
@@ -205,17 +177,11 @@ public final class SettingsViewModel: ObservableObject {
             replacingExisting: true
         )
         upgradeCoversResult = "Replaced \(replaced) of \(low.count) with full-size artwork."
-        MixLog.library.debug("[Settings] 🖼️ Cover upgrade: replaced \(replaced) of \(low.count)")
+        MixLog.library.debug("[Settings] Cover upgrade: replaced \(replaced) of \(low.count)")
     }
 
-    /// Brings back songs a re-sync removed by replaying an out-of-date deletion
-    /// from the server, and pushes the correction so it can't happen twice.
-    ///
-    /// The symptom is a playlist header that counts more songs than the list
-    /// shows: the playlist still holds the id, but the track behind it is
-    /// soft-deleted and therefore invisible to everything. See
-    /// `LibraryService.restoreResurrectedTracks` for which rows qualify and why a
-    /// song the user genuinely deleted can't be caught up in this.
+    /// Restores songs a re-sync removed by replaying a stale server deletion, then pushes
+    /// the fix. See `LibraryService.restoreResurrectedTracks`.
     public func restoreMissingSongs() async {
         isRestoringSongs   = true
         restoreSongsResult = nil
@@ -227,22 +193,19 @@ public final class SettingsViewModel: ObservableObject {
             return
         }
 
-        // Not optional. The restore is local; the server is still holding the
-        // deletion that caused it, and the next full re-sync would hand it back.
+        // Otherwise the server's stale deletion comes back on the next full re-sync.
         await triggerSync()
 
         restoreSongsResult = "Restored \(restored) song\(restored == 1 ? "" : "s")."
-        MixLog.library.debug("[Settings] ♻️ Restored \(restored) song(s)")
+        MixLog.library.debug("[Settings] Restored \(restored) song(s)")
     }
 
-    /// How many songs a deleted playlist left in the library. Cheap enough to
-    /// call whenever the page appears; it reads ids, not rows.
+    /// How many songs deleted playlists left behind. Cheap; reads ids only.
     public func refreshOrphanCount() {
         orphanCount = libraryService.orphansFromDeletedPlaylists().count
     }
 
-    /// Removes them. The delete is local and soft, so the push is what makes it
-    /// reach the other devices — same as every other deletion here.
+    /// Removes them. The push carries the delete to other devices.
     public func cleanUpOrphanedSongs() async {
         isCleaningOrphans = true
         defer { isCleaningOrphans = false }
@@ -251,7 +214,7 @@ public final class SettingsViewModel: ObservableObject {
         orphanCount = 0
         guard removed > 0 else { return }
         await triggerSync()
-        MixLog.library.debug("[Settings] 🧹 Removed \(removed) orphaned song(s)")
+        MixLog.library.debug("[Settings] Removed \(removed) orphaned song(s)")
     }
 
     /// Deletes all user-created playlists from the server and every device.
@@ -268,19 +231,19 @@ public final class SettingsViewModel: ObservableObject {
             try await syncService.deleteAllServerUserPlaylists()
         } catch {
             deletePlaylistsError = "Couldn't delete from server: \(error.localizedDescription)"
-            MixLog.library.error("[Settings] ❌ deleteAllServerUserPlaylists failed: \(error)")
+            MixLog.library.error("[Settings] deleteAllServerUserPlaylists failed: \(error)")
             return
         }
 
         libraryService.deleteAllUserPlaylists()
-        MixLog.library.debug("[Settings] ✅ All user playlists deleted on server and locally")
+        MixLog.library.debug("[Settings] All user playlists deleted on server and locally")
     }
 
     public func signOut() async {
         try? await authService.signOut()
     }
 
-    /// Ends every session on the account — other devices, browsers, and this one.
+    /// Ends every session on the account, including this one.
     public func signOutEverywhere() async {
         try? await authService.signOut(everywhere: true)
     }
@@ -289,22 +252,15 @@ public final class SettingsViewModel: ObservableObject {
         try? await syncService.sync()
     }
 
-    /// Re-files every track under its correct primary artist + album.
-    /// Run this once to clean up library groupings broken by earlier import bugs.
+    /// Re-files every track under its correct primary artist and album.
     public func rebuildGroupings() async {
         isRebuilding = true
         defer { isRebuilding = false }
         await importService.rebuildGroupings()
-        MixLog.library.debug("[Settings] ✅ Library groupings rebuilt")
+        MixLog.library.debug("[Settings] Library groupings rebuilt")
     }
 
-    /// Wipes listening history: the local play log, the snapshots of played
-    /// Discover tracks, and the published stats row other people see.
-    ///
-    /// This is separate from deleting music because the two are separate facts.
-    /// Deleting a song says "I no longer have this"; deleting history says "I was
-    /// never here". The first shouldn't imply the second — but with no way to do
-    /// the second, an emptied library keeps reporting top artists it can't show.
+    /// Wipes listening history: the play log, played Discover snapshots and the public stats row.
     public func resetListeningStats() async {
         isResettingStats = true
         resetStatsError = nil
@@ -320,17 +276,13 @@ public final class SettingsViewModel: ObservableObject {
     /// then wipes the local SwiftData store, audio cache and listening history.
     /// Every device will be empty after their next sync.
     public func clearLibrary() async {
+
+        SupabaseSyncService.allowBulk("clear")
         isClearing = true
         clearError = nil
         defer { isClearing = false }
 
-        // Everything in flight stops *before* anything is deleted.
-        //
-        // Stopping background sync alone only prevented the next run: an import
-        // and a sync that were already going carried on afterwards, uploading
-        // covers and placing songs into a library that had just been wiped —
-        // which is how a "cleared" library ends up half-full of the thing you
-        // were trying to get rid of.
+        // Stop everything in flight before deleting, or imports and syncs refill the library.
         SpotifyImportService.cancelAllRuns()
         syncService.cancelAllWork()
         downloadManager.stopAllDownloads()
@@ -340,24 +292,19 @@ public final class SettingsViewModel: ObservableObject {
             try await syncService.deleteAllServerData()
         } catch {
             clearError = "Couldn't delete from server: \(error.localizedDescription)"
-            MixLog.library.error("[Settings] ❌ Server delete failed: \(error)")
+            MixLog.library.error("[Settings] Server delete failed: \(error)")
             // Restart background sync even if we fail.
             syncService.startBackgroundSync(intervalSeconds: 60)
             return
         }
 
-        // Server is clean — now wipe local data and timestamps.
+        // Server is clean, now wipe local data and timestamps.
         libraryService.clearAll()
 
-        // Downloads live outside the library too, in Application Support/Offline/.
-        // "Delete All Music" leaves them alone — its warning says nothing about
-        // files, and Settings has a dedicated Remove All Downloads for them. This
-        // one promises "all music … and files … from every device", so leaving a
-        // folder of playable .m4a behind would make that a lie.
+        // This promises to delete files too, so remove downloads.
         downloadManager.removeAllDownloads()
 
-        // History lives outside the library, so clearAll can't reach it. Skipping
-        // this is what leaves top artists standing after "Clear Everything".
+        // History lives outside the library.
         statsService.resetHistory()
         if let userID = currentUser?.id {
             await profileStats.publishMyStats(userID: userID)
@@ -365,14 +312,11 @@ public final class SettingsViewModel: ObservableObject {
 
         syncService.resetSyncTimestamps()
 
-        // Everything derived from the library or the play history — the Discover
-        // landing's mixes and recommendations, the Home shelf, recently played —
-        // rebuilds itself from this. Without it the page keeps showing mixes
-        // built from a history that no longer exists. See `UserDataReset`.
+        // Rebuilds mixes, recommendations and recently played. See `UserDataReset`.
         UserDataReset.announce(.everything)
 
         // Restart background sync (will pull nothing since server is empty).
         syncService.startBackgroundSync(intervalSeconds: 60)
-        MixLog.library.debug("[Settings] ✅ Library, history and published stats cleared")
+        MixLog.library.debug("[Settings] Library, history and published stats cleared")
     }
 }

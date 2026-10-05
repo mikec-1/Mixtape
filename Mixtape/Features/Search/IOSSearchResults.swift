@@ -1,15 +1,5 @@
-// IOSSearchResults.swift
-// Mixtape — Features/Search
-//
-// The catalogue half of the iOS search page, in the shape macOS reads in:
-// the answer first (an artist, or the song you named), then that artist's
-// songs, their albums, and finally who else sounds like them.
-//
-// This layout used to live inside IOSDiscoverView, drawing results Home no
-// longer produces. It is here now because the Search tab is the only thing on
-// iOS that searches, and a page-shaped answer beats the flat list of rows it
-// replaced: a query naming an artist should open with the artist, not with
-// forty songs that happen to mention them.
+// The catalogue half of the iOS search page, in macOS order: the answer, that
+// artist's songs, albums, then similar artists.
 
 #if os(iOS)
 import SwiftUI
@@ -65,8 +55,7 @@ struct IOSSearchResults: View {
                 if let hero = results.topSong {
                     songCentricResults(hero: hero)
                 } else {
-                    // One column, no rules: sections are separated by space
-                    // alone, which is the iOS grouping idiom.
+                    // Sections separated by space alone, the iOS idiom.
                     VStack(alignment: .leading, spacing: 26) {
                         topResultBanner
                         featuringSection
@@ -162,10 +151,7 @@ struct IOSSearchResults: View {
                     if coordinator.nowPlayingID == hero.id {
                         engine.togglePlayPause()
                     } else {
-                        let ctx = engine.queue.shuffleEnabled
-                            ? [hero]
-                            : [hero] + results.songs.filter { $0.id != hero.id }
-                        Task { await play(hero, context: ctx) }
+                        Task { await play(hero) }
                     }
                 },
                 onPlayNext:   { Task { await coordinator.playNext(hero) } },
@@ -173,10 +159,7 @@ struct IOSSearchResults: View {
                 onAdd:        { Task { await coordinator.addToLibrary(hero) } },
                 onOpenAlbum:  { openAlbum(for: hero) },
                 onOpenArtist: { openArtist(named: $0, from: hero) },
-                onWrongVersion: {
-                    let ctx = [hero] + results.songs.filter { $0.id != hero.id }
-                    Task { await coordinator.reResolveAndPlay(hero, context: ctx) }
-                }
+                onWrongVersion: { Task { await coordinator.reResolveAndPlay(hero, context: [hero]) } }
             )
 
             if !results.songArtists.isEmpty {
@@ -212,18 +195,14 @@ struct IOSSearchResults: View {
 
     // MARK: - Generic sections
 
-    /// The answer, as one row across the top. Its own subtitle already reads
-    /// "Artist" or "Song · …", so nothing has to announce it as the top result.
+    /// The answer as one row. Its subtitle already says Artist or Song.
     @ViewBuilder
     private var topResultBanner: some View {
         if let top = topResult {
             IOSTopResultCard(
                 top: top,
                 onOpenArtist: { onOpen(.artist($0)) },
-                onPlay: { track in
-                    let ctx = engine.queue.shuffleEnabled ? [track] : results.songs
-                    Task { await play(track, context: ctx) }
-                }
+                onPlay: { track in Task { await play(track) } }
             )
         }
     }
@@ -231,8 +210,7 @@ struct IOSSearchResults: View {
     private var songsSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
-                // Says which it is: matches, or the closest thing the catalogue
-                // had. See `DiscoverResults.songsMatched`.
+                // Matches, or the closest the catalogue had. See `DiscoverResults.songsMatched`.
                 discoverSectionHeader(results.songsMatched ? songsTitle : "Closest matches")
                 Spacer(minLength: 8)
                 seeAllSongs(total: results.songs.count)
@@ -241,8 +219,7 @@ struct IOSSearchResults: View {
         }
     }
 
-    /// Named after the artist when the artist is the answer — the songs under a
-    /// searched-for name are theirs, and "Songs" says less than "Popular".
+    /// "Popular songs" when an artist is the answer.
     private var songsTitle: String {
         if case .artist = topResult { return "Popular songs" }
         return "Songs"
@@ -259,16 +236,14 @@ struct IOSSearchResults: View {
         }
     }
 
-    /// Whose stations "Featuring" shows: the artist that answered the search,
-    /// or the named song's artist.
+    /// Whose stations "Featuring" shows: the answering artist, or the named song's artist.
     private var featuredArtist: OnlineArtist? {
         if results.topSong != nil { return results.songArtists.first }
         if case .artist(let artist) = topResult { return artist }
         return nil
     }
 
-    /// Spotify's "Featuring <name>": the same stations as the artist page's
-    /// "Playlists with" row.
+    /// Spotify's "Featuring <name>": the artist page's "Playlists with" stations.
     @ViewBuilder
     private var featuringSection: some View {
         if let artist = featuredArtist, !stations.isEmpty {
@@ -364,23 +339,19 @@ struct IOSSearchResults: View {
             isResolving: coordinator.resolvingID == song.id,
             isCurrent: coordinator.nowPlayingID == song.id,
             isPlaying: engine.state.isPlaying,
-            onPlay: {
-                let ctx = engine.queue.shuffleEnabled ? [song] : results.songs
-                Task { await play(song, context: ctx) }
-            },
+            onPlay: { Task { await play(song) } },
             onPlayNext:   { Task { await coordinator.playNext(song) } },
             onAddToQueue: { Task { await coordinator.addToQueue(song) } },
             onAdd:        { Task { await coordinator.addToLibrary(song) } },
             onOpenAlbum:  { openAlbum(for: song) },
             onOpenArtist: { openArtist(named: $0, from: song) },
-            onWrongVersion: { Task { await coordinator.reResolveAndPlay(song, context: results.songs) } }
+            onWrongVersion: { Task { await coordinator.reResolveAndPlay(song, context: [song]) } }
         )
     }
 
     // MARK: - Result partitioning (mirrors macOS)
 
-    /// The search layer decides artist-vs-song, not the query text. See
-    /// `DiscoverResults.anchorIsArtist`.
+    /// The search layer decides artist vs song. See `DiscoverResults.anchorIsArtist`.
     private var topResult: IOSTopResult? {
         if results.anchorIsArtist, let artist = results.artists.first { return .artist(artist) }
         if let song = results.songs.first { return .song(song) }
@@ -400,17 +371,17 @@ struct IOSSearchResults: View {
 
     // MARK: - Play / navigate
 
-    private func play(_ track: OnlineTrack, context: [OnlineTrack]) async {
+    /// A pick plays alone, so autoplay's recommendations follow it rather than the other results.
+    private func play(_ track: OnlineTrack, context: [OnlineTrack]? = nil) async {
+        store.noteSearchPick()
         var artworkData: Data? = nil
         if let url = track.artworkURL {
             artworkData = try? await URLSession.shared.data(from: url).0
         }
-        await coordinator.play(track, context: context, artworkData: artworkData)
+        await coordinator.play(track, context: context ?? [track], artworkData: artworkData)
     }
 
-    /// One name out of a credit line. `trackID` only helps for the credited act
-    /// — it asks Deezer who *this track's* artist is — so a guest resolves by
-    /// name alone.
+    /// `trackID` only helps for the credited act; a guest resolves by name alone.
     private func openArtist(named name: String, from track: OnlineTrack) {
         let trackID = name == track.artistName ? track.sourceID : nil
         Task {

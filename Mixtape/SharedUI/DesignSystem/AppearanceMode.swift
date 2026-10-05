@@ -1,19 +1,7 @@
-// AppearanceMode.swift
-// Mixtape — Design System
-//
-// How big the app draws itself, how much it moves, and how much it decorates —
-// three axes, one preset picker on top of them.
-//
-// They are separate on purpose. "Make it smaller" and "make it stop moving" are
-// different requests that happen to arrive together, and folding them into one
-// three-way switch means nobody can have a full-size window that doesn't
-// animate, or a tight one that still does. The presets in Settings are the
-// answer to that: most people pick a name and never see the axes.
-//
-// Everything here is read through the environment so a change invalidates
-// exactly the views that depend on it. The one exception is `MixMotion.current`
-// — `withAnimation` is an imperative call with no view to read an environment
-// from, so it reads a mirror kept up to date by `ThemeManager`.
+// Three independent appearance axes (size, motion, decoration) with a preset
+// picker on top. Read through the environment so changes only invalidate what
+// depends on them. `MixMotion.current` is the exception: `withAnimation` has no
+// view to read from, so `ThemeManager` keeps a mirror.
 
 import SwiftUI
 
@@ -37,7 +25,7 @@ public enum MixDensity: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    // MARK: Track rows (the SwiftUI ones — macOS tables use `RowMetrics.at`)
+    // MARK: Track rows (SwiftUI ones; macOS tables use `RowMetrics.at`)
 
     public var trackArtwork:      CGFloat { self == .compact ? 34 : 44 }
     public var trackRowPadding:   CGFloat { self == .compact ? 1  : 4  }
@@ -61,12 +49,8 @@ public enum MixDensity: String, CaseIterable, Identifiable, Sendable {
 
 // MARK: - Motion
 
-/// How much the app animates.
-///
-/// `reduced` doesn't mean "instant everywhere": the system's own animations —
-/// a sheet coming up, a navigation push, a List insert — belong to the platform
-/// and are left alone. What it switches off is the app's own, which is all of
-/// what costs anything.
+/// How much the app animates. `reduced` turns off the app's own animations;
+/// system ones (sheets, pushes, List inserts) are left alone.
 public enum MixMotion: String, CaseIterable, Identifiable, Sendable {
     case full, reduced
     public var id: String { rawValue }
@@ -85,19 +69,11 @@ public enum MixMotion: String, CaseIterable, Identifiable, Sendable {
         isReduced ? nil : animation
     }
 
-    /// What `withMixAnimation` reads.
-    ///
-    /// A mirror rather than the source of truth: `ThemeManager` writes it on
-    /// every change and at launch. It exists because an imperative
-    /// `withAnimation` at the bottom of a button action has no view, and
-    /// therefore no environment, to ask.
+    /// Mirror read by `withMixAnimation`; `ThemeManager` writes it at launch and on change.
     public static var current: MixMotion = .full
 }
 
-/// `withAnimation`, honouring the motion setting.
-///
-/// Signature matches the original — including the bare `withMixAnimation { … }`
-/// form — so call sites read the same as they always did.
+/// `withAnimation` honouring the motion setting. Same signature as the original.
 @discardableResult
 public func withMixAnimation<Result>(
     _ animation: Animation? = .default,
@@ -108,12 +84,8 @@ public func withMixAnimation<Result>(
 
 // MARK: - Chrome
 
-/// How much the app decorates.
-///
-/// `flat` is the "simple black app" answer: no colour wash bleeding down from
-/// the artwork, no drop shadows under covers, no blur materials. The background
-/// stays the flat surface colour it already is, which is the look this is
-/// after — the tokens don't change, only what gets painted on top of them.
+/// How much the app decorates. `flat`: no artwork wash, no decorative shadows,
+/// no blur materials. Colour tokens are unchanged.
 public enum MixChrome: String, CaseIterable, Identifiable, Sendable {
     case rich, flat
     public var id: String { rawValue }
@@ -132,26 +104,16 @@ public enum MixChrome: String, CaseIterable, Identifiable, Sendable {
     /// Blur materials. `flat` swaps them for an opaque surface colour.
     public var showsMaterials:   Bool { self == .rich }
 
-    /// A blur material, or the flat surface that stands in for it.
-    ///
-    /// Live blur is the one piece of chrome with a running cost: it resamples
-    /// whatever is behind it every frame that either moves. An opaque colour is
-    /// the same shape and the same separation, drawn once.
-    ///
-    /// The system's Reduce Transparency setting overrides the axis. Someone who
-    /// has asked the whole OS for opaque surfaces has already answered this
-    /// question, and a per-app "Rich" preset is not permission to re-ask it.
+    /// A blur material, or a flat colour in its place (blur resamples every frame).
+    /// The system's Reduce Transparency always wins.
     public func material(_ material: Material, flat colour: Color) -> AnyShapeStyle {
         showsMaterials && !MixChrome.systemWantsOpaqueSurfaces
             ? AnyShapeStyle(material)
             : AnyShapeStyle(colour)
     }
 
-    /// Whether the OS has asked for opaque surfaces app-wide.
-    ///
-    /// Read imperatively rather than through `@Environment` because `material`
-    /// is called from shape-style position, where there is no view to read a
-    /// trait from. Both platforms expose it as a process-wide flag.
+    /// Whether the OS asked for opaque surfaces. Read directly since `material`
+    /// has no view to read the environment from.
     public static var systemWantsOpaqueSurfaces: Bool {
         #if canImport(UIKit)
         return UIAccessibility.isReduceTransparencyEnabled
@@ -188,7 +150,7 @@ public enum MixAppearancePreset: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    /// Nil for `.custom`, which isn't a combination — it's the absence of one.
+    /// Nil for `.custom`.
     public var axes: (density: MixDensity, motion: MixMotion, chrome: MixChrome)? {
         switch self {
         case .normal:    return (.comfortable, .full,    .rich)
@@ -235,11 +197,8 @@ public extension EnvironmentValues {
 
 // MARK: - View helpers
 
-/// `.animation(_:value:)`, honouring the motion setting.
-///
-/// A modifier rather than a computed argument at the call site so the read goes
-/// through the environment: flipping the setting invalidates precisely the
-/// views that animate, and nothing else.
+/// `.animation(_:value:)` honouring the motion setting. A modifier so the read
+/// goes through the environment.
 private struct MixAnimationModifier<V: Equatable>: ViewModifier {
     @Environment(\.mixMotion) private var motion
     let animation: Animation?
@@ -263,15 +222,8 @@ public extension View {
             .environment(\.mixChrome, chrome)
     }
 
-    /// A continuously pulsing symbol, unless the app has been asked to hold still.
-    ///
-    /// SF Symbol effects are the one kind of motion `withAnimation` cannot reach:
-    /// they drive themselves off Core Animation and ignore the transaction
-    /// entirely. They are also the only motion in the app that never stops —
-    /// `.pulse` and `.variableColor` keep a timer alive for as long as the view
-    /// is on screen — so leaving them out of the motion setting made "Reduced"
-    /// look like it did nothing, because the animation people actually watch was
-    /// still running.
+    /// Pulsing symbol unless motion is reduced. Symbol effects ignore transactions
+    /// and never stop, so they need their own gate.
     func mixPulse(isActive: Bool = true) -> some View {
         modifier(MixSymbolPulse(isActive: isActive))
     }
@@ -281,7 +233,7 @@ public extension View {
         modifier(MixSymbolVariableColor(isActive: isActive))
     }
 
-    /// The cross-fade between two symbols — a play glyph becoming a pause one.
+    /// Cross-fade between symbols, e.g. play -> pause.
     func mixSymbolReplace() -> some View {
         modifier(MixSymbolReplace())
     }
@@ -291,22 +243,15 @@ public extension View {
         modifier(MixSymbolBounce(value: value))
     }
 
-    /// A shadow that flat chrome leaves out.
-    ///
-    /// Only for shadows that *decorate* — under covers, cards and artwork.
-    /// The ones that say "this floats above the page" (the toast, the command
-    /// palette, the search suggestions, the back button, the error banners) stay
-    /// plain `.shadow`: without them those read as part of the content they're
-    /// sitting on top of, and flat is a look, not a loss of layering.
+    /// A decorative shadow that flat chrome drops (covers, cards, artwork).
+    /// Shadows that show layering (toast, palette, banners) use plain `.shadow`.
     func mixShadow(color: Color, radius: CGFloat, x: CGFloat = 0, y: CGFloat = 0) -> some View {
         modifier(MixShadowModifier(color: color, radius: radius, x: x, y: y))
     }
 }
 
-/// Draws a clear, zero-radius shadow rather than dropping the modifier, so the
-/// view keeps its identity when the setting flips. The `if` version rebuilds
-/// the subtree, which throws away the `@State` inside it — hover states,
-/// scroll positions — for a shadow.
+/// Draws a clear zero-radius shadow instead of removing the modifier, which
+/// would rebuild the subtree and lose its `@State`.
 private struct MixShadowModifier: ViewModifier {
     @Environment(\.mixChrome) private var chrome
     let color: Color
@@ -347,8 +292,7 @@ private struct MixSymbolReplace: ViewModifier {
     }
 }
 
-/// Feeds the trigger a constant when motion is reduced, so it never fires.
-/// Dropping the modifier instead would change the view's identity for a bounce.
+/// Constant trigger when motion is reduced, so it never fires, without changing identity.
 private struct MixSymbolBounce<V: Equatable>: ViewModifier {
     @Environment(\.mixMotion) private var motion
     let value: V

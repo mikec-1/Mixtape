@@ -1,6 +1,3 @@
-// AuthViewModel.swift
-// Mixtape — Features/Auth
-
 import Foundation
 import SwiftUI
 import Combine
@@ -15,7 +12,7 @@ public final class AuthViewModel: ObservableObject {
     @Published public var email: String = ""
     @Published public var password: String = ""
     @Published public var username: String = ""
-    /// Free-form — no format rules, no availability check.
+    /// Free-form, no format or availability check.
     @Published public var displayName: String = ""
     @Published public var isSignUpMode: Bool = false
 
@@ -25,7 +22,7 @@ public final class AuthViewModel: ObservableObject {
     @Published public var errorMessage: String?
     @Published public var showError: Bool = false
 
-    /// True while an Apple / Google sign-in is in flight (separate spinner from `isLoading`).
+    /// Apple/Google sign-in in flight (separate spinner from `isLoading`).
     @Published public private(set) var isSocialLoading: Bool = false
 
     // MARK: - Forgot Password State
@@ -37,8 +34,7 @@ public final class AuthViewModel: ObservableObject {
 
     // MARK: - Email Confirmation State
 
-    /// True after signUp() when Supabase requires the user to click a confirmation email.
-    /// Observed by MacAuthFlowView / SignInView to show the "check your email" screen.
+    /// Set after signUp() when the user must confirm by email. Shows the "check your email" screen.
     @Published public var showCheckEmail: Bool = false
 
     // MARK: - Set New Password State (for password-reset deep link)
@@ -180,8 +176,7 @@ public final class AuthViewModel: ObservableObject {
         }
     }
 
-    /// Completes a password reset. Called from SetNewPasswordSheet after the user
-    /// has clicked a reset link and set their new password.
+    /// Completes a password reset from SetNewPasswordSheet.
     public func updatePassword() async {
         guard isNewPasswordValid else { return }
         isUpdatingPassword = true
@@ -199,8 +194,7 @@ public final class AuthViewModel: ObservableObject {
         }
     }
 
-    /// Signs out the current user. Used by the Set New Password screen's Cancel action
-    /// to destroy the recovery session when the user changes their mind.
+    /// Signs out. Used by Set New Password's Cancel to drop the recovery session.
     public func signOut() async {
         do { try await authService.signOut() } catch {}
     }
@@ -217,7 +211,7 @@ public final class AuthViewModel: ObservableObject {
             errorMessage = error.errorDescription
             showError    = true
         } catch {
-            // ASWebAuthenticationSession cancellation surfaces as a CANCELED error — ignore it.
+            // User cancelled the web sheet.
             if (error as? ASWebAuthenticationSessionError)?.code == .canceledLogin { return }
             errorMessage = error.localizedDescription
             showError    = true

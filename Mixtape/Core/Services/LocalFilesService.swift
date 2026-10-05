@@ -1,22 +1,7 @@
-// LocalFilesService.swift
-// Mixtape — Core/Services
-//
-// "Local Files": the music in the user's watched folders, shown as songs.
-//
-// The one rule that shapes everything here is that these rows are DERIVED. A
-// scan builds `Track` values in memory and nothing is ever written to the
-// database. Remove a file from a watched folder and it disappears from Mixtape;
-// put it back and it returns. There is no state to go stale, nothing to
-// resurrect, and nothing to reconcile with another device.
-//
-// That is the lesson of the export-folder scan, which did the opposite: it
-// minted permanent library rows from files on disk, so a song deleted on the
-// phone came back on the Mac the next time anyone pressed Sync. A view over a
-// folder cannot do that, by construction.
-//
-// Nothing here syncs and nothing here uploads. To put a local file on the phone
-// or the web the user promotes it — see `promote(_:)` — which runs the ordinary
-// import path and produces an honest `.imported` row with a copy Mixtape owns.
+// "Local Files": songs from the user's watched folders. These rows are derived
+// from a scan and never written to the database, so there's nothing to go stale
+// or resurrect. Nothing syncs or uploads. promote(_:) runs a normal import to
+// make a real copy.
 
 import Foundation
 import Combine
@@ -40,37 +25,22 @@ public final class LocalFilesService: ObservableObject {
     private var scanTask: Task<Void, Never>?
 
     #if os(macOS)
-    /// Live watching, macOS only. The scan it triggers is the same derived scan
-    /// as the manual one, so this can only ever make the list *fresher* — it has
-    /// no path of its own to get anything wrong.
+    /// macOS only. Triggers the same scan as a manual rescan.
     private var monitor: WatchedFolderMonitor?
     #endif
     private var folderObserver: AnyCancellable?
 
-    /// Files the user has already saved into Mixtape: absolute path → the id of
-    /// the library row that now represents it.
-    ///
-    /// Recorded at promotion time — a fact, not a guess. Without it a promoted
-    /// song would show twice: once as the imported copy Mixtape owns, and once
-    /// as the original still sitting in the watched folder.
-    ///
-    /// The id is what keeps this from becoming another place for deletions to
-    /// hide. Every scan drops entries whose library row is gone, so deleting a
-    /// promoted song puts the file back under Local Files — which is the truth:
-    /// the file is still in the folder. This prunes itself rather than hooking
-    /// deletion, so a row removed by a sync from another device counts too.
+    /// Promoted files: path -> library row id, so they don't show twice.
+    /// Entries whose row is gone are pruned on each scan, putting the file back.
     private var promoted: [String: UUID] = [:]
     private static let promotedKey = "localFiles.promoted.v2"
 
-    /// File types worth opening. Anything else in the folder is ignored in
-    /// silence — watched folders are the user's, and they may keep whatever
-    /// they like in them.
+    /// Other files are ignored.
     public nonisolated static let audioExtensions: Set<String> = [
         "mp3", "m4a", "aac", "aiff", "aif", "wav", "flac", "ogg", "opus", "alac", "m4b"
     ]
 
-    /// Whether a library row with this id still exists. Injected rather than
-    /// held as a reference so this service does not need the whole library.
+    /// Injected so this doesn't need the whole library.
     private let isInLibrary: (UUID) -> Bool
 
     public init(folders: WatchedFoldersStore,
@@ -92,8 +62,7 @@ public final class LocalFilesService: ObservableObject {
         self.monitor = WatchedFolderMonitor { [weak self] in self?.rescan() }
         #endif
 
-        // Re-arm whenever the user adds or removes a folder, and rescan: the
-        // list on screen is about a set of folders that just changed.
+        // Folders changed, so re-arm and rescan.
         folderObserver = folders.objectWillChange
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.foldersChanged() }
@@ -114,9 +83,7 @@ public final class LocalFilesService: ObservableObject {
 
     // MARK: - Scanning
 
-    /// Re-reads every watched folder. Safe to call often: a scan already in
-    /// flight is cancelled first, so a burst of launch/foreground/manual
-    /// triggers costs one scan, not four.
+    /// Cancels any scan in flight, so it's cheap to call often.
     public func rescan() {
         scanTask?.cancel()
         let roots = folders.resolvedFolders().map(\.url)
@@ -147,9 +114,7 @@ public final class LocalFilesService: ObservableObject {
         }
     }
 
-    /// Walks the folders and reads tags. Off the main actor: a folder of a few
-    /// thousand files is a few thousand `AVURLAsset` loads, and doing that on
-    /// the main actor would freeze the very list it is filling.
+    /// Off the main actor, since it's one AVURLAsset load per file.
     private nonisolated static func scan(roots: [URL],
                                          parser: MetadataParser,
                                          deviceID: String,
@@ -165,19 +130,16 @@ public final class LocalFilesService: ObservableObject {
                 options: [.skipsHiddenFiles, .skipsPackageDescendants]
             ) else { continue }
 
-            // `for … in walker` would use `makeIterator`, which is unavailable
-            // from an async context. Pulling objects by hand is the same walk.
+            // for-in needs makeIterator, which isn't available in async code.
             while let next = walker.nextObject() {
                 guard let url = next as? URL else { continue }
                 if Task.isCancelled { return out }
                 guard audioExtensions.contains(url.pathExtension.lowercased()) else { continue }
 
                 let path = url.standardizedFileURL.path(percentEncoded: false)
-                // Two watched folders can nest, and the same file can sit under
-                // both. Show it once.
+                // Folders can nest.
                 guard !seen.contains(path) else { continue }
-                // A file the user has already saved into Mixtape is represented
-                // by its library row, not twice.
+                // Already promoted.
                 guard !promoted.contains(path) else { continue }
                 seen.insert(path)
 
@@ -191,9 +153,7 @@ public final class LocalFilesService: ObservableObject {
         return out
     }
 
-    /// One file as a song. Tags where the file has them, the filename where it
-    /// doesn't — a folder of untagged rips should still read as a list of songs
-    /// rather than a list of "Unknown".
+    /// One file as a track. Falls back to the filename when there are no tags.
     private nonisolated static func track(for url: URL,
                                           size: Int64,
                                           parser: MetadataParser,
@@ -222,22 +182,15 @@ public final class LocalFilesService: ObservableObject {
         )
     }
 
-    /// Same file, same id, every scan — so the queue, the now-playing row and
-    /// "is this the song that's playing?" all keep working across a rescan.
+    /// Stable per path so playback and the queue survive a rescan.
     public nonisolated static func stableID(forPath path: String) -> UUID {
         OnlineTrack.stableID(for: "localfile:\(path)")
     }
 
     // MARK: - Promotion
 
-    /// Saves a local file into Mixtape properly.
-    ///
-    /// This is just the ordinary import: the file is copied into Mixtape's own
-    /// storage, hashed, given an `.imported` row and queued for upload, exactly
-    /// as if the user had dragged it in. That means a second copy on disk, which
-    /// is what "save it to Mixtape" has always meant — and it is the only shape
-    /// that can reach the phone and the web, because the audio has to be
-    /// somewhere both of them can read.
+    /// Imports a local file normally: copied, hashed, given an .imported row and
+    /// queued for upload. That's what lets it reach other devices.
     @discardableResult
     public func promote(_ track: Track, using importService: ImportService) async -> ImportResult {
         let path   = track.file.localPath
@@ -257,9 +210,7 @@ public final class LocalFilesService: ObservableObject {
         tracks.removeAll { $0.file.localPath == path }
     }
 
-    /// Drops promotions whose library row no longer exists, so the file shows up
-    /// under Local Files again. The file is still on disk; pretending otherwise
-    /// would hide the user's own music from them.
+    /// Drops promotions whose row is gone so the file shows again.
     private func prunePromotions() {
         let live = promoted.filter { isInLibrary($0.value) }
         guard live.count != promoted.count else { return }
@@ -274,7 +225,6 @@ public final class LocalFilesService: ObservableObject {
 
     public func isPromoted(path: String) -> Bool { promoted[path] != nil }
 
-    /// Total bytes of everything currently listed — for the confirmation on
-    /// "Save all to Mixtape", which copies every one of these files.
+    /// For the "Save all" confirmation.
     public var totalSize: Int64 { tracks.reduce(0) { $0 + $1.file.fileSize } }
 }

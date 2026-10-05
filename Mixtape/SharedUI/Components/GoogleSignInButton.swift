@@ -1,9 +1,4 @@
-// GoogleSignInButton.swift
-// Mixtape — SharedUI/Components
-//
-// The web's `.btn.btn-ghost.auth-google`: a pill on the surface colour, a
-// hairline border that brightens under the pointer, and Google's own
-// four-colour G rather than an SF Symbol stand-in.
+// Matches the web's Google button: pill, hairline border, real four-colour G.
 
 import SwiftUI
 

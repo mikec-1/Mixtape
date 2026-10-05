@@ -1,38 +1,10 @@
-// SpotifyFollowService.swift
-// Mixtape — Core/Services
-//
-// Keeps imported Spotify playlists in step with the Spotify account they came
-// from, so adding a song there adds it here.
-//
-// Why polling
-//   Spotify has no push and no webhooks: nothing can tell Mixtape the moment a
-//   song is added. What it does have is `snapshot_id`, a version marker that
-//   changes on any edit — so "has this playlist changed?" costs one request of a
-//   few dozen bytes whatever the playlist's size, and the expensive full read
-//   only happens when the answer is yes. That's what makes checking forty
-//   playlists every quarter of an hour reasonable rather than rude.
-//
-// Why the link lives here and not on the playlist
-//   `Playlist.origin` already records that a playlist is a mirror, and that is
-//   stored. The Spotify id behind it is kept in this file's own JSON store, the
-//   same way `PlaylistMetadataService` keeps pins: the playlists table is synced
-//   to Supabase and a new column there is a migration plus a matching change in
-//   the web client.
-//
-// Why it follows the account
-//   Because a link is a fact about the account, and keeping it purely on the
-//   device meant losing it. Signing out and back in announced a library reset,
-//   which dropped every link on the floor — and a lost link takes the whole
-//   Spotify section of the playlist's menu with it, with no way back short of
-//   removing every song and importing them again. It never reached a second
-//   device either. So the identifying half rides in `user_metadata` beside the
-//   import ledger; see `SpotifyImportLedger` for why that store and not a table.
-//
-//   The bulk fields stay on the device: `contributedIDs`, `syncedIDs` and
-//   `uriByTrack` are tens of kilobytes for a large Liked Songs and there is no
-//   room for them there. A device without them is in the same position as one
-//   whose direction just changed — no agreed base, so the next sync reads both
-//   sides as additions and nothing is deleted anywhere. See `setDirection`.
+// Keeps imported Spotify playlists in sync with the account they came from.
+// Spotify has no webhooks, so we poll `snapshot_id`, which is cheap and only
+// changes on edit; the full read happens only when it moves.
+// Link identity (Spotify id, name, direction) syncs via `user_metadata` like
+// `SpotifyImportLedger`. The bulk fields (`contributedIDs`, `syncedIDs`,
+// `uriByTrack`) are too big for that and stay on device; without them the next
+// sync treats both sides as additions, so nothing is deleted.
 
 import Foundation
 import Combine
@@ -50,12 +22,8 @@ public final class SpotifyFollowService: ObservableObject {
             case likedSongs
         }
 
-        /// Which way changes travel.
-        ///
-        /// Presented as two independent toggles — "Spotify to Mixtape" and
-        /// "Mixtape to Spotify" — because that is what people actually want to
-        /// decide, and because ticking both is a real, well-defined thing here
-        /// rather than a compromise: see `merge`.
+        /// Which way changes travel. Shown as two toggles; both on is a real three-way
+        /// merge (see `merge`).
         public enum Direction: String, Codable, Sendable {
             case pull   // Spotify is the source. The playlist is read-only here.
             case push   // Mixtape is the source. Spotify's copy is overwritten.
@@ -68,31 +36,19 @@ public final class SpotifyFollowService: ObservableObject {
         /// Spotify's id for the source, or `SpotifyLibraryItem.likedSongsID`.
         public var sourceID: String
         public var kind: Kind
-        /// What it was called on Spotify when it was linked, for the byline and
-        /// for saying which playlist a failure was about.
+        /// Name on Spotify when linked, for the byline and error messages.
         public var name: String
         /// Spotify's version marker at the last successful check. Playlists only.
         public var snapshotID: String?
-        /// The liked-songs total at the last successful check. Liked Songs only —
-        /// it has no snapshot id, so this is the cheap signal in its place.
+        /// Liked Songs total at the last check. Stands in for a snapshot id, which Liked Songs lacks.
         public var likedCount: Int?
-        /// The library ids this link put into Favourites last time.
-        ///
-        /// Only Liked Songs uses it, and it is the whole reason unliking on
-        /// Spotify can un-heart here without ever touching a song the user
-        /// hearted themselves: a song leaving Spotify's list is only removed if
-        /// this list says Spotify is where it came from.
+        /// Library ids this link put into Favourites (Liked Songs only). An unlike on
+        /// Spotify only un-hearts songs listed here, never ones hearted in Mixtape.
         public var contributedIDs: [UUID]?
         public var lastSyncedAt: Date?
 
-        /// Stored rather than computed so that links written before directions
-        /// existed decode without a migration: a missing value is `pull`, which
-        /// is exactly what every link written until now was.
-        ///
-        /// Synthesised `Codable` ignores property defaults when *decoding*, so
-        /// this has to be an Optional with the fallback in the accessor. The
-        /// `= nil` is still worth having: it gives the memberwise init a
-        /// default, so the existing call sites don't have to say anything.
+        /// Optional so pre-direction links decode as `pull`. Synthesised Codable ignores
+        /// defaults when decoding, hence the accessor fallback.
         public var directionRaw: String? = nil
 
         public var direction: Direction {
@@ -100,28 +56,16 @@ public final class SpotifyFollowService: ObservableObject {
             set { directionRaw = newValue.rawValue }
         }
 
-        /// The track list both ends agreed on at the last successful sync — the
-        /// base of the three-way merge. Without it, "this song is here and not
-        /// there" is unanswerable: it could be an add on one side or a delete on
-        /// the other, and guessing wrong either resurrects deleted songs forever
-        /// or quietly deletes new ones.
+        /// The track list both sides agreed on at the last sync: the three-way merge base.
         public var syncedIDs: [UUID]? = nil
 
-        /// Library track id → the Spotify URI it was matched to, so a push
-        /// doesn't re-search songs it has already found. Keyed by string
-        /// because `UUID` isn't a `Codable` dictionary key in JSON.
+        /// Track id -> matched Spotify URI, so a push doesn't re-search. String keys
+        /// because UUID keys don't encode as a JSON object.
         public var uriByTrack: [String: String]? = nil
 
-        /// The name, description and cover both ends agreed on last time — the
-        /// same idea as `syncedIDs`, for everything about a playlist that isn't
-        /// its songs. Without a base, "these differ" can't say *which* side
-        /// moved, so a two-way playlist would push its old title back over a
-        /// rename made on Spotify (or the other way round) forever.
-        ///
-        /// The cover is compared by Spotify's image URL on their side and by a
-        /// hash of the bytes on ours: Spotify re-encodes what it's given, so the
-        /// image that comes back is never byte-identical to the one that went
-        /// up and comparing pictures directly would upload on every tick.
+        /// Name, description and cover both sides agreed on last, so a sync knows which
+        /// side changed. Covers compare by Spotify's image URL there and a byte hash here,
+        /// since Spotify re-encodes uploads.
         public var syncedName: String? = nil
         public var syncedDescription: String? = nil
         public var syncedCoverURL: String? = nil
@@ -145,25 +89,18 @@ public final class SpotifyFollowService: ObservableObject {
     private let exportService: SpotifyExportService
     private let libraryService: LibraryService
 
-    /// The one `AppDependencies` builds, so the auth service can hand it the
-    /// account's copy on sign-in. Weak and static for the same reason as
-    /// `SpotifyImportLedger.shared`: it is not a singleton.
+    /// Set by `AppDependencies` so auth can hand over the account's copy. Not a singleton.
     public private(set) static weak var shared: SpotifyFollowService?
 
     private var links: [UUID: Link] = [:]
-    /// The playlists the last publish showed. See `propagateLocalDeletions` —
-    /// this is what tells a deletion apart from a library that hasn't loaded.
+    /// Playlists from the last publish, so a deletion isn't confused with a library
+    /// that hasn't loaded yet.
     private var seenPlaylistIDs: Set<UUID> = []
     private var timer: Task<Void, Never>?
     private var running: Task<Void, Never>?
     private var localEdits: AnyCancellable?
 
-    /// How often the background check runs while the app is open.
-    ///
-    /// Three minutes rather than the quarter hour this started at. The unchanged
-    /// case is one `snapshot_id` request per playlist — a few dozen bytes — so
-    /// the cost of asking more often is small, and a quarter of an hour was long
-    /// enough that people reasonably concluded nothing was syncing at all.
+    /// Background check interval. The unchanged case is one tiny request per playlist.
     private static let interval: TimeInterval = 3 * 60
 
     public init(client: SpotifyClient,
@@ -182,16 +119,13 @@ public final class SpotifyFollowService: ObservableObject {
 
         observeLocalEdits()
 
-        // A wiped library has no playlists left to follow, and a link pointing
-        // at a playlist that no longer exists would recreate songs the user just
-        // deleted on the next tick.
+        // After a wipe, drop links so the next tick doesn't restore deleted songs.
         NotificationCenter.default.addObserver(
             forName: .mixUserDataReset, object: nil, queue: .main
         ) { [weak self] note in
             MainActor.assumeIsolated {
                 let reset = UserDataReset.from(note)
-                // An account switch is not a wipe: the links this device now
-                // holds are the incoming user's own, adopted moments ago.
+                // An account switch isn't a wipe; the links are already the new user's.
                 guard reset.clearedLibrary, !reset.isAccountSwitch else { return }
                 self?.forgetAllLinks()
             }
@@ -207,41 +141,26 @@ public final class SpotifyFollowService: ObservableObject {
         save()
     }
 
-    /// Changes which way an existing link travels.
-    ///
-    /// The direction is also what decides whether the playlist is editable
-    /// here, so this has to move the origin with it — a playlist that pushes to
-    /// Spotify is one the user edits, and leaving it a read-only mirror would
-    /// mean a sync direction nobody could ever feed.
+    /// Changes a link's direction. Also moves the origin, since only `pull` is read-only.
     public func setDirection(_ direction: Link.Direction, forPlaylist playlistID: UUID) {
         guard var link = links[playlistID], link.direction != direction else { return }
         link.direction = direction
-        // The agreed-on base belongs to the old arrangement. Dropping it makes
-        // the next sync treat both sides as additions, which for a switch of
-        // direction is the safe reading: nothing is deleted anywhere.
+        // Drop the old base so the next sync treats both sides as additions and deletes nothing.
         link.syncedIDs = nil
         links[playlistID] = link
         applyOrigin(for: link, playlistID: playlistID)
         save()
     }
 
-    /// Read-only is for one arrangement only: Spotify is the source and the user
-    /// doesn't edit this copy. Anything the user's own edits feed — push, or a
-    /// two-way merge — has to stay an ordinary owned playlist.
-    ///
-    /// Liked Songs is never a mirror at all: it syncs *into* Favourites, which
-    /// stays the user's own editable list. See `syncLikedSongs`.
+    /// Read-only only for pull. Push and two-way stay editable. Liked Songs syncs
+    /// into Favourites, which is always editable.
     private func applyOrigin(for link: Link, playlistID: UUID) {
         guard link.kind == .playlist else { return }
         libraryService.setOrigin(link.direction == .pull ? .spotifyMirror : .owned,
                                  forPlaylist: playlistID)
     }
 
-    /// Stops following, and hands the playlist back as an ordinary one.
-    ///
-    /// Nothing is removed: the songs it collected are songs the user has, and a
-    /// playlist that emptied itself when unlinked would make following it a
-    /// decision people were afraid to reverse.
+    /// Stops following. Keeps the songs.
     public func unlink(playlistID: UUID) {
         guard let link = links.removeValue(forKey: playlistID) else { return }
         unlinked[playlistID] = contributions(of: link, playlistID: playlistID)
@@ -253,17 +172,13 @@ public final class SpotifyFollowService: ObservableObject {
         save()
     }
 
-    /// What this link put into a playlist the user also owns — i.e. Favourites.
-    ///
-    /// Only meaningful for a Liked Songs link: a followed playlist's whole
-    /// contents are the link's contribution, and its own row count says so.
+    /// What this link added to an owned list (Favourites). Only meaningful for Liked Songs.
     public func contributionCount(playlistID: UUID) -> Int {
         importedSongs(playlistID: playlistID).count
     }
 
-    /// What an import put into this playlist and is still there — whether the
-    /// link is standing or was removed earlier. The tombstone keeps the list,
-    /// so "take the imported songs out" stays available after unlinking.
+    /// Songs an import put here that are still present, even after unlinking
+    /// (the tombstone keeps the list).
     public func importedSongs(playlistID: UUID) -> [UUID] {
         let contributed = links[playlistID].map { contributions(of: $0, playlistID: playlistID) }
             ?? unlinked[playlistID] ?? []
@@ -279,40 +194,23 @@ public final class SpotifyFollowService: ObservableObject {
             : (libraryService.playlist(id: playlistID)?.trackIDs ?? [])
     }
 
-    /// The songs still in the playlist that this link put there, each once.
-    ///
-    /// `contributedIDs` is an append-only record of what has been mirrored, so
-    /// the same song can appear in it more than once — Spotify listing it again
-    /// after a push, most often. Counting the raw array claimed 2,206 songs in
-    /// a playlist holding 2,086.
+    /// Contributed songs still in the playlist, deduped (`contributedIDs` is append-only).
     private func contributedSongs(link: Link, playlistID: UUID) -> [UUID] {
         let current = Set(libraryService.playlist(id: playlistID)?.trackIDs ?? [])
         var seen: Set<UUID> = []
         return (link.contributedIDs ?? []).filter { current.contains($0) && seen.insert($0).inserted }
     }
 
-    /// Stops following *and* takes the songs this link brought over back out.
-    ///
-    /// The two halves have to happen together: removing the songs while the
-    /// link stands would just mean the next pull put them all back.
-    ///
-    /// Only the songs this link contributed, never one the user hearted
-    /// themselves — that is what `contributedIDs` is for. Anything still held
-    /// by a playlist the user made, a saved album or a file of their own stays
-    /// in the library; everything else goes with it, because
-    /// `LibraryService.removeTracks` sweeps what nothing holds any more.
-    ///
-    /// There used to be a second, gentler option here — take them out of Liked
-    /// Songs but leave them in the library. Under derived membership that is
-    /// not a state the library can hold: a song no list holds is not in the
-    /// library, so the "gentler" choice left thousands of rows that every
-    /// screen but All Songs had already forgotten.
+    /// Unlinks and removes the songs this link contributed, together, or the next
+    /// pull would add them back. Songs still held by the user's own playlists, saved
+    /// albums or files stay; `removeTracks` sweeps the rest.
     @discardableResult
     public func unlinkRemovingImports(playlistID: UUID) -> Int {
+
+        SupabaseSyncService.allowBulk("spotify-unlink")
         let mine = importedSongs(playlistID: playlistID)
         unlink(playlistID: playlistID)
-        // Emptied rather than dropped: the key is what stops `adoptRemote`
-        // putting the link back, and these songs are no longer owed a cleanup.
+        // Emptied, not removed: the key stops `adoptRemote` restoring the link.
         if unlinked[playlistID] != nil { unlinked[playlistID] = [] }
         guard !mine.isEmpty else { return 0 }
         libraryService.removeTracks(ids: mine, fromPlaylist: playlistID)
@@ -346,16 +244,8 @@ public final class SpotifyFollowService: ObservableObject {
         timer = nil
     }
 
-    /// Pushes an edit made here without waiting for the quarter-hour tick.
-    ///
-    /// Polling is the right shape for "did something change on Spotify?",
-    /// because only Spotify knows. It is the wrong shape entirely for "did
-    /// something change here" — the app is holding the answer. Adding a song to
-    /// a two-way playlist and watching Spotify not have it for fifteen minutes
-    /// is the difference between a feature and a promise.
-    ///
-    /// Debounced, because dragging twenty songs in publishes twenty times and
-    /// each of those would otherwise be a write to somebody's Spotify account.
+    /// Pushes local edits to two-way/push links right away instead of waiting for
+    /// the timer. Debounced, since a drag of 20 songs publishes 20 times.
     private func observeLocalEdits() {
         localEdits = libraryService.$playlists
             .debounce(for: .seconds(1.5), scheduler: DispatchQueue.main)
@@ -370,9 +260,7 @@ public final class SpotifyFollowService: ObservableObject {
         await propagateLocalDeletions(playlists)
         let due = links.compactMap { id, link -> UUID? in
             guard link.kind == .playlist, link.direction.pushes else { return nil }
-            // No base means the two ends have never agreed on anything yet, so
-            // there is no "changed since" to measure. The timer's ordinary pass
-            // establishes one; this only chases edits after that.
+            // No base yet: the timer's pass establishes one first.
             guard let base = link.syncedIDs,
                   let playlist = playlists.first(where: { $0.id == id }),
                   playlist.trackIDs != base
@@ -382,19 +270,9 @@ public final class SpotifyFollowService: ObservableObject {
         for id in due { await sync(playlistID: id, force: true) }
     }
 
-    /// Deleting a linked playlist here deletes it on Spotify.
-    ///
-    /// Only for a link that pushes: a playlist you were merely following is one
-    /// you removed your *copy* of, and reaching into the account to remove the
-    /// original would be doing something nobody asked for. Spotify has no
-    /// delete, so this unfollows — which is what deleting a playlist does in
-    /// their own client.
-    ///
-    /// It watches for a playlist *going away*, never for one being absent: at
-    /// launch, and for a moment after an account switch, the library is empty
-    /// because nothing has loaded yet, and "absent" there would mean deleting
-    /// every linked playlist on the account. `seenPlaylistIDs` is what makes the
-    /// difference between the two, and an empty list is never treated as news.
+    /// Deleting a push-linked playlist unfollows it on Spotify (Spotify has no
+    /// delete). Pull links only lose the local copy. Only reacts to a playlist going
+    /// away, never to one missing, so an empty library at launch deletes nothing.
     private func propagateLocalDeletions(_ playlists: [Playlist]) async {
         guard !playlists.isEmpty else { return }
         let present = Set(playlists.map(\.id))
@@ -415,9 +293,7 @@ public final class SpotifyFollowService: ObservableObject {
                 let token = try await auth.validAccessToken()
                 try await client.unfollowPlaylist(playlistID: link.sourceID, accessToken: token)
             } catch {
-                // The playlist is gone here either way; a failed write to
-                // Spotify leaves their copy standing rather than blocking the
-                // deletion the user actually made.
+                // Deleted here regardless; a failed Spotify write just leaves their copy.
                 MixLog.sync.error("[SpotifyFollow] Couldn't remove \(link.name) from Spotify: \(error)")
             }
         }
@@ -426,9 +302,7 @@ public final class SpotifyFollowService: ObservableObject {
 
     // MARK: - Syncing
 
-    /// One pass over every followed playlist. Serialised against itself: the
-    /// timer and an opened playlist can both ask, and two passes writing the same
-    /// library rows is how you get duplicates.
+    /// Syncs every link. Serialised so the timer and a manual sync can't both write rows.
     public func syncAll(force: Bool = false) async {
         guard isAvailable, !links.isEmpty else { return }
         await withRunning {
@@ -438,8 +312,7 @@ public final class SpotifyFollowService: ObservableObject {
         }
     }
 
-    /// Checks one followed playlist. `force` skips the snapshot shortcut, which
-    /// is what a manual "Sync now" means.
+    /// Syncs one link. `force` skips the snapshot check ("Sync now").
     public func sync(playlistID: UUID, force: Bool = false) async {
         guard isAvailable, links[playlistID] != nil else { return }
         await withRunning {
@@ -458,11 +331,8 @@ public final class SpotifyFollowService: ObservableObject {
     private func syncOne(playlistID: UUID, force: Bool) async {
         guard var link = links[playlistID] else { return }
 
-        // The playlist itself may have been deleted since it was linked. Drop the
-        // link rather than resurrecting it — and if this link pushes, take
-        // Spotify's copy with it, the same as `propagateLocalDeletions`. Both
-        // paths exist because either can get here first: the timer can land
-        // between the deletion and the debounced publish that notices it.
+        // Playlist deleted locally since linking: drop the link, and for push links
+        // unfollow on Spotify too. Races `propagateLocalDeletions`, so both handle it.
         if link.kind == .playlist, libraryService.playlist(id: playlistID) == nil {
             let deleted = seenPlaylistIDs.contains(playlistID)
             links[playlistID] = nil
@@ -492,10 +362,8 @@ public final class SpotifyFollowService: ObservableObject {
         } catch is CancellationError {
             return
         } catch SpotifyPlaylistError.notFoundOrPrivate where link.kind == .playlist {
-            // The playlist is gone from Spotify — deleted, or made private to
-            // us. A link that pulls treats that as the deletion it almost always
-            // is and removes the copy here; a link that only pushes keeps its
-            // playlist and simply stops having anywhere to send it.
+            // Gone from Spotify (deleted or made private). Pull links delete the local
+            // copy; push-only links keep it.
             links[playlistID] = nil
             lastSynced[playlistID] = nil
             failures[playlistID]   = nil
@@ -507,32 +375,21 @@ public final class SpotifyFollowService: ObservableObject {
                 libraryService.setOrigin(.owned, forPlaylist: playlistID)
             }
         } catch {
-            // A failed check is not a reason to unfollow: the network comes back,
-            // and a playlist that quietly stopped following after one flight
-            // would be worse than one that says it couldn't reach Spotify.
+            // A failed check never unfollows; it reports the error.
             failures[playlistID] = (error as? LocalizedError)?.errorDescription
                                 ?? error.localizedDescription
         }
     }
 
-    /// One followed playlist, in whichever direction it was set up for.
-    ///
-    /// `pull` is the original behaviour: Spotify's list wins outright, and the
-    /// copy here is read-only. `push` is its mirror image. `both` is a proper
-    /// three-way merge against `syncedIDs`, the list the two ends last agreed
-    /// on — which is the only way to tell an add on one side from a delete on
-    /// the other. Without a base, a song present here and missing there is
-    /// ambiguous, and either guess is wrong half the time: assume "added here"
-    /// and deletions never stick, assume "deleted there" and new songs vanish.
+    /// Syncs one playlist. `pull`: Spotify wins, read-only here. `push`: the
+    /// reverse. `both`: three-way merge against `syncedIDs`.
     private func syncPlaylist(_ playlistID: UUID,
                               link: inout Link,
                               token: String,
                               force: Bool) async throws {
         let localIDs = libraryService.playlist(id: playlistID)?.trackIDs ?? []
 
-        // The cheap question first. A snapshot that hasn't moved means Spotify's
-        // half is unchanged, so unless this link also pushes and the local half
-        // *has* moved, there is nothing to do and nothing to fetch.
+        // Snapshot unchanged and nothing to push: done.
         if !force, let known = link.snapshotID {
             let current = try await client.fetchSnapshotID(playlistID: link.sourceID,
                                                            accessToken: token)
@@ -555,9 +412,7 @@ public final class SpotifyFollowService: ObservableObject {
         let remoteIDs = await importService.importTracks(remote.tracks, owned: &owned)
         guard !Task.isCancelled else { throw CancellationError() }
 
-        // Spotify's rows come back with their URIs attached, so every song that
-        // is already on both ends gets its URI recorded for free. That is what
-        // keeps a push from re-searching the whole playlist every time.
+        // Record URIs for songs present on both sides, so pushes don't re-search them.
         var uris = link.uriByTrack ?? [:]
         for (id, track) in zip(remoteIDs, remote.tracks) {
             if let uri = track.uri { uris[id.uuidString] = uri }
@@ -575,8 +430,7 @@ public final class SpotifyFollowService: ObservableObject {
 
         // --- Mixtape's half ---
         if merged != localIDs {
-            // `setTracks` goes around `isEditable` on purpose — this is the
-            // source speaking, which is the one edit a mirror accepts.
+            // `setTracks` bypasses `isEditable`: the source is allowed to write a mirror.
             libraryService.setTracks(merged, inPlaylist: playlistID)
             importService.finaliseImport()
         }
@@ -584,10 +438,7 @@ public final class SpotifyFollowService: ObservableObject {
         // --- Spotify's half ---
         if link.direction.pushes, merged != remoteIDs {
             let pushURIs = try await resolveURIs(for: merged, link: &link)
-            // A song with no match on Spotify can't be written there, but it is
-            // still a song the user has — so it stays in the merged list here
-            // and is simply absent from Spotify's copy. Blocking the whole push
-            // on one unmatchable track would strand every other change.
+            // Unmatched songs stay here and are just absent on Spotify.
             try await client.replacePlaylistItems(uris: pushURIs,
                                                   inPlaylist: link.sourceID,
                                                   accessToken: token)
@@ -604,17 +455,9 @@ public final class SpotifyFollowService: ObservableObject {
         link.syncedIDs = merged
     }
 
-    /// The parts of a playlist that aren't its songs: title, description, cover.
-    ///
-    /// Same three-way rule as the track list, against the same kind of base
-    /// (`syncedName` and friends): whichever side moved since the last agreement
-    /// is the side that wins, and a side that didn't move never overwrites one
-    /// that did. When both moved, Spotify's wins — it's the copy other people
-    /// can see.
-    ///
-    /// Everything here is best-effort. A cover that Spotify won't take, or a
-    /// grant made before covers were part of the picture, must not fail a sync
-    /// that has already moved the songs.
+    /// Title, description and cover, with the same three-way rule: the side that
+    /// moved since the last agreement wins; if both moved, Spotify wins.
+    /// Best-effort: failures here never fail the song sync.
     private func syncDetails(_ playlistID: UUID,
                              link: inout Link,
                              remote: SpotifyPlaylist,
@@ -659,8 +502,7 @@ public final class SpotifyFollowService: ObservableObject {
                                                         name: name, description: desc,
                                                         accessToken: token)
             }
-            // Only a cover that changed *here* since the last agreement, and
-            // only when Spotify's didn't change too.
+            // Push the cover only if it changed here and not on Spotify.
             if !remoteCoverMoved, let art = local.artworkData, localCoverHash != link.syncedCoverHash {
                 if let jpeg = ImageDownsampler.downsampledJPEG(from: art, maxDimension: 640,
                                                                compressionQuality: 0.7) {
@@ -668,11 +510,8 @@ public final class SpotifyFollowService: ObservableObject {
                         try await client.uploadPlaylistCover(jpeg, playlistID: link.sourceID,
                                                              accessToken: token)
                         link.syncedCoverHash = localCoverHash
-                        // The upload replaced the image, so the URL fetched a
-                        // moment ago is already stale. Leaving the recorded one
-                        // untouched makes the next pass read Spotify's new URL as
-                        // *their* change and pull our own picture back down; the
-                        // flag stops that.
+                        // The fetched URL is stale after an upload; the flag stops the next pass
+                        // reading it as a remote change.
                         pushedCover = true
                     } catch {
                         let name = link.name   // a log message can't capture an inout
@@ -682,10 +521,7 @@ public final class SpotifyFollowService: ObservableObject {
             }
         }
 
-        // The new agreement: `pulledName`/`pulledDescription` already hold the
-        // value that won, whichever side it came from. The cover URL is left nil
-        // by a push we just made — Spotify's image has changed and we haven't
-        // seen its new URL yet, so the next pass reads it rather than guessing.
+        // Record the new agreement. Cover URL stays nil after a push until we see Spotify's new one.
         link.syncedName        = pulledName
         link.syncedDescription = pulledDescription
         link.syncedCoverURL    = pushedCover ? nil : remoteCover
@@ -697,13 +533,8 @@ public final class SpotifyFollowService: ObservableObject {
         return data
     }
 
-    /// The three-way merge, as sets against the last agreed-on list.
-    ///
-    /// Anything added on either side since the base is added; anything deleted
-    /// on either side is deleted; a song deleted on one side and untouched on
-    /// the other goes, because "untouched" is not a vote to keep it. Order
-    /// follows the local list, with songs new on Spotify appended in Spotify's
-    /// order, so a merge never silently reshuffles a playlist somebody arranged.
+    /// Three-way merge: adds from either side are kept, deletes from either side
+    /// win. Local order first, then new Spotify songs in Spotify order.
     static func merge(base: [UUID], local: [UUID], remote: [UUID]) -> [UUID] {
         let baseSet = Set(base), localSet = Set(local), remoteSet = Set(remote)
 
@@ -722,13 +553,8 @@ public final class SpotifyFollowService: ObservableObject {
         return out
     }
 
-    /// Spotify URIs for a merged list, searching only for the songs that don't
-    /// already have one recorded.
-    ///
-    /// Only confident matches are taken. An uncertain guess is fine to offer
-    /// someone in the export sheet, where they can look at it and untick it; it
-    /// is not fine to write into their Spotify account on a timer with nobody
-    /// watching.
+    /// Spotify URIs for a merged list, searching only unmatched songs. Only
+    /// confident matches; nobody reviews a timed write.
     private func resolveURIs(for trackIDs: [UUID], link: inout Link) async throws -> [String] {
         var known = link.uriByTrack ?? [:]
 
@@ -741,12 +567,8 @@ public final class SpotifyFollowService: ObservableObject {
             for candidate in plan.confident {
                 if let uri = candidate.match?.uri { known[candidate.track.id.uuidString] = uri }
             }
-            // A song we couldn't look up is not a song Spotify doesn't have,
-            // and the push that follows *replaces* the remote list — so
-            // proceeding would delete songs from the user's Spotify playlist on
-            // the strength of a lookup that never happened, then record the
-            // result as agreed and never revisit it. Stop instead; the sync
-            // runs again, and by then the limit has lifted.
+            // Stop on unchecked lookups: the push replaces the remote list, so it would
+            // delete songs based on a lookup that never happened.
             if let reason = plan.uncheckedReason {
                 switch reason {
                 case .rateLimited(let wait): throw SpotifyPlaylistError.rateLimited(retryAfter: wait)
@@ -758,28 +580,19 @@ public final class SpotifyFollowService: ObservableObject {
         return trackIDs.compactMap { known[$0.uuidString] }
     }
 
-    /// Liked Songs mirrors into Favourites, which is *not* a read-only list — it
-    /// is the user's own, and Mixtape's hearts and Spotify's live in it together.
-    ///
-    /// So this is a mirror of Spotify's half only: a song Spotify no longer lists
-    /// is un-hearted here only if this link is what hearted it in the first place
-    /// (`contributedIDs`). A song the user hearted in Mixtape is never touched by
-    /// anything happening on Spotify.
-    /// Sending the other way is *additive and only additive*. Spotify's Liked
-    /// Songs and Mixtape's Favourites are both real lists that their owner
-    /// curates directly, so the playlist rule — Mixtape's copy replaces
-    /// Spotify's — would be destructive here: it would unlike, on Spotify,
-    /// every song the user never had in Mixtape. A heart made here is added
-    /// there; a heart removed here is left alone.
+    /// Liked Songs <-> Favourites. Pull only un-hearts songs this link
+    /// contributed. Push only ever adds, since both lists are curated directly.
     private func syncLikedSongs(link: inout Link, token: String, force: Bool) async throws {
-        // Push before the early-out. Spotify's count not having moved says
-        // nothing about whether *this* side has new hearts to send, and
-        // returning here used to mean a two-way link never pushed at all.
+        // Push before the early-out; an unchanged Spotify count says nothing about local hearts.
         if link.direction.pushes {
             try await pushNewFavourites(link: &link, token: token)
         }
 
         guard link.direction.pulls else { return }
+        // Without this link's last list (`contributedIDs` stays on device, so a new install has none) every
+        // Spotify like missing here looks new. The device that linked keeps syncing; here only a sync the user
+        // asks for runs.
+        guard link.contributedIDs != nil || force else { return }
 
         if !force, let known = link.likedCount {
             let current = try await client.fetchLikedSongsCount(accessToken: token)
@@ -804,9 +617,12 @@ public final class SpotifyFollowService: ObservableObject {
         let current  = Set(libraryService.playlist(id: Playlist.favouritesID)?.trackIDs ?? [])
         let previous = Set(link.contributedIDs ?? [])
 
-        let toAdd    = ids.filter { !current.contains($0) }
+        // Only songs liked on Spotify since the last sync, so one unliked here isn't brought back.
+        let toAdd    = ids.filter { !current.contains($0) && !previous.contains($0) }
         let toRemove = previous.subtracting(wanted).intersection(current)
 
+        // Linking and Sync Now may change more than 50 likes; a background sync is refused past that.
+        if force { SupabaseSyncService.allowBulk("spotify-sync") }
         if !toAdd.isEmpty {
             libraryService.addTracks(ids: toAdd, toPlaylist: Playlist.favouritesID)
         }
@@ -820,22 +636,11 @@ public final class SpotifyFollowService: ObservableObject {
         if !toAdd.isEmpty { importService.finaliseImport() }
     }
 
-    /// Adds the favourites Spotify didn't put here to Spotify's Liked Songs.
-    ///
-    /// The candidate set is Favourites minus `contributedIDs` — everything this
-    /// link didn't contribute is, by definition, a heart made in Mixtape. Once
-    /// a song is saved on Spotify the next pull lists it and records it as
-    /// contributed, which is what stops it being offered again on every tick;
-    /// until that pull happens the count guard keeps this cheap.
-    ///
-    /// Unmatched songs are skipped rather than fatal: one song Spotify has no
-    /// record of must not strand the rest.
+    /// Adds Mixtape-made hearts (Favourites minus `contributedIDs`) to Liked Songs.
+    /// Once pulled back they count as contributed and aren't offered again.
+    /// Unmatched songs are skipped.
     private func pushNewFavourites(link: inout Link, token: String) async throws {
-        // Nothing has been pulled yet, so there is no way to tell a heart made
-        // here from one of Spotify's own — every favourite would look local and
-        // the first sync would push the whole list back at the account it just
-        // came from. Let the pull below establish the baseline first; the next
-        // tick pushes for real.
+        // No pull yet, so every favourite would look local. Wait for the baseline.
         guard let contributedList = link.contributedIDs else { return }
 
         let favourites = libraryService.playlist(id: Playlist.favouritesID)?.trackIDs ?? []
@@ -848,11 +653,7 @@ public final class SpotifyFollowService: ObservableObject {
 
         _ = try await exportService.pushLikes(uris: uris)
 
-        // Spotify lists them now, so they are this link's contribution too —
-        // which also means the next pull won't re-offer them, and an unlike on
-        // Spotify later un-hearts them here like any other mirrored song.
-        // Deduped on the way in: this is a record of *which* songs came from
-        // this link, not of how many times each was seen.
+        // Now contributed, deduped.
         var seen: Set<UUID> = []
         link.contributedIDs = (contributedList + mine).filter { seen.insert($0).inserted }
     }
@@ -860,11 +661,8 @@ public final class SpotifyFollowService: ObservableObject {
     // MARK: - Reset
 
     private func forgetAllLinks(push: Bool = true) {
-        // A wipe is a removal and needs the same record an unlink does, or the
-        // next session refresh adopts the links straight back. An account
-        // switch (`push: false`) is the opposite case: the tombstones belong to
-        // the user signing out, and keeping them would make this device refuse
-        // the incoming user's links forever.
+        // A wipe tombstones links like an unlink. An account switch (`push: false`)
+        // must not, or the incoming user's links would be refused.
         if push {
             for (id, link) in links { unlinked[id] = contributions(of: link, playlistID: id) }
         } else {
@@ -876,11 +674,8 @@ public final class SpotifyFollowService: ObservableObject {
         save(push: push)
     }
 
-    /// Replaces the links with the account's own when a different user signs in.
-    ///
-    /// Local-only on the way out: the links being dropped belong to the account
-    /// signing *out*, and the session is already the new one, so pushing the
-    /// empty map would delete the incoming user's links from their account.
+    /// Swaps in the new account's links. Local-only: pushing now would overwrite
+    /// the incoming user's links.
     public func accountDidChange(remote raw: String?) {
         forgetAllLinks(push: false)
         adoptRemote(raw)
@@ -916,18 +711,14 @@ public final class SpotifyFollowService: ObservableObject {
 
     // MARK: - Account sync
 
-    /// Set by `AppDependencies` — writes the encoded links into `user_metadata`.
+    /// Writes the encoded links to `user_metadata`.
     public var pushWriter: ((String) -> Void)?
 
     private var isApplyingRemote = false
     private var pushTask: Task<Void, Never>?
 
-    /// The account's copy, taken as authoritative on sign-in and on every
-    /// session refresh — the same contract the import ledger uses.
-    ///
-    /// This device's `contributedIDs`, `syncedIDs` and `uriByTrack` survive the
-    /// adoption: they are not in the payload, and throwing away the only copy
-    /// of the agreed base would make the next sync re-add everything both ways.
+    /// Adopts the account's copy on sign-in and refresh. Local bulk fields survive
+    /// since they aren't in the payload.
     public func adoptRemote(_ raw: String?) {
         guard let raw, let data = raw.data(using: .utf8),
               let remote = try? JSONDecoder().decode([String: Link].self, from: data)
@@ -936,8 +727,7 @@ public final class SpotifyFollowService: ObservableObject {
         var stale = false
         for (key, var link) in remote {
             guard let id = UUID(uuidString: key) else { continue }
-            // A link the user removed here is not a link this device is
-            // missing. See `unlinked`.
+            // Unlinked here; see `unlinked`.
             if unlinked[id] != nil { stale = true; continue }
             let local = links[id]
             link.contributedIDs = link.contributedIDs ?? local?.contributedIDs
@@ -949,38 +739,21 @@ public final class SpotifyFollowService: ObservableObject {
             isApplyingRemote = true
             links = merged
             lastSynced = links.compactMapValues(\.lastSyncedAt)
-            // A pulled playlist is read-only here and a pushed one isn't, and the
-            // playlist rows arriving on a new device know nothing about that.
+            // New devices need the read-only flag set from the link direction.
             for (id, link) in links { applyOrigin(for: link, playlistID: id) }
             save()
             isApplyingRemote = false
         }
-        // The account still lists something this device unlinked: the push that
-        // was meant to say so lost the race, so say it again.
+        // The account still has a link we removed; push again.
         if stale { schedulePush() }
     }
 
     // MARK: Removed links
 
-    /// Links the user removed on this device.
-    ///
-    /// `adoptRemote` takes the account's copy as authoritative, and a deletion
-    /// is invisible in that model: the removed link is simply absent from the
-    /// map, which reads exactly like a device that never had it. `authState`'s
-    /// `didSet` adopts on every session refresh, so any refresh landing before
-    /// the debounced push did put the link straight back — and the next sync
-    /// pass re-imported every song with it, about fifteen seconds after the
-    /// user had removed them.
-    ///
-    /// Kept in defaults rather than the links file so the file stays the one
-    /// thing it is; it is a handful of UUIDs, and it is cleared the moment the
-    /// same playlist is linked again.
-    /// The value is what that link had put into the playlist, so the offer to
-    /// take those songs back out survives the unlink. It used to be a plain
-    /// `Set` of ids, and dropping the link dropped `contributedIDs` with it:
-    /// once unlinked there was no longer anything that knew which of 2,129
-    /// liked songs had come from Spotify, and the only control that could
-    /// remove them lived on a dialog that no longer had a reason to open.
+    /// Links removed on this device, with the songs each had contributed.
+    /// `adoptRemote` can't see deletions, so without this a refresh before the
+    /// debounced push would restore the link and re-import its songs. Kept in
+    /// defaults; cleared when the playlist is linked again.
     private var unlinked: [UUID: [UUID]] = SpotifyFollowService.loadUnlinked() {
         didSet {
             UserDefaults.standard.set(
@@ -993,8 +766,7 @@ public final class SpotifyFollowService: ObservableObject {
 
     private static func loadUnlinked() -> [UUID: [UUID]] {
         let stored = UserDefaults.standard.object(forKey: unlinkedKey)
-        // The `[String]` shape shipped first; a device upgrading over it keeps
-        // its tombstones and loses only the contribution lists it never had.
+        // Old `[String]` format: keep the tombstones, without contribution lists.
         if let ids = stored as? [String] {
             return Dictionary(uniqueKeysWithValues: ids.compactMap(UUID.init(uuidString:)).map { ($0, []) })
         }
@@ -1005,8 +777,7 @@ public final class SpotifyFollowService: ObservableObject {
         }
     }
 
-    /// Debounced: one sync pass touches several links and that is one account
-    /// update, not one per playlist.
+    /// Debounced: one account write per sync pass.
     private func schedulePush() {
         pushTask?.cancel()
         pushTask = Task { @MainActor in

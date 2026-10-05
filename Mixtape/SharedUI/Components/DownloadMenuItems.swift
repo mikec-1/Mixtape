@@ -1,17 +1,4 @@
-// DownloadMenuItems.swift
-// Mixtape — SharedUI/Components
-//
-// The download section of a track's context menu, in one place.
-//
-// It used to be written out per screen, and each copy had drifted: the playlist
-// menu offered Download, Remove Download and a disabled "already offline" line;
-// the artist, search and queue menus offered *only* Remove Download, so a song
-// could be downloaded from one list and not from another for no reason a user
-// could see. The Mac table offered neither — the only way to download a single
-// song on the Mac was to put it in a playlist and take the whole playlist
-// offline.
-//
-// Five states, one list, everywhere.
+// Download section of a track's context menu, shared by every surface.
 
 import SwiftUI
 #if os(macOS)
@@ -27,10 +14,8 @@ struct DownloadMenuItems: View {
     var body: some View {
         statusItems
         #if os(macOS)
-        // Whether there's a file to show is a question about the disk, not about
-        // how the file got there — an imported song, a downloaded one and a
-        // cached Discover play all answer yes. `fileOnDisk` stats the disk, which
-        // is why it's asked here (once, when the menu opens) and not per row.
+        // Any local file counts (import, download, cache). `fileOnDisk` stats the
+        // disk, so it's asked once when the menu opens.
         if let url = track.fileOnDisk {
             Divider()
             Button("Show in Finder", systemImage: "folder") {
@@ -45,10 +30,7 @@ struct DownloadMenuItems: View {
         switch downloads.status(for: track.id) {
 
         case .streamOnly:
-            // Nowhere to fetch from means no row. It used to show the reason as
-            // a disabled item, which reads as a dead end in a list of actions —
-            // and the step it asks for ("add it to your library") is its own
-            // item higher up the same menu.
+            // No row when there's nothing to fetch from.
             if downloads.downloadUnavailableReason(for: track) == nil {
                 Button("Download", systemImage: "arrow.down.circle") {
                     downloads.download(track)
@@ -74,9 +56,7 @@ struct DownloadMenuItems: View {
             }
 
         case .local:
-            // Imported from disk: already offline, and re-fetching it would mean
-            // downloading a file the user handed us in the first place. Nothing
-            // to offer, so nothing is drawn.
+            // Imported from disk: already offline, nothing to offer.
             EmptyView()
         }
     }
@@ -84,11 +64,8 @@ struct DownloadMenuItems: View {
 
 // MARK: - A selection of songs
 
-/// The same section for several songs at once.
-///
-/// Deliberately not five states again: a selection is usually a mix of them, and
-/// the honest answer is how many of them can still be downloaded and how many
-/// already have been. Items that would act on nothing don't appear at all.
+/// Same section for a selection: counts of what can still be downloaded or
+/// removed. Items with nothing to act on are hidden.
 struct BulkDownloadMenuItems: View {
 
     let tracks: [Track]
@@ -103,8 +80,7 @@ struct BulkDownloadMenuItems: View {
         }
     }
 
-    /// Songs this app downloaded, and so can take back off the disk. Imported
-    /// files are not among them — that audio is the user's own.
+    /// Only app downloads; imported files are the user's.
     private var removable: [Track] {
         tracks.filter { downloads.status(for: $0.id).isRemovableDownload }
     }
@@ -125,9 +101,7 @@ struct BulkDownloadMenuItems: View {
 
 #if os(macOS)
 extension Track {
-    /// The file "Show in Finder" reveals. A download lives in the offline store
-    /// under its id and leaves `localPath` empty, so asking `localPath` alone
-    /// hid the item for every downloaded Discover or Spotify song.
+    /// Downloads live in the offline store with an empty `localPath`, so check both.
     var fileOnDisk: URL? {
         AudioPaths.resolve(localPath: file.localPath) ?? OfflineStore.shared.url(for: id)
     }

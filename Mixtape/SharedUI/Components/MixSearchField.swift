@@ -1,12 +1,5 @@
-// MixSearchField.swift
-// Mixtape — SharedUI/Components
-//
-// The app's inline search field, for anywhere that isn't the Mac window's own
-// toolbar (that one is MacSearchField).
-//
-// Deliberately not `.searchable`: it puts the field in the navigation bar on iOS
-// and the toolbar on macOS, and every place this is used owns its own content
-// area rather than the chrome around it.
+// Inline search field for everywhere but the Mac toolbar (MacSearchField).
+// Not `.searchable`, which puts the field in the nav bar/toolbar.
 
 import SwiftUI
 
@@ -14,22 +7,17 @@ struct MixSearchField: View {
 
     @Binding var text: String
     var placeholder: String = "Search"
-    /// Shows a spinner in place of the clear button. Keeps the "working on it"
-    /// signal next to the thing being typed into, instead of replacing the
-    /// results below with a full-view spinner that throws the layout around.
+    /// Spinner replaces the clear button.
     var isBusy: Bool = false
-    /// Taller and slightly larger type, for a view whose whole purpose is this
-    /// field rather than one that merely offers it.
+    /// Taller, for views built around the field.
     var isProminent: Bool = false
-    /// Puts the caret here as the view appears — right for a window that exists
-    /// to be typed into, wrong for a field that merely filters a list.
+    /// Focus on appear. For windows meant for typing, not list filters.
     var autoFocus: Bool = false
 
     @FocusState private var isFocused: Bool
 
     #if os(macOS)
-    /// Clicking away from a focused field has to put the caret down; on macOS
-    /// nothing does that on its own. Live only while this field is focused.
+    /// macOS doesn't drop focus on click-away by itself. Only live while focused.
     @StateObject private var blurWatcher = SearchBlurWatcher()
     #endif
 
@@ -89,8 +77,7 @@ struct MixSearchField: View {
         .mixAnimation(.easeOut(duration: 0.15), value: isBusy)
         .task {
             guard autoFocus else { return }
-            // A sheet that isn't finished presenting drops the focus request,
-            // so this waits for the window to settle before asking.
+            // A presenting sheet drops focus requests, so wait.
             try? await Task.sleep(for: .milliseconds(120))
             isFocused = true
         }

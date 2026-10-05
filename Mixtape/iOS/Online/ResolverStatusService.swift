@@ -1,13 +1,5 @@
-// ResolverStatusService.swift
-// Mixtape — iOS/Online
-//
-// Tracks which streaming resolver iOS is talking to and whether it's reachable,
-// so Settings can show "Connected via Hosted / Your Mac". macOS resolves locally
-// and is always connected, so this is iOS-only.
-//
-// Probes on demand (Settings opens, foreground, Test tapped) rather than on a
-// timer to avoid background battery/data cost. Walks the resolver's own failover
-// order so the reported source matches the one that'll actually serve a play.
+// Which streaming resolver iOS is using and whether it's reachable, for the Settings status. Probes on
+// demand (Settings, foreground, Test) rather than on a timer, in the resolver's own failover order.
 
 #if os(iOS)
 import Foundation
@@ -46,9 +38,7 @@ public final class ResolverStatusService: ObservableObject {
         return nil
     }
 
-    /// Record that `source` just successfully served a request (called by the
-    /// resolver after a real play), keeping the status dot truthful without a
-    /// separate probe.
+    /// Record that `source` just served a real request, so the status stays accurate without a probe.
     public func markActive(_ source: ResolverSource) {
         activeSource = source
         status = .online

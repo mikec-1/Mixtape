@@ -1,19 +1,6 @@
-// LocalMatchesSection.swift
-// Mixtape — SharedUI/Discover
-//
-// Your own songs, in the online search results.
-//
-// The app had two search boxes: one that searched the library and one that
-// searched the catalogue, and which one you got depended on which section you
-// happened to be in. That is a distinction the app cares about and the person
-// typing does not — "play that Fontaines song" is one intent whether the file
-// is on the disk or on Deezer's server.
-//
-// So the Discover field answers both now, and this is the local half: a section
-// pinned above the online results, because a song you already own is almost
-// always the better answer to a query that matches it. It's deliberately capped
-// — this is a shortcut into the library, not a replacement for the Library
-// page's own search.
+// Library matches shown above the online results in Discover search, since
+// an owned song is usually the better answer. Capped; not a replacement for
+// the Library page's search.
 
 import SwiftUI
 
@@ -22,26 +9,19 @@ struct LocalMatchesSection: View {
     let query: String
     let tracks: [Track]
     let onPlay: (Track, [Track]) -> Void
-    /// "Show all" — opens `LibraryMatchesPage`. Optional: the pages that have
-    /// nowhere to send you simply don't draw it.
+    /// Opens `LibraryMatchesPage`. Nil hides it.
     var onShowAll: (() -> Void)? = nil
-    /// Every match rather than the first six — that page's own list.
+    /// Every match, for that page.
     var showsAll = false
 
-    /// Six rows. Enough that the section is worth reading, few enough that it
-    /// never pushes the online results off the screen — which would just be the
-    /// old two-search-boxes problem wearing one box.
-    /// Off where the caller already drew one (iOS collapses the whole section
-    /// under its own disclosure header).
+    /// Off when the caller draws its own header (iOS disclosure).
     var showsHeader = true
 
     static let limit = 6
 
     @EnvironmentObject private var deps: AppDependencies
 
-    /// Rows picked for the actions that take several songs: ⌘/⇧-click on the
-    /// Mac, the way the Playlists page picks playlists, and Select on iOS. Kept
-    /// here because a selection belongs to one set of results.
+    /// Multi-select: click, ⌘/⇧-click on the Mac; Select on iOS.
     @State private var selected: Set<Track.ID> = []
     #if os(macOS)
     @State private var anchor: Track.ID?
@@ -99,39 +79,11 @@ struct LocalMatchesSection: View {
         #endif
     }
 
-    /// "Add All" files every match, not just the six on show: "all" is the
-    /// count the header states. These songs are already in the library, so a
-    /// playlist is the add that means something, and the picker's New Playlist
-    /// row makes one.
+    /// Only there with a selection. Songs already in the library, so "add" means a playlist.
     @ViewBuilder
     private var actions: some View {
-        if selection.isEmpty {
-            MixPillButton(title: "Add All to Playlist", systemImage: "text.badge.plus") {
-                choosePlaylist(tracks)
-            }
-        } else {
-            Menu {
-                songMenu(selection)
-                Divider()
-                Button("Deselect All", action: clearSelection)
-            } label: {
-                HStack(spacing: 5) {
-                    Text("\(selection.count) Selected")
-                        .font(.system(size: MixFontScale.size(12), weight: .semibold))
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: MixFontScale.size(9), weight: .bold))
-                }
-                .foregroundStyle(Color.mixPrimary)
-                .padding(.horizontal, 11)
-                .padding(.vertical, 6)
-                .background(Capsule().fill(Color.mixPrimary.opacity(0.14)))
-            }
-            #if os(macOS)
-            .menuStyle(.button)
-            .buttonStyle(.plain).mixHandCursor()
-            .menuIndicator(.hidden)
-            #endif
-            .fixedSize()
+        if !selection.isEmpty {
+            selectionBar
         }
         #if os(iOS)
         MixPillButton(title: isSelecting ? "Done" : "Select") {
@@ -140,13 +92,58 @@ struct LocalMatchesSection: View {
         #endif
     }
 
+    private var selectionBar: some View {
+        HStack(spacing: 2) {
+            Text("\(selection.count) selected")
+                .font(.system(size: MixFontScale.size(12), weight: .semibold))
+                .foregroundStyle(Color.mixPrimary)
+                .padding(.leading, 9)
+                .padding(.trailing, 4)
+            barButton(MixtapeIcons.play, "Play") { play(selection) }
+            barButton("text.badge.plus", "Add to Playlist") { choosePlaylist(selection) }
+            if selection.count < shown.count {
+                barButton("checklist", "Select All") { selected = Set(shown.map(\.id)) }
+            }
+            Menu { songMenu(selection) } label: { barIcon("ellipsis") }
+                #if os(macOS)
+                .menuStyle(.button)
+                .buttonStyle(.plain).mixHandCursor()
+                .menuIndicator(.hidden)
+                #endif
+                .help("More")
+                .accessibilityLabel("More")
+            #if os(macOS)
+            // iOS's Done pill does this.
+            barButton("xmark", "Deselect All", action: clearSelection)
+            #endif
+        }
+        .padding(3)
+        .background(Capsule().fill(Color.mixPrimary.opacity(0.14)))
+        .fixedSize()
+        .transition(.opacity)
+    }
+
+    private func barButton(_ icon: String, _ label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) { barIcon(icon) }
+            .buttonStyle(.plain).mixHandCursor()
+            .help(label)
+            .accessibilityLabel(label)
+    }
+
+    private func barIcon(_ icon: String) -> some View {
+        Image(systemName: icon)
+            .font(.system(size: MixFontScale.size(12), weight: .semibold))
+            .foregroundStyle(Color.mixPrimary)
+            .frame(width: 28, height: 26)
+            .contentShape(Rectangle())
+    }
+
     private func row(_ track: Track) -> some View {
         #if os(macOS)
         LibrarySongRow(track: track, isSelected: selected.contains(track.id),
-                       onPlay: { tap(track) })
+                       onPlay: { play([track]) }, onSelect: { tap(track) })
             .overlay(ModifiedClickCatcher { select(track.id, modifiers: $0) })
-            // On the whole selection when the row is part of it, as in the
-            // Library's own table.
+            // Whole selection when the row is in it.
             .contextMenu { songMenu(selected.contains(track.id) ? selection : [track]) }
         #else
         LibrarySongRow(track: track, isSelected: selected.contains(track.id),
@@ -160,20 +157,20 @@ struct LocalMatchesSection: View {
                         onChoosePlaylist: choosePlaylist)
     }
 
-    /// A plain click still plays, as it always has here, and as the online rows
-    /// right beside these do; picking is the modified click.
+    /// Mac: a click selects just this row. iOS: a tap plays, or toggles while selecting.
     private func tap(_ track: Track) {
-        #if os(iOS)
-        if isSelecting { toggle(track.id); return }
+        #if os(macOS)
+        selected = [track.id]
+        anchor = track.id
+        #else
+        if isSelecting { toggle(track.id) } else { play([track]) }
         #endif
-        clearSelection()
-        play([track])
     }
 
-    /// One song plays in the results' order; a selection is its own list.
+    /// One song plays alone so autoplay's recommendations follow it; a selection is its own list.
     private func play(_ songs: [Track]) {
         guard let first = songs.first else { return }
-        onPlay(first, songs.count > 1 ? songs : shown)
+        onPlay(first, songs)
     }
 
     private func choosePlaylist(_ songs: [Track]) {
@@ -211,21 +208,9 @@ struct LocalMatchesSection: View {
         #endif
     }
 
-    /// The matcher, in one place so both platforms rank identically.
-    ///
-    /// Title hits sort above artist hits above album hits: someone typing a
-    /// song name wants that song, not the eleven other tracks by whoever made
-    /// it. Within a tier the library's own order stands.
-    ///
-    /// Last answer, keyed by the query and the size of the library it was
-    /// asked of.
-    ///
-    /// Both callers run this straight out of `body`, which SwiftUI re-evaluates
-    /// on every publish from anything the Discover page observes — playback
-    /// state included. The scan is three ICU substring tests per track plus a
-    /// sort, so on a couple of thousand songs it was several milliseconds
-    /// *per frame* while music was playing. The answer only depends on the
-    /// query and the library, so it is computed once per pair.
+    /// Matcher shared by both platforms: title hits, then artist, then album;
+    /// library order within a tier. Memoised by query and library size, since it
+    /// runs from `body` on every Discover publish.
     @MainActor private static var memo: (key: String, result: [Track])?
 
     @MainActor
@@ -265,10 +250,8 @@ struct LocalMatchesSection: View {
 
 // MARK: - Page
 
-/// Every library song matching a search — what "Show all" opens. Pushed onto
-/// the search's own stack rather than handing the query to the Library page,
-/// so it is a page of the results: Back returns to them, and the history can
-/// bring it back.
+/// All library matches ("Show all"). Pushed on the search's own stack so Back
+/// returns to the results.
 struct LibraryMatchesPage: View {
 
     let query: String
@@ -306,9 +289,7 @@ struct LibraryMatchesPage: View {
 
 // MARK: - Row
 
-/// The local twin of `MixSongRow`. Same flat geometry so the two sections read
-/// as one list; the difference is that artwork comes off the disk rather than
-/// the network, and there's a small badge saying so.
+/// Local twin of `MixSongRow`: same layout, artwork from disk, small badge.
 struct LibrarySongRow: View {
 
     let track: Track
@@ -316,29 +297,61 @@ struct LibrarySongRow: View {
     /// iOS's Select mode: a circle in place of the library badge.
     var showsCheckmark = false
     let onPlay: () -> Void
+    /// Set: a click selects, double-click or the artwork plays. Nil: a tap plays.
+    var onSelect: (() -> Void)? = nil
 
     @State private var isHovered = false
 
     var body: some View {
-        HStack(spacing: 12) {
-            ZStack {
-                ArtworkThumbnail(data: track.artworkData, artworkRef: .track(track.id),
-                                 size: 44,
-                                 cornerRadius: 6,
-                                 placeholder: "music.note")
-                if isHovered {
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(Color.black.opacity(0.5))
-                        .frame(width: 44, height: 44)
-                    Image(systemName: "play.fill")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(.white)
-                }
+        taps(row)
+            .accessibilityAddTraits(isSelected ? .isSelected : [])
+            .mixHoverCursor { isHovered = $0 }
+            .mixAnimation(.easeOut(duration: 0.12), value: isHovered)
+            .mixAnimation(.easeOut(duration: 0.12), value: isSelected)
+    }
+
+    @ViewBuilder
+    private func taps(_ row: some View) -> some View {
+        if let onSelect {
+            // Simultaneous so the select lands on the first click, not after the double-click wait.
+            row.gesture(TapGesture(count: 2).onEnded(onPlay))
+                .simultaneousGesture(TapGesture().onEnded(onSelect))
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction(.default, onPlay)
+        } else {
+            row.mixTapAction(onPlay)
+        }
+    }
+
+    @ViewBuilder
+    private var artwork: some View {
+        let art = ZStack {
+            ArtworkThumbnail(data: track.artworkData, artworkRef: .track(track.id),
+                             size: 44,
+                             cornerRadius: 6,
+                             placeholder: "music.note")
+            if isHovered {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.black.opacity(0.5))
+                    .frame(width: 44, height: 44)
+                Image(systemName: "play.fill")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(.white)
             }
+        }
+        if onSelect != nil {
+            art.contentShape(Rectangle()).mixTapAction(onPlay)
+        } else {
+            art
+        }
+    }
+
+    private var row: some View {
+        HStack(spacing: 12) {
+            artwork
 
             VStack(alignment: .leading, spacing: 2) {
-                // The online rows directly above these have always been links;
-                // a library row sitting in the same list had dead names.
+                // Names are links, like the online rows above.
                 #if os(macOS)
                 MixTrackTitleLink(track: track,
                                   font: .system(size: 13.5, weight: .medium))
@@ -376,10 +389,5 @@ struct LibrarySongRow: View {
                                  : (isHovered ? Color.primary.opacity(0.07) : .clear))
         )
         .contentShape(Rectangle())
-        .mixTapAction(onPlay)
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
-        .mixHoverCursor { isHovered = $0 }
-        .mixAnimation(.easeOut(duration: 0.12), value: isHovered)
-        .mixAnimation(.easeOut(duration: 0.12), value: isSelected)
     }
 }

@@ -1,18 +1,6 @@
-// TrackDeletionPrompt.swift
-// Mixtape — SharedUI/Components
-//
-// One wording, and one confirmation, for every way a song leaves the library.
-//
-// There is only one destructive operation behind all of them —
-// `LibraryService.deleteTrack(id:)`, which tombstones the track, syncs that
-// tombstone to every signed-in device and removes the local audio. But each
-// entry point used to describe it differently: ⌘⌫ said "permanently … on all
-// devices", the table's right-click menu said "deleted from this device"
-// (wrong — the delete follows the account), and the playlist row's menu said
-// nothing at all and just did it. Same button, three different promises.
-//
-// AppKit can't present a SwiftUI dialog, so `NativeTrackTable` still runs its
-// own `NSAlert` — but it takes its strings from here, so the promise matches.
+// Shared wording and confirmation for deleting songs. The one operation is
+// `LibraryService.deleteTrack(id:)`: tombstone, sync to every device, remove
+// local audio. `NativeTrackTable` runs its own `NSAlert` but uses these strings.
 
 import SwiftUI
 
@@ -23,9 +11,7 @@ enum TrackDeletionPrompt {
         return count == 1 ? "Delete Song" : "Delete \(count) Songs"
     }
 
-    /// Says "on all devices" because that is what happens. A user who thinks
-    /// they're tidying up one Mac and finds the song gone from their phone has
-    /// been told the wrong thing.
+    /// Deletes follow the account, so say "on all devices".
     static func message(count: Int) -> String {
         count == 1
             ? "This will permanently remove the song from your library on all devices."
@@ -39,16 +25,12 @@ enum TrackDeletionPrompt {
 
 extension View {
 
-    /// Confirms deleting the songs held in `tracks`, then clears them either way.
-    ///
-    /// Driven by the songs themselves rather than a bool so the prompt can say
-    /// what it is about — a context menu opens on a row that may not be in the
-    /// selection, and "Delete Song" alone doesn't say which. A single song is
-    /// named; a selection is counted.
+    /// Confirms deleting `tracks`, then clears them. One song is named, a
+    /// selection is counted.
     func confirmsTrackDeletion(_ tracks: Binding<[Track]>,
                                perform delete: @escaping ([Track]) -> Void) -> some View {
         let pending = tracks.wrappedValue
-        return confirmationDialog(
+        return mixConfirmationDialog(
             TrackDeletionPrompt.title(count: pending.count,
                                       name: pending.count == 1 ? pending.first?.title : nil),
             isPresented: Binding(get: { !tracks.wrappedValue.isEmpty },

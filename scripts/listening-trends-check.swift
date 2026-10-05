@@ -1,8 +1,5 @@
-// listening-trends-check.swift
-// Mixtape — scripts
-//
-// The one check on the stats page's streak, series and movement maths. No test
-// target, so this compiles standalone against the real source file:
+// Checks the stats page's streak, series and rank-movement maths against the
+// real source file:
 //
 //   xcrun swiftc Mixtape/Core/Services/ListeningTrends.swift \
 //       scripts/listening-trends-check.swift -o /tmp/trendcheck && /tmp/trendcheck

@@ -1,37 +1,14 @@
-// SavedInPanel.swift
-// Mixtape — SharedUI/Components
-//
-// "Where is this song saved?", as a panel rather than a sheet.
-//
-// This started life as a modal sheet, and on the Mac that was the wrong shape
-// twice over: a 580×680 window landed over the app for a question you answer in
-// two seconds, and everything behind it went dark and unusable while you did.
-// The answer is a small box just above the now-playing bar, with the rest of the
-// app still lit and still running. That is what this is.
-//
-// Bottom-*leading*, not trailing: the panel is opened from the + beside the song
-// in the player bar, and a box that appears in the opposite corner from the
-// thing you clicked reads as an unrelated window. It rises directly out of the
-// control that summoned it instead.
-//
-// Nothing here dims. The only thing between the panel and the app is an
-// invisible catcher that turns the next click anywhere else into "close" —
-// which is the gesture people already expect from a popover, and the reason a
-// scrim isn't needed to communicate modality: it isn't modal.
-//
-// iOS keeps the sheet. A phone has no corner to spare and a sheet *is* the
-// native answer there; the port that needed fixing was the Mac one.
+// "Where is this song saved?" as a small panel above the player bar, not a
+// modal. Bottom-leading, next to the + that opens it. No dimming; an invisible
+// catcher closes it on the next click elsewhere. iOS keeps a sheet.
 
 import SwiftUI
 import Combine
 
 // MARK: - Center
 
-/// Holds the one panel that can be open at a time.
-///
-/// A separate observable rather than another `@Published` on `AppDependencies`,
-/// for the same reason `savedToasts` is: every view in the app observes `deps`,
-/// and opening a small corner panel has no business redrawing the whole tree.
+/// The one open panel. Separate from `AppDependencies` so opening it doesn't
+/// redraw the whole tree (like `savedToasts`).
 @MainActor
 public final class SavedInPanelCenter: ObservableObject {
 
@@ -63,15 +40,12 @@ public final class SavedInPanelCenter: ObservableObject {
 // MARK: - Host
 
 #if os(macOS)
-/// Drops the panel into the bottom-leading corner of the window, above the
-/// player bar. Sized here rather than by the content: the panel has to be the
-/// same box whether it lists two playlists or forty, or it would jump about as
-/// you type in its search field.
+/// Places the panel bottom-leading above the player bar. Fixed size so it
+/// doesn't jump while searching.
 public struct SavedInPanelHost: View {
 
     @ObservedObject private var center: SavedInPanelCenter
-    /// Room to leave under the panel for the player bar. Whatever is stacked
-    /// above the panel measures from the same baseline.
+    /// Room left under the panel for the player bar.
     private let bottomGap: CGFloat
 
     public init(center: SavedInPanelCenter, bottomGap: CGFloat = 0) {
@@ -79,26 +53,20 @@ public struct SavedInPanelHost: View {
         self.bottomGap = bottomGap
     }
 
-    /// Wide enough for a 44pt cover, a name and a mark, and no wider: the extra
-    /// 80pt this used to carry was empty track between the playlist's name and
-    /// its mark, which pushed the column of marks away from the names they
-    /// belong to and made the box read as a window rather than a menu.
+    /// Cover, name and mark, no wider.
     public static let width: CGFloat  = 300
     public static let height: CGFloat = 460
 
-    /// Left inset, matching the player bar's own content inset, so the panel's
-    /// edge lines up with the artwork, title and + button underneath it.
+    /// Matches the player bar's inset so the panel lines up with it.
     public static let leadingInset: CGFloat = 20
 
-    /// Room left between this panel and anything stacked on top of it — the
-    /// downloading card, which shares this corner.
+    /// Gap to anything stacked above (the downloading card).
     public static let stackGap: CGFloat = 10
 
     public var body: some View {
         ZStack(alignment: .bottomLeading) {
             if let request = center.request {
-                // The catcher. Clear, not dark — the app stays lit, it just
-                // stops taking the click that closes this.
+                // Click catcher. Clear, not dark.
                 Color.black.opacity(0.001)
                     .ignoresSafeArea()
                     .contentShape(Rectangle())

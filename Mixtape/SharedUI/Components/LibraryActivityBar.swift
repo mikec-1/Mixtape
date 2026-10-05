@@ -1,17 +1,5 @@
-// LibraryActivityBar.swift
-// Mixtape — SharedUI/Components
-//
-// "Updating library — 2,010 songs", with a spinner.
-//
-// The companion to `DownloadStatusBar`, in the same corner and the same shape,
-// because it answers the same question: is the app doing something, or is it
-// stuck. Reading the library takes real time on a large one, and while it ran
-// the app said nothing at all — an empty list and a still screen, which reads
-// as broken rather than as busy.
-//
-// A spinner rather than a bar: unlike a download run, a library read has no
-// honest denominator to divide by. Inventing one would be worse than showing
-// none.
+// "Updating library - 2,010 songs" with a spinner, next to `DownloadStatusBar`.
+// No real denominator, so no progress bar.
 
 import SwiftUI
 import Combine
@@ -21,8 +9,7 @@ struct LibraryActivityBar: View {
 
     @ObservedObject var library: LibraryService
 
-    /// Collapses to nothing when the library is idle, so the host can place it
-    /// unconditionally.
+    /// Empty when idle, so the host can place it unconditionally.
     var body: some View {
         if let label = library.activity.label {
             HStack(spacing: 8) {
@@ -49,27 +36,17 @@ struct LibraryActivityBar: View {
             .padding(.bottom, 12)
             .help(library.activity.detail.map { "\(label) — \($0)" } ?? label)
             .overlay(alignment: .bottom) {
-                // An indeterminate track under the row. It carries no number —
-                // there isn't an honest one — but a moving bar is what people
-                // read as "still going", where a lone spinner beside text reads
-                // as decoration.
+                // Indeterminate sweep; reads as "still going" better than a lone spinner.
                 IndeterminateBar()
             }
-            // Slide-and-push rather than a fade: this row appears above a list
-            // the user is already looking at, and the point is that it moves
-            // that list down far enough to be noticed.
+            // Pushes the list down so it's noticed.
             .transition(.move(edge: .top).combined(with: .opacity))
         }
     }
 }
 
-/// A single lit segment sweeping left to right, on nothing.
-///
-/// Not `ProgressView(.linear)`: an indeterminate linear style draws its unfilled
-/// track, and that grey line spans the sidebar whether or not the lit part has
-/// reached it — which reads as a half-finished determinate bar rather than as
-/// motion. There is no honest denominator here, so there should be no groove for
-/// one to fill.
+/// A lit segment sweeping across. Not `ProgressView(.linear)`, which draws a
+/// grey track that reads as determinate.
 private struct IndeterminateBar: View {
 
     @State private var sweeping = false
@@ -83,8 +60,7 @@ private struct IndeterminateBar: View {
             Capsule()
                 .fill(Color.mixPrimary)
                 .frame(width: segment)
-                // Starts fully off the leading edge and ends fully off the
-                // trailing one, so the sweep has no visible pop at either end.
+                // Fully off-screen at both ends so there's no pop.
                 .offset(x: sweeping ? width : -segment)
                 .animation(visibility.isForeground
                            ? .linear(duration: 1.1).repeatForever(autoreverses: false)
@@ -94,8 +70,7 @@ private struct IndeterminateBar: View {
         .frame(height: 2)
         .clipped()
         .onAppear { sweeping = visibility.isForeground }
-        // A sync that outlives the app going away must not keep the sweep
-        // running against a screen nobody sees — see `AppVisibility`.
+        // Stop animating in the background. See `AppVisibility`.
         .onChange(of: visibility.isForeground) { _, visible in sweeping = visible }
     }
 }

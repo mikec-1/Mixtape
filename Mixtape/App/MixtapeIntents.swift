@@ -1,16 +1,12 @@
-// MixtapeIntents.swift
-// Siri and Shortcuts: "Play Liked Songs in Mixtape", "Like this song in Mixtape".
+// Siri and Shortcuts intents.
 
 import AppIntents
 
-/// Intents run outside the SwiftUI tree — on iOS usually in a background
-/// launch with no window — so they reach the app through `deps`, set in
-/// `MixtapeApp.init` before any scene exists.
+/// Intents can run with no window, so they go through `deps`.
 enum MixtapeIntents {
     static weak var deps: AppDependencies?
 
-    /// Widget buttons call this last, so the reload that follows `perform`
-    /// draws the new state instead of the one from before the press.
+    /// Widgets call this last so the reload shows the new state.
     @MainActor static func refreshWidgets() async {
         #if os(iOS)
         await deps?.nowPlayingSurfaces?.flush()
@@ -66,8 +62,7 @@ struct PlayPlaylistIntent: AudioPlaybackIntent {
 
     @Parameter(title: "Playlist") var playlist: PlaylistIntentItem
 
-    /// The header's Play button, word for word: the list's own shuffle choice,
-    /// then the top or anywhere.
+    /// Same as the header's Play button.
     @MainActor func perform() async throws -> some IntentResult & ProvidesDialog {
         let library = try await MixtapeIntents.library()
         guard let deps = MixtapeIntents.deps else { throw MixtapeIntentError.notReady }
@@ -109,10 +104,7 @@ nonisolated struct MixtapeShortcuts: AppShortcutsProvider {
             "Play \(\.$playlist) on \(.applicationName)",
             "Play my \(\.$playlist) in \(.applicationName)",
             "Play \(.applicationName)",
-            // Siri's music domain claims anything that opens with "Play" before
-            // it looks at app shortcuts, and on macOS an app can't join that
-            // domain (INPlayMediaIntent is iOS-only). These don't sound like a
-            // music request, so they reach us.
+            // Phrases avoid starting with "Play" so Siri's music domain doesn't claim them.
             "\(.applicationName) \(\.$playlist)",
             "Open \(\.$playlist) in \(.applicationName)",
             "Put on \(\.$playlist) in \(.applicationName)",

@@ -1,17 +1,6 @@
-// SuggestLessMenuItems.swift
-// Mixtape — SharedUI/Components
-//
-// "Don't suggest this again" — one pair of items, every track menu.
-//
-// The only way the app could learn anything about taste was by playing
-// something: skips went unrecorded, so a song you never wanted came back in
-// every mix. These are the two answers worth writing down — not this song, and
-// not this artist — and they go in both menus, because the song you want gone
-// from your mixes is usually the one a mix just handed you.
-//
-// Identity is the same `title|artist` key the rest of the app matches songs
-// across sources with, so hiding a library row also hides the Deezer suggestion
-// it came back as. See `SuggestionFeedback`.
+// "Don't suggest this song/artist" for every track menu. Uses the same
+// `title|artist` key as cross-source matching, so hiding a library row also
+// hides its Deezer version. See `SuggestionFeedback`.
 
 import SwiftUI
 
@@ -20,8 +9,7 @@ struct SuggestLessMenuItems: View {
     let title: String
     let artistName: String
 
-    /// The identity spelling, not the printed one: the credit is stripped out of
-    /// a title for display, and a key built from the printed one would miss.
+    /// Identity spelling, not the printed one, or the key misses.
     init(track: Track) {
         self.title = track.identityTitle
         self.artistName = track.artistName
@@ -40,8 +28,7 @@ struct SuggestLessMenuItems: View {
             else      { SuggestionFeedback.hide(title: title, artist: artistName) }
         }
 
-        // Each credited artist on its own, so "don't suggest this artist" on a
-        // feature doesn't quietly block the person whose song it is.
+        // Each credited artist separately, so a feature doesn't block the main artist.
         let credits = ImportService.creditedArtists(from: artistName)
         if credits.count > 1 {
             Menu {

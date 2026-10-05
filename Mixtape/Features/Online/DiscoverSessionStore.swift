@@ -1,68 +1,74 @@
-// DiscoverSessionStore.swift
-// Mixtape — Features/Online
-//
-// Discover's session state, lifted out of the two Discover views.
-//
-// All of it used to live in @State. On macOS MacContentRouter swaps the whole
-// content column when the section changes, so leaving Discover tore the view
-// down and took the results, the browse landing and the drill-down stack with
-// it: search something, open an artist, go Home, come back — and you were on
-// the default landing page with everything gone. A singleton that outlives
-// every view is what makes that round trip land you exactly where you left,
-// the way Spotify does. iOS gets the same store; a TabView usually keeps its
-// tabs alive, but "usually" isn't a guarantee worth relying on.
-//
-// This deliberately does NOT own the macOS search text. That lives in
-// MacAppState.searchText (per section, so a library search doesn't leak into
-// Discover) and the view keeps reading it from there. All we remember is which
-// query the results we're holding belong to, so a restored field can be matched
-// against them instead of refiring an identical network call.
+// Discover's session state, outliving the views. macOS swaps the content
+// column on section change, which would drop results and the drill-down stack.
+// Doesn't own the macOS search text (that's `MacAppState.searchText`); it only
+// remembers which query the results belong to.
 
 import Foundation
 import Combine
+import Supabase
+#if os(iOS)
+import UIKit
+#endif
 
 @MainActor
 final class DiscoverSessionStore: ObservableObject {
 
-    /// One store for the whole process. Matches how the app already shares
-    /// view-adjacent state that has to outlive a view (ArtworkWashTint.shared,
-    /// ThemeManager.shared) — and unlike hanging it off AppDependencies, it
-    /// doesn't push a Discover keystroke through every view in the app that
-    /// observes the dependency container.
+    /// A singleton, like `ArtworkWashTint.shared`, so Discover keystrokes don't republish through `deps`.
     static let shared = DiscoverSessionStore()
 
     private init() {
-        // This week's mixes are already decided (see `MixEditionStore`), so the
-        // page can show them on the first frame after a relaunch instead of
-        // waiting on a build to tell it what it already knows.
-        personal.mixes = MixEditionStore.load(edition: RecommendationEngine.edition()) ?? []
+        // The last stored shelves, so the first frame isn't blank. `loadPersonalIfNeeded` swaps in this week's.
+        var stored = MixEditionStore.cached(.mixes, as: LandingWire.self)?.landing(keeping: .empty) ?? .empty
+        stored.releaseRadar = MixEditionStore.cached(.radar)
+        stored.stations     = MixEditionStore.cached(.stations) ?? []
+        stored.genreMixes   = MixEditionStore.cached(.genres) ?? []
+        raw      = stored
+        personal = stored.filtered()
 
-        // Wiping the library or the history takes away everything this page is
-        // built from, so the page has to go with it — otherwise the mixes drawn
-        // for the old taste survive in memory *and* on disk, and the landing
-        // that comes back after a "delete everything" is the one from before.
+        // "Don't suggest" applies to what's already on screen.
+        NotificationCenter.default.addObserver(
+            forName: .suggestionFeedbackChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.personal = self.raw.filtered()
+            }
+        }
+
+        // A library or history wipe invalidates everything here, including stored mixes.
         NotificationCenter.default.addObserver(
             forName: .mixUserDataReset, object: nil, queue: .main
         ) { [weak self] note in
             let reset = UserDataReset.from(note)
             MainActor.assumeIsolated { self?.forgetPersonalLanding(reset) }
         }
+
+        #if os(iOS)
+        // Leaving the app ends the search. macOS quits too fast to send it.
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.flushUnpickedSearch(replacing: nil) }
+        }
+        #endif
     }
 
-    /// Drop the derived landing after a reset.
-    ///
-    /// Both halves matter: `known` (what the recommendations exclude) comes from
-    /// the library, and the seeds come from the history, so either wipe makes the
-    /// current page wrong. The stored week's mixes go too — they are pinned to
-    /// the edition precisely so they *don't* redraw, which without this made them
-    /// the one thing a wipe couldn't remove.
+    /// Drops the derived landing and the stored shelves after a reset. An account
+    /// switch leaves the old account's rows alone.
     private func forgetPersonalLanding(_ reset: UserDataReset) {
         guard reset.clearedLibrary || reset.clearedHistory else { return }
-        MixEditionStore.clear()
-        personal          = .empty
+        MixEditionStore.clear(remote: !reset.isAccountSwitch)
+        clearPersonal()
+        artistPages.removeAll()
+    }
+
+    /// Display only. The stored shelves stay, since they belong to the account.
+    private func clearPersonal() {
+        shelvesTask?.cancel()
+        raw               = .empty
+        personalPrint     = nil
         personalLoadedAt  = nil
         recommendedRoll   = 0
-        artistPages.removeAll()
     }
 
     // MARK: - Search results
@@ -70,52 +76,33 @@ final class DiscoverSessionStore: ObservableObject {
     /// What the results list is showing. Mutated in place when the lyric leg lands.
     @Published var results = DiscoverResults()
 
-    /// Drives the header spinner. True from the moment a query is accepted
-    /// until the lyric leg finishes, so the debounce window reads "Searching…"
-    /// rather than flashing "No results."
+    /// Drives the spinner from query accepted until the lyric leg finishes.
     @Published var isSearching = false
 
-    /// The trimmed query `results` answer, "" when there are none. Compared
-    /// against the restored search field on the way back into Discover.
+    /// The trimmed query `results` answer, "" when none. Matched against the restored search field.
     @Published private(set) var resultsQuery = ""
 
-    /// iOS only. Discover there has its own `.searchable` field, where macOS
-    /// shares the window toolbar's (MacAppState). Held here so the typed text
-    /// survives a tab switch along with the results it produced.
+    /// iOS only: its own `.searchable` text, kept across tab switches.
     @Published var iosQuery = ""
 
-    /// The query a running search is for. Without it, rebuilding the view while
-    /// a search is still in the air fires a second identical request.
+    /// The query a running search is for, so a rebuilt view doesn't fire a duplicate.
     private var inFlightQuery: String?
     private var searchTask: Task<Void, Never>?
 
     // MARK: - Drill-down
 
-    /// Drill-down stack. Empty = search results / browse landing; the last
-    /// element is the visible page.
-    ///
-    /// `DiscoverDestination` is declared once per platform — in
-    /// OnlineDiscoverView on macOS and IOSDiscoverComponents on iOS — with the
-    /// same name and the same three cases. Only one of the two exists in any
-    /// given build, so this resolves to whichever one is being compiled.
-    @Published var path: [DiscoverDestination] = []
+    /// Drill-down stack; empty is results/landing. `DiscoverDestination` is declared
+    /// once per platform (OnlineDiscoverView / IOSDiscoverComponents) with the same cases.
+    @Published var path: [DiscoverDestination] = [] {
+        didSet { if path.count > oldValue.count { noteSearchPick() } }
+    }
 
-    /// Bumped when the user commits a query with Return.
-    ///
-    /// Typing alone leaves the drill-down page you're on alone — the query goes
-    /// to the suggestions panel, not the navigation. Return is the moment they
-    /// ask for the results list itself, and the Discover view watches this to
-    /// unwind the stack. A counter rather than a flag so two consecutive
-    /// Returns on the same text both register.
+    /// Bumped when a query is committed with Return, which unwinds the stack.
+    /// A counter so two Returns on the same text both register.
     @Published private(set) var searchCommitToken = 0
 
-    /// Call when Return is pressed in the window's search field.
-    ///
-    /// Unwinds the drill-down here rather than only in the view's
-    /// `onChange(of:)`: committing from *outside* Discover (a playlist, or
-    /// Settings) mounts the Discover column fresh, and a view created after the
-    /// token moved never sees the change — so Return landed you back on the
-    /// artist page you had drilled into before, not on the new results.
+    /// Call on Return. Unwinds here too, since committing from outside Discover
+    /// mounts a fresh view that never sees the token change.
     func commitSearch() {
         searchCommitToken &+= 1
         path.removeAll()
@@ -123,9 +110,7 @@ final class DiscoverSessionStore: ObservableObject {
 
     // MARK: - Scroll anchors
 
-    /// Top-most visible section of the results and landing scroll views.
-    /// Section granularity rather than pixels — that is all `.scrollPosition(id:)`
-    /// gives for free, and it's enough that you don't lose your place.
+    /// Top visible section, for restoring scroll position.
     @Published var resultsAnchor: String?
     @Published var browseAnchor: String?
 
@@ -135,40 +120,29 @@ final class DiscoverSessionStore: ObservableObject {
     @Published private(set) var browseLoading = false
     private var browseLoadedAt: Date?
 
-    /// Deezer's charts and new-release rows turn over on the order of hours, so
-    /// refetching on every appear is four requests for a page that is already
-    /// correct — but caching for the life of the process means a window left
-    /// open overnight still shows yesterday's chart. Half an hour splits it.
+    /// Charts and new releases change over hours, so refetch every half hour.
     private static let browseTTL: TimeInterval = 30 * 60
 
     // MARK: - Personalized landing
 
+    /// What Discover shows: the stored shelves minus "Don't suggest" songs and artists.
     @Published private(set) var personal = PersonalLanding.empty
+    /// The stored shelves as built. Kept unfiltered so un-hiding brings rows back.
+    private var raw = PersonalLanding.empty { didSet { personal = raw.filtered() } }
     @Published private(set) var personalLoading = false
 
-    /// Release Radar and the genre and radio shelves are still filling in
-    /// behind the page.
-    /// Drives their placeholder cards — those two are the slow legs, and
-    /// leaving them out entirely made the page look finished when it wasn't.
+    /// Release Radar, genre and radio shelves still loading. Drives their placeholder cards.
     @Published private(set) var shelvesLoading = false
     private var shelvesTask: Task<Void, Never>?
     private var personalLoadedAt: Date?
+    /// This device's seeds at the last load. The stored landing carries the building device's.
+    private var personalPrint: String?
 
-    /// Which slice of `personal.recommendedPool` the Recommended row is showing.
-    /// Bumped by the refresh button — a new twelve songs with no network call,
-    /// which is what makes that button feel instant.
+    /// Which slice of `personal.recommendedPool` is showing. Refresh bumps it, no network.
     @Published private(set) var recommendedRoll = 0
 
-    /// Longer than the browse TTL on purpose. An artist's radio and related
-    /// artists barely move day to day, and the two things that *should* change
-    /// the page — what you've been playing, and the week turning over —
-    /// invalidate it by fingerprint instead of by clock.
-    ///
-    /// So this is only about the rows that age on their own: new releases, and a
-    /// radio that quietly gained a song. The mixes themselves are pinned to the
-    /// week (`RecommendationEngine.edition(for:)`), so a rebuild inside one
-    /// redraws the same six cards rather than reshuffling the page under
-    /// someone who just came back to it.
+    /// Longer than the browse TTL: listening changes and the week turning over
+    /// invalidate by fingerprint. Mixes are pinned to the week, so a rebuild redraws the same ones.
     private static let personalTTL: TimeInterval = 6 * 60 * 60
 
     // MARK: - Drill-down page memo
@@ -184,17 +158,11 @@ final class DiscoverSessionStore: ObservableObject {
 
     // MARK: - Search
 
-    /// Runs a debounced Discover search for `text` and files the results.
-    ///
-    /// No-ops when we already hold — or are already fetching — results for the
-    /// same query. That is exactly the case when the view is rebuilt with the
-    /// search field still filled, and refiring would blank the list and flash a
-    /// spinner over results that were already right.
+    /// Debounced search. No-ops when the same query is already held or in flight.
     func search(_ text: String, using catalog: ITunesSearchClient, immediate: Bool = false) {
         let trimmed = text.trimmingCharacters(in: .whitespaces)
 
-        // Cleared field: back to the landing page. Cancel first, or a response
-        // still in the air repopulates a list the user just emptied.
+        // Cleared field: back to the landing. Cancel first so a late response can't refill it.
         guard !trimmed.isEmpty else {
             searchTask?.cancel()
             searchTask = nil
@@ -203,21 +171,15 @@ final class DiscoverSessionStore: ObservableObject {
             resultsQuery = ""
             resultsAnchor = nil
             isSearching = false
+            flushUnpickedSearch(replacing: nil)
             return
         }
 
-        // Already fetching this exact query — a rebuilt view must not fire a
-        // second identical request alongside the first.
         guard trimmed != inFlightQuery else { return }
-        // Already answered it, and the answer had something in it. A query that
-        // came back empty is deliberately NOT treated as answered: that is as
-        // likely to have been a dropped connection as a real absence of
-        // results, and "No results." that never retries is a dead end.
+        // Answered with results already. Empty results aren't treated as answered, since they may be a dropped connection.
         guard !(trimmed == resultsQuery && !results.isEmpty) else { return }
 
-        // Only a genuinely different query supersedes the one running. That is
-        // what keeps already-loaded results on screen instead of blanking them
-        // every time the view comes back.
+        // Only a different query supersedes the running one.
         searchTask?.cancel()
         inFlightQuery = trimmed
         isSearching = true
@@ -229,8 +191,7 @@ final class DiscoverSessionStore: ObservableObject {
                 if Task.isCancelled { return }
             }
             defer {
-                // Only the search that is still the current one may clear these;
-                // a superseded task must not switch off the new one's spinner.
+                // Only the current search may clear these.
                 if self.inFlightQuery == trimmed {
                     self.inFlightQuery = nil
                     self.isSearching = false
@@ -240,22 +201,43 @@ final class DiscoverSessionStore: ObservableObject {
             if Task.isCancelled { return }
             self.results = grouped
             self.resultsQuery = trimmed
+            self.flushUnpickedSearch(replacing: trimmed)
+            self.pendingSearch = trimmed
 
             // Lyric search runs after so the main results show instantly.
             let lyricHits = await catalog.searchByLyrics(trimmed)
             if Task.isCancelled || self.resultsQuery != trimmed { return }
-            self.results.lyricMatches = lyricHits
+            // Songs already listed above don't repeat in the lyric section.
+            let shown = Set(([self.results.topSong].compactMap { $0 } + self.results.songs).map(\.id))
+            self.results.lyricMatches = lyricHits.filter { !shown.contains($0.id) }
         }
+    }
+
+    // MARK: - Search analytics
+
+    /// The last query that got results and nothing has been played or opened from yet.
+    private var pendingSearch: String?
+
+    /// A result was played or opened, so the pending search worked.
+    func noteSearchPick() {
+        guard let query = pendingSearch else { return }
+        pendingSearch = nil
+        Analytics.track("search", ["query": .string(query), "clicked": .bool(true)])
+    }
+
+    /// Logs the pending search as a miss when the user moves on without picking anything.
+    /// ponytail: backspacing ("radiohead" -> "radio") also counts as a miss; fine for a rough signal.
+    private func flushUnpickedSearch(replacing next: String?) {
+        guard let query = pendingSearch else { return }
+        // Typing on ("radio" -> "radiohead") refines the same search.
+        if let next, next.lowercased().hasPrefix(query.lowercased()) { return }
+        pendingSearch = nil
+        Analytics.track("search", ["query": .string(query), "clicked": .bool(false)])
     }
 
     // MARK: - Browse landing
 
-    /// Fetches the pre-search landing content, at most once every `browseTTL`.
-    /// Cheap to call on every appear — that's the point.
-    /// The same fetch with the cache ignored, for a deliberate pull-to-refresh.
-    ///
-    /// Awaitable, unlike `loadBrowseIfNeeded`: the gesture's spinner has to stay
-    /// up until the page it promised to refresh has actually changed.
+    /// The same fetch ignoring the cache, for pull-to-refresh. Awaitable so the spinner stays up.
     func reloadBrowse(using catalog: ITunesSearchClient) async {
         browseLoading = true
         defer { browseLoading = false }
@@ -265,6 +247,7 @@ final class DiscoverSessionStore: ObservableObject {
         browseLoadedAt = Date()
     }
 
+    /// Fetches the landing content at most once per `browseTTL`. Cheap to call on every appear.
     func loadBrowseIfNeeded(using catalog: ITunesSearchClient) {
         guard !browseLoading else { return }
         if !browse.isEmpty,
@@ -275,8 +258,7 @@ final class DiscoverSessionStore: ObservableObject {
         Task { @MainActor in
             defer { self.browseLoading = false }
             let landing = await catalog.browseLanding()
-            // A failed fetch comes back empty on every leg. Keeping the stale
-            // landing beats replacing a working page with a blank one.
+            // A failed fetch is empty; keep the stale landing.
             guard !landing.isEmpty else { return }
             self.browse = landing
             self.browseLoadedAt = Date()
@@ -285,122 +267,94 @@ final class DiscoverSessionStore: ObservableObject {
 
     // MARK: - Personalized landing
 
-    /// Builds the "made for you" rows, at most once every `personalTTL` — and
-    /// again whenever the fingerprint changes, whatever the clock says. That
-    /// covers both reasons the page should stop being the page it was: play a
-    /// new artist to death this afternoon and it reflects it this afternoon, and
-    /// when the week turns over the mixes are drawn again from scratch.
-    ///
-    /// Seeds are computed by the caller because they need the main-actor stats
-    /// and library services, and this store deliberately owns no dependencies.
+    /// Builds "made for you" at most once per `personalTTL`, or whenever the
+    /// fingerprint changes. Callers compute seeds since this store owns no dependencies.
+    /// The shelf inputs walk the library, so they're only worked out when something is built.
     func loadPersonalIfNeeded(seeds: [String],
-                              radarSeeds: [String] = [],
-                              genreSeeds: [String] = [],
+                              radarSeeds: @autoclosure () -> [String] = [],
+                              genreSeeds: @autoclosure () -> [String] = [],
+                              genreTitles: @autoclosure () -> [String: String] = [:],
                               known: Set<String>,
                               using catalog: ITunesSearchClient) {
         guard !personalLoading else { return }
-        // No seeds means no listening history to build from — a fresh account, or
-        // one that was just wiped. Bailing out here left whatever had been built
-        // before standing, which is how a cleared library kept a full page of
-        // "Made for you" mixes and a "Built from " line with nothing in it.
+        // No seeds means no history, so clear the page rather than leave old mixes.
         guard !seeds.isEmpty else {
-            if !personal.isEmpty { forgetPersonalLanding(.everything) }
+            if !personal.isEmpty { clearPersonal() }
             return
         }
 
-        // An empty library says the same thing, and it's the case seeds alone
-        // miss: a wipe that arrives from another device takes the songs but
-        // leaves this machine's play history standing, so there are still seeds
-        // to build from and the fingerprint never changes. The page then comes
-        // back after a relaunch exactly as it was, recommending around a library
-        // that no longer exists. `known` is the library's own key set, so its
-        // being empty *is* the library being empty.
+        // An empty library means the same, even when a remote wipe left this device's play history.
         guard !known.isEmpty else {
-            if !personal.isEmpty { forgetPersonalLanding(.everything) }
+            if !personal.isEmpty { clearPersonal() }
             return
         }
 
         let fingerprint = RecommendationEngine.fingerprint(seeds: seeds)
         if !personal.isEmpty,
-           personal.fingerprint == fingerprint,
+           personalPrint == fingerprint,
            let loadedAt = personalLoadedAt,
            Date().timeIntervalSince(loadedAt) < Self.personalTTL { return }
 
         personalLoading = true
+        let radar = radarSeeds(), genres = genreSeeds(), titles = genreTitles()
         Task { @MainActor in
             defer { self.personalLoading = false }
-            var landing = await RecommendationEngine.build(seeds: seeds,
-                                                           radarSeeds: radarSeeds,
-                                                           excluding: known,
-                                                           using: catalog)
-            // Same rule as the browse landing: an outage returns empty on every
-            // leg, and stale rows beat a page that just emptied itself.
-            guard !landing.isEmpty else { return }
+            // The account's copy of this week wins; this device builds only when there's none.
+            let wire: LandingWire? = await MixEditionStore.shelf(.mixes, edition: RecommendationEngine.edition()) {
+                let built = await RecommendationEngine.build(seeds: seeds,
+                                                             radarSeeds: radar,
+                                                             excluding: known,
+                                                             using: catalog)
+                // An outage returns empty; keep the stale rows.
+                guard !built.isEmpty else { return nil }
+                return (LandingWire(built), built.mixes.count >= RecommendationEngine.minimumMixes)
+            }
+            guard let wire else { return }
 
-            // The rest of the page is allowed to move whenever it's rebuilt —
-            // new releases and recommendations are supposed to. The mixes are
-            // not: they belong to the week, and every rebuild redraws them from
-            // a radio that answers differently each time it's asked. A set
-            // already drawn for this edition therefore wins over the one that
-            // just came back. See `MixEditionStore`.
-            let edition = RecommendationEngine.edition()
-            landing.mixes = MixEditionStore.reconcile(landing.mixes,
-                                                      edition: edition,
-                                                      limit: RecommendationEngine.maxSeeds)
-
-            self.personal = landing
+            self.raw = wire.landing(keeping: self.raw)
+            self.personalPrint = fingerprint
             self.personalLoadedAt = Date()
             self.recommendedRoll = 0
 
-            // Second pass, after the page is on screen. Everything above is
-            // one round of Deezer calls; these two shelves are a rate-limited
-            // lookup per artist and a fetch per radio, so they arrive when they
-            // arrive rather than holding the whole landing behind them.
-            self.loadShelves(radarSeeds: radarSeeds.isEmpty ? seeds : radarSeeds,
-                             genreSeeds: genreSeeds.isEmpty ? seeds : genreSeeds,
+            // The slow shelves load after the page is on screen.
+            self.loadShelves(radarSeeds: radar.isEmpty ? seeds : radar,
+                             genreSeeds: genres.isEmpty ? seeds : genres,
+                             genreTitles: titles,
                              using: catalog)
         }
     }
 
     private func loadShelves(radarSeeds: [String],
                              genreSeeds: [String],
+                             genreTitles: [String: String],
                              using catalog: ITunesSearchClient) {
         shelvesTask?.cancel()
         shelvesLoading = true
         shelvesTask = Task { @MainActor in
             defer { self.shelvesLoading = false }
 
-            // All three in flight at once, but published one at a time as they
-            // land — awaited fastest-first, so the two Deezer shelves aren't
-            // held behind genre clustering, which talks to a service that
-            // allows one request a second. Awaiting all three together is what
-            // made every shelf take as long as the slowest one.
-            // Radios first, and not only in the awaiting: they cost about a
-            // dozen requests to the radar's two dozen, and the Deezer gate is
-            // first-come — started second, the radios shelf waited out every
-            // one of the radar's reservations before it got a slot.
-            async let radiosLeg = StationBuilder.stations(edition: RecommendationEngine.edition(),
-                                                          using: catalog)
-            async let radarLeg  = RecommendationEngine.releaseRadarIfNeeded(seeds: radarSeeds,
-                                                                           using: catalog)
-            async let genresLeg = StationBuilder.genreMixes(artists: genreSeeds, using: catalog)
-
-            // Nothing back means a failed leg, and a shelf that was correct a
-            // second ago beats one that just emptied itself.
-            let radios = await radiosLeg
-            if !radios.isEmpty, !Task.isCancelled { self.personal.stations = radios }
-
-            if let radar = await radarLeg, !Task.isCancelled {
-                self.personal.releaseRadar = radar
+            // All three in flight, published as each lands, fastest first. Radios start
+            // first since the Deezer gate is first-come and they need fewer requests.
+            // Each is the account's copy when there is one, see `MixEditionStore`.
+            async let radiosLeg: [PersonalMix]? = MixEditionStore.shelf(.stations, edition: RecommendationEngine.edition()) {
+                let radios = await StationBuilder.stations(using: catalog)
+                return radios.isEmpty ? nil : (radios, true)
+            }
+            async let radarLeg: PersonalMix? = MixEditionStore.shelf(.radar, edition: RecommendationEngine.radarEdition()) {
+                await RecommendationEngine.releaseRadar(seeds: radarSeeds, using: catalog).map { ($0, true) }
+            }
+            async let genresLeg: [PersonalMix]? = MixEditionStore.shelf(.genres, edition: RecommendationEngine.edition()) {
+                await StationBuilder.genreMixes(artists: genreSeeds, titles: genreTitles, using: catalog)
             }
 
-            let genres = await genresLeg
-            if !genres.isEmpty, !Task.isCancelled { self.personal.genreMixes = genres }
+            // Nothing back means a failed leg; keep the old shelf.
+            if let radios = await radiosLeg, !Task.isCancelled { self.raw.stations = radios }
+            if let radar = await radarLeg, !Task.isCancelled { self.raw.releaseRadar = radar }
+            if let genres = await genresLeg, !Task.isCancelled { self.raw.genreMixes = genres }
         }
     }
 
-    /// Next twelve from the pool. No fetch — the pool is already five times the
-    /// size of the row for exactly this.
+    /// Next twelve from the pool, no fetch.
     func rollRecommended() {
         guard !personal.recommendedPool.isEmpty else { return }
         recommendedRoll += 1
@@ -408,8 +362,7 @@ final class DiscoverSessionStore: ObservableObject {
 
     // MARK: - Drill-down pages
 
-    /// A fresh cached catalogue, if there is one. Synchronous so a page walked
-    /// back to can render populated instead of showing its spinner again.
+    /// A fresh cached catalogue, if any, so a revisited page renders immediately.
     func cachedArtistCatalogue(for artist: OnlineArtist) -> ArtistCatalogue? {
         artistPages.value(for: artist.id)
     }
@@ -417,8 +370,7 @@ final class DiscoverSessionStore: ObservableObject {
     func artistCatalogue(for artist: OnlineArtist, using catalog: ITunesSearchClient) async -> ArtistCatalogue {
         if let hit = artistPages.value(for: artist.id) { return hit }
         let fetched = await catalog.artistCatalogue(for: artist)
-        // An empty catalogue is a failed lookup, not a fact about the artist —
-        // caching it would make the failure stick for the next half hour.
+        // Don't cache an empty catalogue; it's a failed lookup.
         if !fetched.top.isEmpty || !fetched.albums.isEmpty {
             artistPages.insert(fetched, for: artist.id)
         }
@@ -450,9 +402,7 @@ final class DiscoverSessionStore: ObservableObject {
 
 // MARK: - Timed cache
 
-/// A small time-boxed, size-capped memo. Enough to make walking back up the
-/// drill-down stack instant, without letting a long browsing session grow the
-/// process unbounded.
+/// Small time-boxed, size-capped memo for walking back up the drill-down stack.
 private struct TimedCache<Key: Hashable, Value> {
     let ttl: TimeInterval
     let limit: Int

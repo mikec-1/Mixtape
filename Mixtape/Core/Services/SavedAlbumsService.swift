@@ -1,13 +1,6 @@
-// SavedAlbumsService.swift
-// Mixtape — Core/Services
-//
-// Which albums the user added to their library, Spotify-style. Adding a song no
-// longer implies its album: `Album` rows are still derived from tracks (they
-// back album pages and artwork), but only the albums named here are listed in
-// the Library. Keyed by normalised "title|primary artist" so a Discover album
-// and the local row built from its songs are the same entry.
-//
-// Synced in `user_metadata.saved_albums`, same shape as `PlaylistSortSyncService`.
+// Albums the user added to the library. `Album` rows are still derived from
+// tracks, but only these are listed. Keyed by normalised "title|primary artist".
+// Synced in `user_metadata.saved_albums`, like `PlaylistSortSyncService`.
 
 import Foundation
 import Combine
@@ -21,12 +14,11 @@ public final class SavedAlbumsService: ObservableObject {
         public var title: String
         public var artistName: String
         public var savedAt: Date
-        /// Songs imported only because this album was added — kept out of All
-        /// Songs until the user saves one on its own.
+        /// Songs imported only for this album, hidden from All Songs until saved on their own.
         public var albumOnly: [UUID]? = nil
     }
 
-    /// key → entry.
+    /// key -> entry.
     @Published public private(set) var entries: [String: Entry] = [:]
 
     public var pushWriter: ((String) -> Void)?
@@ -39,9 +31,7 @@ public final class SavedAlbumsService: ObservableObject {
         markAlbumOnly([id], title: title, artistName: artistName)
     }
 
-    /// One write for a whole record, because `persist()` re-encodes every entry
-    /// and pushes it — a fifty-album import doing that once per song is the
-    /// same freeze the batched playlist writes exist to avoid.
+    /// One write per album, since `persist()` re-encodes and pushes everything.
     public func markAlbumOnly(_ ids: [UUID], title: String, artistName: String) {
         let k = Self.key(title: title, artistName: artistName)
         guard var e = entries[k] else { return }
@@ -94,7 +84,8 @@ public final class SavedAlbumsService: ObservableObject {
         let orphans = saved ? [] : (entries[k]?.albumOnly ?? [])
         entries[k] = saved ? Entry(title: title, artistName: artistName, savedAt: Date()) : nil
         persist()
-        if !orphans.isEmpty { onUnsave?(orphans) }
+        // Only the user unsaves (remote changes come through `adoptRemote`), so a big album's songs may go.
+        if !orphans.isEmpty { SupabaseSyncService.allowBulk("unsave-album"); onUnsave?(orphans) }
     }
 
     public func adoptRemote(_ raw: String?) {

@@ -1,19 +1,7 @@
-// ArtworkPickerView.swift
-// Mixtape — SharedUI/Components
-//
-// The cover-art well: pencil badge in the bottom-right to choose an image, bin
-// in the bottom-left to throw the current one away. The cover itself is just a
-// picture — pressing it does nothing, so nobody opens a file dialog by trying
-// to look at their artwork.
-//
-// Extracted from PlaylistEditorSheet so the import review sheets get the same
-// control rather than a lookalike — three hand-rolled copies is how two of them
-// end up drifting apart.
-//
-// `data` is the *user's* pick and nothing else. A caller that already has an
-// image to show — an import candidate's remote cover, the track's embedded art —
-// draws it in `placeholder` and passes `showsRemoveBadge: true`, which is what
-// keeps "the user hasn't touched this" distinct from "there is no image".
+// Cover-art well: pencil (bottom-right) picks, bin (bottom-left) clears.
+// The cover itself isn't tappable. Shared by PlaylistEditorSheet and the import sheets.
+// `data` is only the user's pick; callers draw existing art in `placeholder`
+// and pass `showsRemoveBadge: true`.
 
 #if os(iOS)
 import PhotosUI
@@ -29,9 +17,7 @@ struct ArtworkPickerView<Placeholder: View>: View {
     let size: CGFloat
     var cornerRadius: CGFloat = 8
 
-    /// Whether the bin is offered. Not derived from `data`: the caller knows
-    /// whether its placeholder is a real cover or an empty square, and a bin
-    /// next to an empty square is a button that can't do anything.
+    /// Caller decides, since only it knows if the placeholder is a real cover.
     let showsRemoveBadge: Bool
 
     let onRemove: () -> Void
@@ -48,9 +34,7 @@ struct ArtworkPickerView<Placeholder: View>: View {
         ZStack {
             artworkSquare
 
-            // Both badges are siblings of the cover, never children of it. The
-            // square isn't a control any more, so neither badge is nested in
-            // another target that could swallow its taps.
+            // Siblings of the cover so nothing swallows their taps.
             if showsRemoveBadge { removeBadge }
             editBadge
         }
@@ -66,11 +50,8 @@ struct ArtworkPickerView<Placeholder: View>: View {
         #elseif os(macOS)
         .fileImporter(isPresented: $showFilePicker, allowedContentTypes: [.image]) { result in
             guard case .success(let url) = result else { return }
-            // Not a guard: `startAccessingSecurityScopedResource` returns false
-            // for a URL that needs no scope — which is most of what the file
-            // importer hands back — and bailing on that made the picker do
-            // nothing at all for perfectly readable files. Balance the call
-            // only when it actually granted something.
+            // Not a guard: this returns false for URLs that need no scope, which is most of them.
+            // Only balance it when it granted access.
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
             do {
@@ -84,21 +65,11 @@ struct ArtworkPickerView<Placeholder: View>: View {
 
     // MARK: - Sizing
 
-    /// The longest edge a stored cover is allowed to have.
-    ///
-    /// A cover is never drawn larger than a page header, and a photo out of a
-    /// phone library is several thousand pixels on a side. Keeping the original
-    /// would put megabytes into the row, into every sync push, and into the
-    /// artwork cache on every device that pulls it — for pixels nothing ever
-    /// displays.
-    /// 1024 was too small: a cover fills most of the width of a phone screen,
-    /// and at 3x that alone is over a thousand pixels before the hero blur
-    /// behind it is scaled up. 2048 still turns a 12MB photo into a couple of
-    /// hundred kilobytes.
+    /// Longest edge of a stored cover. Phone photos are huge; 2048 covers a 3x hero
+    /// and keeps covers in the hundreds of KB.
     private static var maxCoverEdge: CGFloat { 2048 }
 
-    /// Shrinks and re-encodes a picked image, keeping the original only if it
-    /// can't be decoded at all — better a large cover than no cover.
+    /// Keeps the original only if it can't be decoded.
     static func normalised(_ picked: Data) -> Data {
         ImageDownsampler.downsampledJPEG(from: picked,
                                          maxDimension: maxCoverEdge,
@@ -107,8 +78,7 @@ struct ArtworkPickerView<Placeholder: View>: View {
 
     // MARK: - Cover
 
-    /// Inert. No `contentShape`, no button around it — the badges are the
-    /// controls, and a cover you can't press is the point of the layout.
+    /// Not a control; the badges are.
     private var artworkSquare: some View {
         Group {
             if let data, let img = mixImage(from: data, displaySize: size) {
@@ -124,8 +94,7 @@ struct ArtworkPickerView<Placeholder: View>: View {
 
     // MARK: - Edit badge
 
-    /// Bottom-right, mirroring the bin. The pencil is `MixtapeIcons.edit`
-    /// everywhere else in the app, so it's what "change this" looks like here.
+    /// Pencil is `MixtapeIcons.edit` everywhere.
     private var editBadge: some View {
         corner(.trailing) {
             #if os(iOS)
@@ -146,16 +115,13 @@ struct ArtworkPickerView<Placeholder: View>: View {
 
     // MARK: - Remove badge
 
-    /// Mirrors the edit badge across the cover, bottom-left. Red because this
-    /// is the one control here that throws something away.
+    /// Red: the one destructive control here.
     private var removeBadge: some View {
         corner(.leading) {
             Button {
                 data = nil
                 #if os(iOS)
-                // Otherwise re-picking the same photo is a no-op: the
-                // selection hasn't changed, so `onChange` never fires and
-                // the cover the user just cleared never comes back.
+                // Reset so re-picking the same photo still fires `onChange`.
                 photoItem = nil
                 #endif
                 onRemove()
@@ -170,8 +136,7 @@ struct ArtworkPickerView<Placeholder: View>: View {
 
     // MARK: - Badge geometry
 
-    /// One definition for both badges — they sit at opposite corners of the
-    /// same square, so any difference between them reads as a mistake.
+    /// One style for both badges.
     private func badgeLabel(_ symbol: String, tint: Color) -> some View {
         Image(systemName: symbol)
             .font(.system(size: 11, weight: .semibold))
@@ -180,14 +145,11 @@ struct ArtworkPickerView<Placeholder: View>: View {
             .padding(6)
             .background(tint, in: Circle())
             .padding(6)
-            // After the outer padding, so the tap target is bigger than the
-            // circle it draws. The badges are now the only way into the
-            // picker, and a 25pt target for that on a phone is too mean.
+            // Hit area bigger than the circle.
             .contentShape(Circle())
     }
 
-    /// Pins `content` to a bottom corner without making the rest of the square
-    /// hit-testable — spacers aren't targets, so the gap stays inert.
+    /// Pins `content` to a corner; spacers stay inert.
     private func corner<Content: View>(_ edge: HorizontalAlignment,
                                        @ViewBuilder content: () -> Content) -> some View {
         VStack {
@@ -206,8 +168,7 @@ struct ArtworkPickerView<Placeholder: View>: View {
 
 extension ArtworkPickerView where Placeholder == AnyView {
 
-    /// The plain empty-square case: no image behind the picker, so the bin
-    /// appears exactly when the user has chosen something.
+    /// Empty-square case: bin shows once the user picks something.
     static func standard(data: Binding<Data?>,
                          size: CGFloat,
                          cornerRadius: CGFloat = 8) -> ArtworkPickerView<AnyView> {

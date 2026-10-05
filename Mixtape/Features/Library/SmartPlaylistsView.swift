@@ -1,15 +1,4 @@
-// SmartPlaylistsView.swift
-// Mixtape — Features/Library
-//
-// The Smart section of Your Library: the user's rule-based playlists. Tapping
-// one resolves it live and shows its tracks, which are playable through the
-// shared PlaybackEngine.
-//
-// This is a section rather than a page behind a row now. It used to be reached
-// through a permanent "Smart Playlists" entry pinned above the playlist list,
-// which spent a row of the first screen on a signpost; smart playlists are a
-// kind of playlist, so they get a chip alongside Playlists / Albums / Artists
-// and creating one lives in the library's + menu with everything else.
+// The Smart section of Your Library: rule-based playlists, resolved live when opened.
 
 import SwiftUI
 import SwiftData
@@ -22,8 +11,7 @@ public struct SmartPlaylistsSection: View {
     #endif
     @ObservedObject var service: SmartPlaylistService
 
-    /// Raised to the library so the "New Smart Playlist" sheet is presented by
-    /// the same code that presents every other create route.
+    /// Handled by the library so the create sheet is presented with the other create routes.
     let onCreate: () -> Void
 
     public init(service: SmartPlaylistService, onCreate: @escaping () -> Void) {
@@ -42,13 +30,10 @@ public struct SmartPlaylistsSection: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // Each platform's own playlist row, fed the smart playlist dressed as one,
-    // so the Smart tab reads as more playlists rather than a different kind of
-    // list. ponytail: resolves every rule per redraw; memoise if a library
-    // with many smart playlists shows it.
+    // Each platform's own playlist row, fed the smart playlist as a `Playlist`.
+    // ponytail: resolves every rule per redraw; memoise if many smart playlists show.
     #if os(macOS)
-    // Opens flat through the router like every other playlist on the Mac,
-    // rather than pushing inside a stack of its own.
+    // Opens through the router like every other playlist on the Mac.
     private var list: some View {
         ScrollView {
             LazyVStack(spacing: 2) {
@@ -66,7 +51,7 @@ public struct SmartPlaylistsSection: View {
             .padding(.vertical, 8)
         }
         .scrollContentBackground(.hidden)
-        .background(Color.mixBackground)
+        .background(MixPageBackground())
     }
     #else
     private var list: some View {
@@ -80,7 +65,7 @@ public struct SmartPlaylistsSection: View {
                                     kind: "Smart Playlist")
                         .environmentObject(deps.downloadManager)
                 }
-                .listRowBackground(Color.mixBackground)
+                .listRowBackground(MixRowBackground())
                 .listRowSeparatorTint(Color.mixSeparator)
                 .swipeActions(edge: .trailing) {
                     Button(role: .destructive) {
@@ -130,9 +115,8 @@ public struct SmartPlaylistsSection: View {
 
 // MARK: - Detail
 
-/// A smart playlist's page is the playlist page. Resolved on every draw so the
-/// songs follow the library, and handed over as a read-only `Playlist` — see
-/// `SmartPlaylist.asPlaylist(trackIDs:)`.
+/// A smart playlist's page is the playlist page. Resolved on every draw and
+/// passed as a read-only `Playlist`. See `SmartPlaylist.asPlaylist(trackIDs:)`.
 public struct SmartPlaylistDetailView: View {
 
     let playlist: SmartPlaylist
@@ -155,9 +139,7 @@ public struct SmartPlaylistDetailView: View {
 
 // MARK: - Cover
 
-/// The cover a smart playlist wears on Home: the same borrowed single cover or
-/// 2×2 as any playlist. `AppDependencies` answers the loader with the songs the
-/// rule resolves to, since there is no library row to read them from.
+/// The cover a smart playlist wears on Home. `AppDependencies` feeds the loader the rule's songs.
 public struct SmartPlaylistCover: View {
     let playlist: SmartPlaylist
     var size: CGFloat = 140
@@ -168,11 +150,8 @@ public struct SmartPlaylistCover: View {
     }
 
     public var body: some View {
-        // Its icon on its own colour, not a 2×2 of the first four songs: a
-        // smart playlist is a *rule*, and four covers off the top of it say
-        // nothing about the rule and make every one of these look like every
-        // other one. The colour is derived from the id the way a mix's is
-        // (`MixCoverStyle`), so a list keeps its colour everywhere it appears.
+        // Its icon on a colour derived from the id (like `MixCoverStyle`), not a 2x2
+        // of its songs: it's a rule, and song covers say nothing about it.
         let tape = playlist.rule.tapeStart
         let accent = Self.accent(for: playlist)
         RoundedRectangle(cornerRadius: size * 0.06, style: .continuous)
@@ -214,11 +193,8 @@ extension SmartPlaylistCover {
 }
 
 extension SmartPlaylist {
-    /// This smart playlist as a read-only `Playlist`, so it goes through the
-    /// same rows, covers and page as every other playlist. Never stored: the id
-    /// isn't a library row, so library lookups fall back to this value. `.mix`
-    /// because that is the non-owned kind with no remote source to refresh,
-    /// and it earns the "Mixtape" byline.
+    /// This smart playlist as a read-only `Playlist` for the shared rows and pages.
+    /// Never stored. `.mix` since it's non-owned with no remote source, and gets the "Mixtape" byline.
     func asPlaylist(trackIDs: [UUID] = []) -> Playlist {
         Playlist(id: id, name: name, description: rule.blurb, trackIDs: trackIDs,
                  dateCreated: dateCreated, dateModified: dateCreated, origin: .mix,

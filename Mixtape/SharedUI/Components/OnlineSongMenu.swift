@@ -1,20 +1,8 @@
-// OnlineSongMenu.swift
-// Mixtape — SharedUI/Components
-//
-// The right-click menu for a song that was found online.
-//
-// It used to be five items — play, play next, queue, add, share — against the
-// fifteen a song in the library gets, which made a search result feel like a
-// different and lesser kind of object. It isn't: the only true difference is
-// that it hasn't been saved yet, and nearly every action that reads as missing
-// (favourite it, file it in a playlist, go to the artist) is one that *implies*
-// saving it. So they're all here, and the ones that need a library row save the
-// song on their way through.
-//
-// Deliberately not here: Remove from Library, Save a File Copy, Move to Artist
-// Folder. Those act on a file on disk, and the row you right-clicked is a search
-// result — once the song is saved, its check button opens the panel that removes
-// it. ponytail: add them if a Discover row ever wants to be a library row.
+// Context menu for a song found online. Anything that needs a library row
+// (favourite, add to playlist) saves the song first.
+// Left out: Remove from Library, Save a File Copy, Move to Artist Folder. They
+// act on a file; once saved, the check button opens the removal panel.
+// ponytail: add them if a Discover row ever becomes a library row.
 
 import SwiftUI
 
@@ -22,14 +10,12 @@ struct OnlineSongMenu: View {
 
     let song: OnlineTrack
     let onPlay:       () -> Void
-    /// True when this song is the one playing. The heroes' `onPlay` toggles
-    /// rather than restarts, so without this the item reads "Play" and pauses.
+    /// True when this song is playing, since `onPlay` toggles.
     var isPlaying:    Bool = false
-    /// Nil where the surface genuinely has no queue to act on — the hero on a
-    /// page that isn't a list.
+    /// Nil where there's no queue to act on.
     var onPlayNext:   (() -> Void)? = nil
     var onAddToQueue: (() -> Void)? = nil
-    /// "This is the wrong version" — forgets the cached source and re-resolves.
+    /// Forgets the cached source and re-resolves.
     var onWrongVersion: (() -> Void)? = nil
     /// Open the song's album / one of its artists in Discover. Nil drops the item.
     var onOpenAlbum:  (() -> Void)?       = nil
@@ -55,13 +41,8 @@ struct OnlineSongMenu: View {
 
         Divider()
 
-        // Saving, favouriting and filing, in the order the library's own menu
-        // puts them: the plain wish first, then the more specific ones.
-        //
-        // One item, not two, for a song the library doesn't hold: saving it *is*
-        // favouriting it now — a Discover row is metadata only, and the like is
-        // the thing that keeps it. Offering both here would have been the same
-        // action twice under two names.
+        // Save, favourite, file: same order as the library menu. For an unsaved song
+        // saving is favouriting (the like is what keeps it), so there's one item.
         if saved == nil {
             Button("Add to Liked Songs", systemImage: "heart") {
                 Task { await coordinator.addToLibrary(song) }
@@ -73,8 +54,7 @@ struct OnlineSongMenu: View {
                 deps.toggleFavourite(trackID: track.id)
             }
         } else {
-            // Held by a playlist or a saved album, but not liked — those are
-            // still two different things once a song is in the library.
+            // In a playlist or saved album but not liked.
             Button("Add to Liked Songs", systemImage: "heart") { favourite() }
         }
 
@@ -95,8 +75,7 @@ struct OnlineSongMenu: View {
                 if names.count == 1 {
                     Button("Go to Artist", systemImage: "music.mic") { onOpenArtist(names[0]) }
                 } else if names.count > 1 {
-                    // A featured track has more than one artist to go to, so the
-                    // item becomes a submenu instead of guessing at the primary.
+                    // Several artists become a submenu.
                     Menu {
                         ForEach(names, id: \.self) { name in
                             Button(name) { onOpenArtist(name) }
@@ -137,16 +116,9 @@ struct OnlineSongMenu: View {
 
     // MARK: - Actions
 
-    /// Favourite the song, saving it first if it isn't saved.
-    ///
-    /// One card, not two: the pill shows one message at a time, so a save
-    /// followed by a favourite would show "Added to Library" for the instant it
-    /// took the favourite to land and then replace it. `.libraryAndFavourites`
-    /// is what actually happened, said once.
-    ///
-    /// Adds to the Favourites playlist rather than toggling it — this arm only
-    /// runs for a song that isn't favourited, and a toggle on a song that turns
-    /// out to have been saved and favourited already would take it back off.
+    /// Favourite the song, saving it first if needed. One card
+    /// (`.libraryAndFavourites`), not two. Adds rather than toggles, so an
+    /// already-favourited song isn't unfavourited.
     private func favourite() {
         if let track = saved {
             deps.toggleFavourite(trackID: track.id)
@@ -154,16 +126,14 @@ struct OnlineSongMenu: View {
         }
         Task {
             await coordinator.addToLibrary(song)
-            // Not `song.stableTrackID`: the import hashes the resolved file, and
-            // a file the library already has comes back under its older id.
+            // Not `song.stableTrackID`: import may return an existing row with an older id.
             guard let track = saved else { return }
             deps.libraryService.addTrack(id: track.id, toPlaylist: Playlist.favouritesID)
             deps.showSavedToast(.libraryAndFavourites)
         }
     }
 
-    /// File the song in a playlist, saving it first if it isn't saved. The
-    /// playlist add announces itself, so the card names the playlist either way.
+    /// Add to a playlist, saving first if needed. The card names the playlist either way.
     private func file(into playlistID: UUID) {
         if let track = saved {
             deps.addTrack(id: track.id, toPlaylist: playlistID)
@@ -178,12 +148,8 @@ struct OnlineSongMenu: View {
 
     // MARK: - State
 
-    /// This song's library row, if it has one.
-    ///
-    /// Matched the way `SaveToLibraryButton` matches — by id, then by recording
-    /// — because the two controls sit on the same row and must not disagree
-    /// about whether the song is saved. See that file for why the id alone
-    /// isn't enough.
+    /// This song's library row: by id, then by recording. Same match as
+    /// `SaveToLibraryButton`, so the two controls agree.
     private var saved: Track? {
         let byID = deps.libraryService.track(id: song.stableTrackID)
         let track = byID ?? deps.libraryService.track(matching: song.title,
@@ -193,9 +159,7 @@ struct OnlineSongMenu: View {
         return track
     }
 
-    /// The playlists a song can actually be added to — a mix or someone else's
-    /// playlist would take the songs, fail the guard in `LibraryService` and
-    /// look like nothing happened.
+    /// Mixes and other people's playlists would reject the add, so they're excluded.
     private var playlistTargets: [Playlist] {
         deps.libraryService.playlists.filter {
             !$0.isAllSongs && !$0.isDeleted && $0.isEditable

@@ -1,9 +1,4 @@
-// AvatarView.swift
-// Mixtape — SharedUI/Components
-//
-// Circular profile avatar. Renders the remote image when available, otherwise
-// falls back to the brand-gradient monogram (first letter of the username).
-// Used in Settings, the Find People list, and other-user profiles.
+// Profile avatar: remote image, else a gradient monogram.
 
 import SwiftUI
 
@@ -22,25 +17,8 @@ public struct AvatarView: View {
     public var body: some View {
         Group {
             if let url {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    case .empty:
-                        ZStack {
-                            monogram
-                            ProgressView()
-                                .controlSize(.small)
-                                .tint(.white)
-                        }
-                    case .failure:
-                        monogram
-                    @unknown default:
-                        monogram
-                    }
-                }
+                // Cached and shared: AsyncImage gave up for good when a lazy row cancelled its load.
+                CachedRemoteImage(url: url) { $0.resizable().scaledToFill() } placeholder: { monogram }
             } else {
                 monogram
             }

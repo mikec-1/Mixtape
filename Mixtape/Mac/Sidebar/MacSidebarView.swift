@@ -1,38 +1,7 @@
-// MacSidebarView.swift
-// Mixtape — Mac/Sidebar
-//
-// Three ways into the app, then every playlist you have.
-//
-// What this replaced, and why
-// ---------------------------
-// The old sidebar was a set of arrangeable sections: Home and Discover fixed at
-// the top, then LIBRARY (Songs / Albums / Artists / Playlists) and PLAYLISTS,
-// each foldable, each draggable past the other, with the library rows themselves
-// reorderable inside their section.
-//
-// That was a lot of machinery in service of a shape that had stopped being
-// right. Four permanent rows went to slicing the *local* library — a sensible
-// centre of gravity when Mixtape was a place to keep files you owned, and no
-// longer where the app's weight sits now that most of what people play arrives
-// from Discover. Worse, they pushed the playlists below the fold, so the one
-// thing anyone actually navigates to had to be reached by clicking "Playlists"
-// and drilling into a page. A sidebar whose job is to list things you can go to
-// shouldn't hide the list behind a button.
-//
-// So: Songs / Albums / Artists / Playlists collapsed into one `Library` row (the
-// four are tabs inside that page now — see `LibraryTab`), and the space that
-// freed goes to the playlists themselves, all of them, drawn directly. The
-// folding and section-reordering went with it; with two groups left, one of
-// which is three fixed rows, there was nothing left to arrange.
-//
-// What survived is what people actually did with it: dragging songs onto a
-// playlist to add them, and dragging playlists into the order they like.
-//
-// Collapsing
-// ----------
-// `appState.sidebarCollapsed` folds this down to `MacSidebarRail`. MacRootView
-// cross-fades the two inside one animated width — see `sidebarColumn` there for
-// why it's a swap rather than this view at a narrower width.
+// Sidebar: Home, Discover, Library, then every playlist. Songs/Albums/Artists/
+// Playlists are tabs inside Library (`LibraryTab`) so the playlists get the room.
+// Supports dropping songs onto playlists and dragging playlists to reorder.
+// `appState.sidebarCollapsed` swaps in `MacSidebarRail` (see MacRootView `sidebarColumn`).
 
 #if os(macOS)
 import SwiftUI
@@ -44,15 +13,12 @@ struct MacSidebarView: View {
     @EnvironmentObject private var library:  LibraryService
     @EnvironmentObject private var deps:     AppDependencies
     @EnvironmentObject private var engine:   PlaybackEngine
-    /// Observed directly, not through `deps`: a nested ObservableObject's
-    /// changes don't reach this view, so adding a rule to the library would
-    /// leave the sidebar showing the old list until something else redrew it.
+    /// Observed directly; nested ObservableObject changes don't reach this view.
     @EnvironmentObject private var smartService: SmartPlaylistService
     @ObservedObject private var crateService = CrateService.shared
     @ObservedObject private var meta = PlaylistMetadataService.shared
 
-    /// Playlist a drag is currently over — draws the insertion line, or the
-    /// drop-into highlight when what's being dragged is songs.
+    /// Draws the insertion line, or the drop highlight for songs.
     @State private var hoveredPlaylistID: UUID? = nil
     /// Whether a drag is over the empty-state drop zone.
     @State private var emptyZoneTargeted = false
@@ -75,8 +41,7 @@ struct MacSidebarView: View {
                         }
                     }
 
-                    // Only once there is something to show. A row for a feature
-                    // nobody has set up is a row that only ever disappoints.
+                    // Hidden until there's something to show.
                     if !deps.localFiles.tracks.isEmpty {
                         MacSidebarRow(item: .localFiles,
                                       isSelected: isSelected(.localFiles)) {
@@ -90,9 +55,7 @@ struct MacSidebarView: View {
                     if !library.playlists.isEmpty {
                         playlistsToolbar
                             .onChange(of: canArrangePlaylists) { _, allowed in
-                                // Sorting away from Custom Order, or an active
-                                // search, ends the drag session — there's
-                                // nothing left to drag against.
+                                // A non-custom sort or a search ends arranging.
                                 if !allowed { appState.isArrangingPlaylists = false }
                             }
                     }
@@ -104,8 +67,7 @@ struct MacSidebarView: View {
                 }
                 .padding(.bottom, 12)
             }
-            // Catches a playlist let go over blank space or over the top rows,
-            // which own no drop target of their own: it means "put it last".
+            // A playlist dropped on empty space or the top rows goes last.
             .dropDestination(for: String.self) { dropped, _ in
                 guard canArrangePlaylists, appState.isArrangingPlaylists else { return false }
                 let ids = MacAppState.playlistIDs(fromDrop: dropped)
@@ -114,11 +76,7 @@ struct MacSidebarView: View {
                 return true
             }
 
-            // Above Settings rather than under the header: a download run
-            // outlives whatever page started it, so it has to sit outside the
-            // scroll view — but at the top it pushed the whole sidebar down
-            // every time one started. Down here it shares the pinned footer
-            // with Settings and nothing above it moves.
+            // In the pinned footer so it doesn't push the sidebar down when a download starts.
             LibraryActivityBar(library: deps.libraryService)
             DownloadStatusBar(downloads: deps.downloadManager)
             OfflineBanner(downloads: deps.downloadManager, auth: deps.authService)
@@ -132,8 +90,7 @@ struct MacSidebarView: View {
             .padding(.vertical, 6)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // No opaque fill: the column's material behind it gives the
-        // translucency every native Mac app has (see `sidebarColumn`).
+        // No fill; the column behind it paints the background (see `sidebarColumn`).
         .scrollContentBackground(.hidden)
         .navigationTitle("Mixtape")
         .sheet(isPresented: $showNewPlaylist) { PlaylistEditorSheet() }
@@ -141,11 +98,7 @@ struct MacSidebarView: View {
 
     // MARK: - Header
 
-    /// A slim strip holding nothing but the collapse control.
-    ///
-    /// No wordmark, deliberately: MacTopBar already spans the full width of the
-    /// window directly above this, so a "Mixtape" here would be a second title
-    /// four points below the first one.
+    /// Just the collapse control; MacTopBar already carries the title.
     private var header: some View {
         HStack {
             Spacer(minLength: 0)
@@ -161,17 +114,9 @@ struct MacSidebarView: View {
 
     // MARK: - Playlists
 
-    /// Every playlist, in `appState.playlistSortOrder`.
-    ///
-    /// `appState.playlistSortOrder` is the single source both this sidebar and
-    /// the Library → Playlists overview draw from — see
-    /// `LibrarySortOrder.sorted(_:)` — so the two can never disagree about
-    /// what a given sort choice means. In `.manual` this is simply the order
-    /// the library publishes: pinned first, then the arrangement the user
-    /// dragged (`Playlist.sortIndex`), then everything they never arranged.
-    /// That order used to be assembled here out of a local `UserDefaults`
-    /// list, which is exactly why the phone showed a different one — it
-    /// lives on the playlist rows now and crosses with them.
+    /// Every playlist in `appState.playlistSortOrder`, the same source as
+    /// Library > Playlists (`LibrarySortOrder.sorted(_:)`). In `.manual` that's
+    /// pinned first, then `Playlist.sortIndex`, then the rest.
     private var orderedPlaylists: [Playlist] {
         appState.playlistSortOrder.sorted(library.playlists)
     }
@@ -189,8 +134,7 @@ struct MacSidebarView: View {
         Binding(get: { appState.playlistSortOrder }, set: { appState.playlistSortOrder = $0 })
     }
 
-    /// Reordering only means something in the custom order, and only while
-    /// nothing is filtering the list out from under the drag.
+    /// Only in custom order, and not while a filter is active.
     private var canArrangePlaylists: Bool {
         appState.playlistSortOrder == .manual
             && filterText.trimmingCharacters(in: .whitespaces).isEmpty
@@ -218,29 +162,12 @@ struct MacSidebarView: View {
         .padding(.bottom, 4)
     }
 
-    /// The search-and-sort row, styled after Spotify's own: the current sort
-    /// spelled out rather than buried in an icon-only menu, with search
-    /// opposite it. Arrange folds in beside search as a third
-    /// icon instead of a text pill — the old `LibrarySortBar` reused from the
-    /// wider content column read as two competing buttons crammed into 220pt.
-    ///
-    /// The sort control leads the row: it's the one thing here that names the
-    /// state the list is in. Stacked rather than spelled out on one line —
-    /// "Sort" over its value, in the same caption the PLAYLISTS header uses —
-    /// because "Sort: Recently Added" is a long phrase in a 220pt sidebar, and
-    /// at that width it ran at the icons and read as a loose orange label
-    /// hanging off the section rather than part of it.
-    ///
-    /// The search glyph is always drawn. Hiding it under a playlist count made
-    /// it look like a control that had gone missing, which is worse than a
-    /// button nobody needs on a short list.
+    /// Sort on the left (stacked "Sort" over its value to fit 220pt), search and
+    /// arrange icons on the right. Search is always shown.
     private var playlistsToolbar: some View {
         HStack(spacing: 4) {
             Menu {
-                // Flat, not `Picker("Sort by", …)`: a titled picker inside a
-                // macOS menu renders as a "Sort by ▸" submenu, putting every
-                // order two clicks deep to name the one thing a menu hanging
-                // off a control that says "Sort" could possibly be offering.
+                // Flat, not `Picker("Sort by", ...)`, which renders as a submenu in a Mac menu.
                 Picker("", selection: sortOrderBinding) {
                     ForEach(LibrarySortOrder.allCases) { option in
                         Text(option.rawValue).tag(option)
@@ -266,11 +193,8 @@ struct MacSidebarView: View {
                 }
                 .lineLimit(1)
             }
-            // `.borderlessButton` insets its label and tints its own arrow with
-            // the accent colour, which is what made this stick out of the
-            // section it belongs to — and it draws only the first element of a
-            // composed label, so a stack was never going to render under it.
-            // The plain style is what the app's other custom menus use.
+            // `.borderlessButton` insets and tints its label and only draws the first
+            // element of a composed label.
             .menuStyle(.button)
             .buttonStyle(.plain).mixHandCursor()
             .menuIndicator(.hidden)
@@ -315,8 +239,7 @@ struct MacSidebarView: View {
                 .font(.system(size: 12))
                 .focused($filterFocused)
                 .onSubmit { filterFocused = false }
-                // ⌘⌫ clears the filter instead of reaching past it to the
-                // song selection in the content column.
+                // ⌘⌫ clears the filter instead of deleting songs.
                 .mixEditingFocus(filterFocused)
 
             if !filterText.isEmpty {
@@ -357,26 +280,19 @@ struct MacSidebarView: View {
         } else {
             ForEach(pinnedVisible) { playlist in row(for: playlist) }
 
-            // A pinned playlist's place is decided by pinning it, not by
-            // where a drag left it — `handleDrop` rejects a drop that
-            // crosses this boundary. Shown only while arranging, and only
-            // when it would actually mark something.
+            // Pinned/unpinned boundary, only while arranging. `handleDrop` won't cross it.
             if appState.isArrangingPlaylists, !pinnedVisible.isEmpty, !unpinnedVisible.isEmpty {
                 Rectangle()
                     .fill(Color.mixPrimary.opacity(0.6))
                     .frame(height: 2)
                     .padding(.horizontal, 16)
-                    // Sits tight against the two rows it divides: the stack's
-                    // own spacing is already the gap, and padding on top of it
-                    // read as a hole in the list rather than a boundary.
+                    // Negative padding: the stack spacing is already the gap.
                     .padding(.vertical, -1)
             }
 
             ForEach(unpinnedVisible) { playlist in row(for: playlist) }
 
-            // Smart playlists the user added, last: they are rules, not rows,
-            // so they take no part in pinning or reordering — but a list you
-            // added to your library belongs in the list of your library.
+            // Added smart playlists go last; they're rules, so no pinning or reordering.
             ForEach(visibleSmart, id: \.id) { smart in
                 MacSidebarPlaylistRow(
                     playlist: smart.asPlaylist(trackIDs: deps.smartTrackIDs(smart)),
@@ -393,8 +309,7 @@ struct MacSidebarView: View {
         }
     }
 
-    /// The added smart playlists, honouring the filter box like everything else
-    /// in this list.
+    /// Filtered like everything else.
     private var visibleSmart: [SmartPlaylist] {
         let query = filterText.trimmingCharacters(in: .whitespaces)
         let all = deps.visibleSmartPlaylists
@@ -405,10 +320,7 @@ struct MacSidebarView: View {
     @ViewBuilder
     private func row(for playlist: Playlist) -> some View {
         VStack(spacing: 0) {
-            // A reorder shows an insertion line; a song drag shows a
-            // drop-into highlight on the row itself. Same rows, two
-            // gestures, and they have to look different or neither
-            // reads as having a target at all.
+            // Insertion line for reorder, row highlight for song drops.
             if hoveredPlaylistID == playlist.id, !appState.isDraggingTracks {
                 insertionLine
             }
@@ -420,9 +332,7 @@ struct MacSidebarView: View {
                 isDropTarget: hoveredPlaylistID == playlist.id
                     && appState.isDraggingTracks
                     && !playlist.isAllSongs,
-                // Ranges extend over what the sidebar is actually
-                // showing, filter included — shift-clicking two visible
-                // rows must not quietly take the hidden ones between.
+                // Shift ranges only cover visible (filtered) rows.
                 onSelect: { modifiers in
                     appState.selectPlaylist(playlist.id,
                                             in: visiblePlaylists.map(\.id),
@@ -434,20 +344,12 @@ struct MacSidebarView: View {
                 openPlaylist(playlist)
             }
         }
-        // The badge tracks downloads as they land, so the row needs the
-        // manager itself — a value read once through `deps` would go
-        // stale the moment a download finished.
+        // The badge needs the live manager, not a value read once through `deps`.
         .environmentObject(deps.downloadManager)
-        // Right-click on the row itself: the same list of actions the
-        // playlist's own "…" offers, so reaching any of them doesn't
-        // mean opening the playlist first.
+        // Same actions as the playlist's "..." menu.
         .playlistActions(playlist, selection: appState.selectedPlaylistIDs)
-        // `.onDrag` rather than `.draggable` so a reorder can clear a
-        // stale song-drag flag left behind by a cancelled row drag
-        // (which never reaches a drop). Always attached — same as
-        // dragging a playlist from the Playlists overview onto the
-        // sidebar — but `handleDrop` only honours it as a *reorder*
-        // while arranging in Custom Order.
+        // `.onDrag` so a reorder can clear a stale song-drag flag. `handleDrop` only
+        // treats it as a reorder while arranging in custom order.
         .onDrag {
             appState.isDraggingTracks = false
             return NSItemProvider(object: MacAppState.playlistDragPayload(playlist.id) as NSString)
@@ -467,8 +369,7 @@ struct MacSidebarView: View {
         }
     }
 
-    /// Two different empty states, because they mean opposite things: nothing
-    /// matched the filter, versus there is nothing here yet.
+    /// No filter matches vs. no playlists at all.
     @ViewBuilder
     private var emptyState: some View {
         if !filterText.trimmingCharacters(in: .whitespaces).isEmpty {
@@ -529,12 +430,8 @@ struct MacSidebarView: View {
 
     // MARK: - Navigation
 
-    /// True when `item` is the page on screen.
-    ///
-    /// `Library` also lights up for the four tab identities, since selecting
-    /// `.songs` *is* being on the Library page — the router turns it into exactly
-    /// that. Without this, arriving from a Home quick link or a "go to album"
-    /// menu left the sidebar showing nothing selected at all.
+    /// Library also lights up for its four tab items, since the router turns
+    /// `.songs` etc. into the Library page.
     private func isSelected(_ item: MacSidebarItem) -> Bool {
         guard appState.selectedPlaylist == nil else { return false }
         if item == .library { return appState.selection?.isLibraryPage == true }
@@ -557,41 +454,27 @@ struct MacSidebarView: View {
     private func handleDrop(_ dropped: [String], onto playlist: Playlist) -> Bool {
         appState.isDraggingTracks = false
 
-        // Songs dragged from any track list land here first: the same rows are
-        // both a reorder target and an "add to this playlist" target, told apart
-        // by the payload prefix.
+        // Song drops and reorders share these rows; the payload prefix tells them apart.
         let trackIDs = MacAppState.trackIDs(fromDrop: dropped)
         if !trackIDs.isEmpty {
-            // All Songs only — it's rebuilt from the library on every refresh, so
-            // adding to it by hand means nothing. Favourites is a real target:
-            // `addTrack` keeps `favoriteRepo` in sync for it. Mixes and saved
-            // playlists refuse the drop rather than swallow it: `addTrack` would
-            // decline them anyway, and a drag that lands and then does nothing
-            // looks like the app dropped the songs on the floor.
+            // Not All Songs (derived). Favourites is fine (`addTrack` updates `favoriteRepo`).
+            // Read-only playlists refuse the drop.
             guard !playlist.isAllSongs, playlist.isEditable else { return false }
             let added = trackIDs.filter { !playlist.trackIDs.contains($0) }
-            // One card for the drop, not one per song: `deps.addTracks`
-            // counts the selection itself.
+            // One card for the whole drop.
             deps.addTracks(ids: added, toPlaylist: playlist.id)
             return !added.isEmpty
         }
 
-        // Reordering only means something in Custom Order, and only while
-        // arranging — otherwise a dropped row would silently write a
-        // `sortIndex` the current sort doesn't even display.
+        // Only while arranging in custom order.
         guard canArrangePlaylists, appState.isArrangingPlaylists else { return false }
 
         guard let sourceID = MacAppState.playlistIDs(fromDrop: dropped).first,
               sourceID != playlist.id
         else { return false }
 
-        // A drag can't cross the pinned/unpinned boundary: pinned playlists
-        // always sort first regardless of where a drop leaves them, so an
-        // unpinned row dropped ahead of a pinned one — or a pinned row
-        // dropped into the unpinned block — looked like it worked for a
-        // frame and then snapped back the moment the sidebar re-sorted. See
-        // `LibraryView.PlaylistsListView.moveUnpinned` for the same rule on
-        // iOS.
+        // Can't cross the pinned/unpinned boundary; pinned always sorts first so it
+        // would snap back. Same rule as iOS `PlaylistsListView.moveUnpinned`.
         guard meta.isPinned(playlistID: sourceID) == meta.isPinned(playlistID: playlist.id)
         else { return false }
 
@@ -599,13 +482,8 @@ struct MacSidebarView: View {
         return true
     }
 
-    /// Move `id` so it sits immediately before `target`, or last when nil.
-    ///
-    /// The whole visible order is written back rather than an index shuffled
-    /// inside a stored list, so the very first drag has something complete to
-    /// say rather than describing a list that has never heard of most of the
-    /// rows. It goes onto the playlists themselves, which is what carries it to
-    /// the phone — see `LibraryService.setPlaylistOrder`.
+    /// Moves `id` before `target` (or last). Writes the whole visible order onto the
+    /// playlists so it syncs (`LibraryService.setPlaylistOrder`).
     private func reorder(_ id: UUID, before target: UUID?) {
         var order = orderedPlaylists.map(\.id)
         guard let from = order.firstIndex(of: id) else { return }
@@ -623,17 +501,8 @@ struct MacSidebarView: View {
 
 // MARK: - Collapsed rail
 
-/// The sidebar folded down to icons.
-///
-/// A separate view rather than `MacSidebarView` at a narrower width, because at
-/// 64pt almost nothing survives the squeeze: the header, the filter field, every
-/// row label and the whole playlist list would each need their own collapsed
-/// form, which is a second view written in the margins of the first one.
-///
-/// Playlists keep their artwork here. Six identical grey squares would be no
-/// better than nothing, but album covers are what people recognise a playlist
-/// by, and at 34pt they're still recognisable — which is what makes the rail a
-/// usable place to stay rather than a state you immediately undo.
+/// The collapsed sidebar. A separate view since almost nothing fits at 64pt.
+/// Playlists keep their covers so the rail stays usable.
 struct MacSidebarRail: View {
 
     @EnvironmentObject private var appState: MacAppState
@@ -686,13 +555,9 @@ struct MacSidebarRail: View {
         }
         .frame(width: Self.width)
         .frame(maxHeight: .infinity)
-        // No fill of its own: the column underneath paints one material behind
-        // both this and the full sidebar, which is what lets them cross-fade
-        // without the backdrop flickering between them. See `sidebarColumn`.
     }
 
-    /// The same order the full sidebar draws — see
-    /// `MacSidebarView.orderedPlaylists`.
+    /// Same order as `MacSidebarView.orderedPlaylists`.
     private var playlists: [Playlist] { appState.playlistSortOrder.sorted(library.playlists) }
 
     private func isSelected(_ item: MacSidebarItem) -> Bool {
@@ -740,8 +605,7 @@ struct MacSidebarRail: View {
                 NSCursor.pop()
             }
         }
-        // Songs can still be dropped onto a rail tile. Collapsing the sidebar is
-        // a decision about width, not a decision to give up a gesture.
+        // Songs can still be dropped on rail tiles.
         .dropDestination(for: String.self) { dropped, _ in
             appState.isDraggingTracks = false
             let ids = MacAppState.trackIDs(fromDrop: dropped)
@@ -788,11 +652,8 @@ private struct MacRailIcon: View {
 
 // MARK: - Sidebar Row Chrome
 
-/// Selection and hover chrome shared by every sidebar row.
-///
-/// Selection is drawn by hand rather than via `List(selection:)` so the brand
-/// colour is used instead of the system accent. The hover fill is what makes the
-/// sidebar feel alive — without it the rows look inert until clicked.
+/// Selection and hover shared by sidebar rows. Drawn by hand to use the brand
+/// colour instead of the system accent.
 private struct SidebarRowChrome: ViewModifier {
     let isSelected: Bool
     let isHovered:  Bool
@@ -844,9 +705,7 @@ private struct MacSidebarRow: View {
     }
 }
 
-/// The small square glyph buttons in the sidebar's headers — collapse, filter,
-/// new playlist. Quiet until pointed at, which is what keeps three of them in a
-/// header from reading as a toolbar.
+/// Header glyph buttons (collapse, filter, new playlist). Quiet until hovered.
 private struct MacSidebarIconButton: View {
     let systemImage: String
     let help: String
@@ -923,10 +782,7 @@ private struct MacSidebarPlaylistRow: View {
     let playlist:   Playlist
     /// True when this playlist is the one currently open.
     let isSelected: Bool
-    /// True when this row is part of a ⌘/⇧ multi-selection. Deliberately
-    /// separate from `isSelected`: "the page you are looking at" and "the rows
-    /// you have picked to act on" are different things, and a right-click menu
-    /// that says "Delete 3 Playlists" has to be able to show which three.
+    /// Part of a ⌘/⇧ multi-selection. Separate from `isSelected` (the page on screen).
     var isPicked: Bool = false
     /// True while songs are being dragged over this row.
     var isDropTarget: Bool = false
@@ -944,10 +800,7 @@ private struct MacSidebarPlaylistRow: View {
 
     private var isPinned: Bool { meta.isPinned(playlistID: playlist.id) }
 
-    /// True when every song in the playlist is on disk. Reads
-    /// `downloads.downloadedTrackIDs` rather than asking for a cached verdict
-    /// so the badge appears the moment the last download lands — and on All
-    /// Songs that means "the whole library is offline".
+    /// Every song is on disk. Reads `downloadedTrackIDs` so it updates live.
     private var isFullyDownloaded: Bool {
         downloads.isFullyDownloaded(playlist.trackIDs)
     }
@@ -964,23 +817,15 @@ private struct MacSidebarPlaylistRow: View {
         return .clear
     }
 
-    /// What the second line says. "Playlist · 12" on every row was twelve
-    /// repetitions of a word the artwork and the section header have both
-    /// already said; the count on its own carries the same information in a
-    /// third of the width.
+    /// Just the count; the cover and header already say "playlist".
     private var subtitle: String {
         playlist.trackCount == 1 ? "1 song" : "\(playlist.trackCount) songs"
     }
 
-    // Two lines and a 32pt cover instead of a 13pt label beside an 18pt chip —
-    // the same proportions Spotify's sidebar uses, and legible at a glance.
     var body: some View {
         Button(action: action) {
             HStack(spacing: 9) {
-                // Covers, the borrowed-from-the-first-song fallback, and the two
-                // system rows' own tiles all live in `PlaylistArtwork` — this
-                // row is where they most obviously have to agree with the page
-                // each one opens.
+                // Covers and fallbacks live in `PlaylistArtwork`, shared with the page.
                 PlaylistArtwork(playlist: playlist, size: 32, cornerRadius: 4)
 
                 VStack(alignment: .leading, spacing: 1) {
@@ -990,9 +835,7 @@ private struct MacSidebarPlaylistRow: View {
                                          ? Color.mixPrimary : Color.mixTextPrimary)
                         .lineLimit(1)
 
-                    // Both marks sit on the second line, ahead of the count, so
-                    // the name keeps the full width it had — the same order the
-                    // Playlists page uses.
+                    // Marks go before the count so the name keeps full width.
                     HStack(spacing: 4) {
                         if isPinned {
                             Image(systemName: "pin.fill")
@@ -1001,7 +844,7 @@ private struct MacSidebarPlaylistRow: View {
                                 .rotationEffect(.degrees(45))
                                 .help("Pinned")
                         }
-                        DownloadStateBadge(ids: playlist.trackIDs, downloads: downloads, size: 10)
+                        DownloadStateBadge(ids: playlist.trackIDs, downloads: downloads, size: 10, showsProgress: downloads.isPlaylistOffline(playlist.id))
                         Text(subtitle)
                             .font(.system(size: 11))
                             .foregroundStyle(Color.mixTextTertiary)
@@ -1019,9 +862,7 @@ private struct MacSidebarPlaylistRow: View {
             .padding(.vertical, 5)
             .background(fill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay {
-                // A picked row is outlined as well as tinted. Tint alone reads
-                // as hover, and "which rows will this menu act on" is not a
-                // question the answer should be ambiguous about.
+                // Picked rows get an outline too; tint alone reads as hover.
                 if isPicked, !isDropTarget {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .strokeBorder(Color.mixPrimary.opacity(0.65), lineWidth: 1)
@@ -1037,9 +878,7 @@ private struct MacSidebarPlaylistRow: View {
             .mixAnimation(.easeOut(duration: 0.1), value: isDropTarget)
         }
         .buttonStyle(.plain).mixHandCursor()
-        // ⌘- and ⇧-clicks come from AppKit: a SwiftUI Button (like a tap
-        // gesture) never fires while a modifier is held, so without this the
-        // only thing a ⌘-click did was nothing at all.
+        // SwiftUI Buttons don't fire with a modifier held, so ⌘/⇧-clicks come from AppKit.
         .overlay(ModifiedClickCatcher(onClick: onSelect, onRightClick: onContextClick))
         .onHover { hovering in
             isHovered = hovering

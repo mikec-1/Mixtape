@@ -1,9 +1,5 @@
-// MacSongsView.swift
-// Mixtape — Mac/Content
-//
-// Songs list — backed by NativeTrackTable (NSTableView) for smooth
-// scrolling at any library size. Sort state lives inside the AppKit coordinator;
-// this view only owns the filter and selection bindings.
+// Songs list on NativeTrackTable (NSTableView). Sort state lives in the AppKit coordinator;
+// this view owns the filter and selection.
 
 #if os(macOS)
 import SwiftUI
@@ -25,11 +21,7 @@ struct MacSongsView: View {
 
     // MARK: - Derived Data
 
-    /// The rows on screen, filtered once per real change.
-    ///
-    /// Read twice in `body` — once to decide whether to show the no-results
-    /// view, once to hand to the table — and `body` runs for reasons that have
-    /// nothing to do with either input.
+    /// Filtered rows, recomputed only when inputs change: `body` reads them twice and re-runs often.
     @State private var searchMemo = SearchMemo()
 
     private final class SearchMemo {
@@ -59,17 +51,12 @@ struct MacSongsView: View {
 
     // MARK: - Body
 
-    /// Bumped whenever the download manager publishes.
-    ///
-    /// This view reads download state (`status(for:)` and friends) straight off
-    /// the manager inside `body`, which is not observation — nothing here holds
-    /// the manager, so nothing here hears it change. `AppDependencies` used to
-    /// rebroadcast every service's publishes, which covered this by invalidating
-    /// all 81 views that hold `deps` on every status transition. The views that
-    /// actually draw download state say so themselves now.
+    /// Bumped when the download manager publishes, since `body` reads its state without observing it.
     @State private var downloadTick = 0
 
     var body: some View {
+        // Read so the bump below redraws; an unread @State never does.
+        let _ = downloadTick
         bodyContent
             .onReceive(deps.downloadManager.didChangeThrottled) { _ in
                 downloadTick &+= 1
@@ -95,6 +82,9 @@ struct MacSongsView: View {
                     onPlayNext:          { engine.queue.insertNext($0) },
                     onAddToQueue:        { engine.queue.append($0) },
                     onGetInfo:           { appState.showInspector(for: $0) },
+                    onEditMetadata:      { appState.enqueueReview(MetadataReviewItem(editing: $0)) },
+                    onEditSong:          { appState.editTrack = $0 },
+                    onPostSong:          { appState.postTrack = $0 },
                     onDragTracksChanged: { appState.isDraggingTracks = $0 },
                     onGoToArtist:        { appState.openDiscoverArtist(named: $0) },
                     onGoToAlbum:         { appState.openDiscoverAlbum(for: $0) },
@@ -104,6 +94,7 @@ struct MacSongsView: View {
                     onOpenAlbumLink:     { appState.openDiscoverAlbum(for: $0) },
                     onRemove:            { selection in
                         for track in selection { engine.stopIfPlaying(trackID: track.id) }
+                        SupabaseSyncService.allowBulk("user-remove")
                         deps.libraryService.deleteTracks(ids: selection.map(\.id))
                     },
                     onToggleFavourite:   { deps.toggleFavourite(trackID: $0.id) },
@@ -125,13 +116,13 @@ struct MacSongsView: View {
                     scale:               appState.uiScale,
                     resolvingIDs:        engine.routingTrackIDs
                 )
-                .background(Color.mixBackground)
+                .background(MixPageBackground())
             }
         }
         .navigationTitle("Songs")
         .navigationSubtitle(subtitle)
         .onDisappear { appState.clearDeleteSelection() }
-        // ── Move to Artist Folder sheet ───────────────────────────────────────
+        // Move to Artist Folder sheet
         .sheet(item: $moveArtistTrack) { track in
             MoveToArtistSheet(
                 track:          track,
@@ -161,8 +152,7 @@ struct MacSongsView: View {
 
 // MARK: - Move to Artist Sheet
 
-/// Sheet that lets the user pick or type an artist folder name.
-/// Redesigned with a select-then-confirm model showing artist circular avatars and track counts.
+/// Pick or type an artist folder name.
 private struct MoveToArtistSheet: View {
 
     let track:           Track
@@ -196,9 +186,6 @@ private struct MoveToArtistSheet: View {
     }
 
     var body: some View {
-        // Was a hand-built 420×500 panel: its own title block, its own three
-        // Dividers, and its own grey button bar with `.bordered` /
-        // `.borderedProminent` system buttons that match nothing else here.
         MixSheet(title: "Move to Artist Folder",
                  subtitle: "\(track.title) \u{2014} \(track.artistName)",
                  size: .large,
@@ -222,8 +209,7 @@ private struct MoveToArtistSheet: View {
 
             MixSheetHairline(visible: true)
 
-            // The list is the sheet's real body, so it scrolls on its own and
-            // runs to both edges rather than sitting inside the margins.
+            // The list scrolls on its own and runs edge to edge.
             ScrollView {
                 LazyVStack(spacing: 0) {
                     if showCreateOption {
@@ -307,8 +293,7 @@ private struct MoveToArtistSheet: View {
                     in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
-    /// Cancel is the caller's, not the environment's — this sheet is driven by
-    /// an `item:` binding the parent clears.
+    /// Cancel clears the parent's `item:` binding.
     private var actions: some View {
         HStack(spacing: 12) {
             Spacer(minLength: 0)

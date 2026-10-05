@@ -1,9 +1,5 @@
-// AppDependencies.swift
-// Mixtape — App
-//
-// Central dependency container. Injected as @EnvironmentObject from MixtapeApp.
-// All services are constructed here and wired together.
-// To swap an implementation, change it here only.
+// Dependency container, injected as an @EnvironmentObject from MixtapeApp.
+// Every service is built and wired here.
 
 import Foundation
 import AppIntents
@@ -22,86 +18,189 @@ public final class AppDependencies: ObservableObject {
 
     // MARK: - In-App Toast
 
-    /// Short message shown as a bottom toast (e.g. "Song added to Playlist").
-    /// Set via `showToast(_:)` — auto-clears after 2.5 s.
-    @Published public private(set) var toastMessage: String? = nil
-    private var toastTask: Task<Void, Never>? = nil
+    /// The message card. Its own object, so a toast doesn't redraw everything watching deps.
+    public let toasts = ToastCenter()
 
-    public func showToast(_ message: String) {
-        toastTask?.cancel()
-        toastMessage = message
-        toastTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(2.5))
-            guard !Task.isCancelled else { return }
-            await MainActor.run { self?.toastMessage = nil }
+    public func showToast(_ toast: Toast) { toasts.show(toast) }
+    public func showToast(_ message: String) { toasts.show(Toast(message)) }
+
+    private var isResavingEdits = false
+
+    /// Re-save Edits: renders every edit again from its original at the current Song Edit Quality,
+    /// since changing the setting can't touch files already written. One at a time; each keeps its song.
+    public func resaveEdits() async {
+        guard !isResavingEdits else { return }
+        isResavingEdits = true
+        defer { isResavingEdits = false }
+        let edits = libraryService.tracks.filter { $0.origin == .edit && $0.edit?.studioReady != false }
+        guard !edits.isEmpty else { return }
+        showToast("Re-saving \(edits.count) edit\(edits.count == 1 ? "" : "s") at \(downloadManager.editQuality.title) quality")
+        var failed = 0
+        for track in edits {
+            do { _ = try await renderEdit(track) } catch { failed += 1 }
+        }
+        if failed == 0 {
+            showToast(.done("Re-saved \(edits.count) edit\(edits.count == 1 ? "" : "s")"))
+        } else {
+            // Mostly an original that's gone or can't be fetched right now.
+            showToast(.failed("Couldn't re-save \(failed) of \(edits.count) edits"))
         }
     }
 
-    /// "Wrong version" from a queue row or the player. A downloaded copy is
-    /// the rejected version too, so it goes first and is fetched again once the
-    /// coordinator has settled on another source.
+    /// So a tap and a download of the same edit render it once.
+    private var editRebuilds: [UUID: Task<URL, Error>] = [:]
+
+    /// An edit's file, rendered from its original when this device has none (made on another device, or
+    /// in a shared tape). Playback and downloads call this.
+    public func rebuildEdit(_ track: Track) async throws -> URL {
+        let track = libraryService.track(id: track.id) ?? track
+        if let url = AudioPaths.durableURL(forLocalPath: track.file.localPath) { return url }
+        if let running = editRebuilds[track.id] { return try await running.value }
+        let task = Task { try await self.renderEdit(track) }
+        editRebuilds[track.id] = task
+        defer { editRebuilds[track.id] = nil }
+        return try await task.value
+    }
+
+    private struct EditUnavailable: Error {}
+
+    /// Renders `track` from its original at the current quality. A library song gets the file in place,
+    /// keeping its id, likes and playlists; one that isn't in the library (a Jam pick) plays from a temp file.
+    private func renderEdit(_ track: Track) async throws -> URL {
+        guard let recipe = track.edit else { throw EditUnavailable() }
+        let original = editOriginal(of: recipe, editDuration: track.duration)
+        let dest = FileManager.default.temporaryDirectory.appending(path: "Edit-\(track.id.uuidString).m4a")
+        let audio = try await downloadManager.localAudio(for: original)
+        defer { if let scratch = audio.scratch { try? FileManager.default.removeItem(at: scratch) } }
+        try? FileManager.default.removeItem(at: dest)
+        let layers = try await EditRenderer.layers(for: recipe, source: audio.url)
+        try await EditRenderer.render(layers, edit: recipe,
+                                      quality: downloadManager.editQuality, to: dest) { _ in }
+        guard libraryService.track(id: track.id) != nil else { return dest }
+        defer { try? FileManager.default.removeItem(at: dest) }
+        let saved = try await importService.replaceEditAudio(of: track, with: dest)
+        guard let url = AudioPaths.durableURL(forLocalPath: saved.file.localPath) else { throw EditUnavailable() }
+        return url
+    }
+
+    /// The song an edit was made from: this library's copy if there is one, else an online row the
+    /// resolver can fetch from the recipe's "title|artist".
+    func editOriginal(of recipe: SongEdit, editDuration: TimeInterval) -> Track {
+        if let own = libraryService.track(id: recipe.of) { return own }
+        let parts = recipe.sourceRef.split(separator: "|", maxSplits: 1).map(String.init)
+        let title = parts.first ?? "", artist = parts.count > 1 ? parts[1] : ""
+        let duration = editDuration * recipe.speed
+        let id = OnlineTrack.stableID(for: recipe.sourceRef)
+        if let own = libraryService.track(id: id)
+            ?? libraryService.track(matching: title, artistName: artist, duration: duration) {
+            return own
+        }
+        return Track(id: id, title: title, artistName: artist, albumTitle: "", duration: duration,
+                     sync: SyncMetadata(deviceID: ""), file: .onlinePlaceholder(sourceRef: recipe.sourceRef))
+    }
+
+    /// Saves a community post as your own edit, liked, like the editor's Save. An edit you already
+    /// have with the same recipe comes back instead, so a post can't land in the library twice.
+    public func savePost(_ post: CommunityPost) async throws -> (track: Track, isNew: Bool) {
+        let original = editOriginal(of: post.edit, editDuration: post.duration ?? 0)
+        // `of` named the poster's copy; yours rebuilds from your own.
+        var recipe = post.edit
+        recipe.of = original.id
+        if let have = libraryService.tracks.first(where: { !$0.isDeleted && $0.edit?.sameSound(as: recipe) == true }) {
+            return (have, false)
+        }
+        guard post.audioPath != nil else {
+            return (try importService.saveEdit(recipe: recipe, of: original, title: post.title), true)
+        }
+        // A studio post keeps its posted file. A copy, since saving tags the file it's given.
+        let audio = try await downloadManager.localAudio(for: post.track(artwork: nil))
+        let copy = FileManager.default.temporaryDirectory
+            .appending(path: "Post-\(post.id.uuidString).\(audio.url.pathExtension)")
+        defer {
+            try? FileManager.default.removeItem(at: copy)
+            if let scratch = audio.scratch { try? FileManager.default.removeItem(at: scratch) }
+        }
+        try? FileManager.default.removeItem(at: copy)
+        try FileManager.default.copyItem(at: audio.url, to: copy)
+        return (try await importService.saveEdit(rendered: copy, of: original, edit: recipe, title: post.title), true)
+    }
+
+    private var refreshedPostWaveforms = false
+
+    /// Gives your posts the current shape: older ones have none, or a coarser one. Once per launch,
+    /// one at a time, from your own copy of the edit when you have it.
+    private func refreshPostWaveforms(user: UUID) async {
+        guard !refreshedPostWaveforms else { return }
+        refreshedPostWaveforms = true
+        var posts: [CommunityPost] = []
+        while let page = try? await community.profile(user, .posts, after: posts.map { FeedItem(post: $0) }),
+              !page.isEmpty {
+            posts += page.map(\.post)
+            if page.count < CommunityService.pageSize { break }
+        }
+        for post in posts where Waveform.decode(post.waveform)?.count != Waveform.postSlices {
+            let mine = libraryService.tracks.first { !$0.isDeleted && $0.edit?.sameSound(as: post.edit) == true }
+            guard let shape = await postWaveform(of: mine ?? post.track(artwork: nil)) else { continue }
+            try? await community.setWaveform(post.id, shape)
+        }
+    }
+
+    /// "Wrong version". A downloaded copy is the rejected version too, so it's
+    /// removed and fetched again once a new source is picked.
     public func reResolve(_ track: Track, at index: Int? = nil) async {
         let wasDownloaded = downloadManager.discardOfflineCopy(of: track)
         await onlineCoordinator.reResolve(track, at: index)
         if wasDownloaded { downloadManager.refetch(track) }
     }
 
+    /// Thumbs down on the version card: another "Wrong version".
+    public func tryAnotherVersion() async {
+        await refetchingOfflineCopy { await self.onlineCoordinator.tryAnotherVersion() }
+    }
+
+    /// "Go back" on the version card.
+    public func restorePreviousVersion() async {
+        await refetchingOfflineCopy { await self.onlineCoordinator.restorePreviousVersion() }
+    }
+
+    /// The downloaded copy of the song on the card is the version being swapped out.
+    private func refetchingOfflineCopy(_ swap: () async -> Void) async {
+        let ref = onlineCoordinator.versionCheck?.sourceRef
+        let track = playbackEngine.queue.currentTrack.flatMap { $0.sourceRef == ref ? $0 : nil }
+        let wasDownloaded = track.map { downloadManager.discardOfflineCopy(of: $0) } ?? false
+        await swap()
+        if wasDownloaded, let track { downloadManager.refetch(track) }
+    }
+
     // MARK: - Saved-song Pill
 
-    /// The small "Added to \u{2026}" pill that slides up at the bottom. Separate
-    /// from `toastMessage` on purpose: that one is a wide bar for sentences,
-    /// this is a glance, and the two can legitimately want to be on screen at
-    /// the same time (save a song, then hit a sync error) — the roots stack
-    /// them rather than letting them argue over the same corner.
-    ///
-    /// A plain `let` holding its own observable, *not* another `@Published`
-    /// here. Every view in the app observes `deps`, so publishing the pill from
-    /// this object redrew the whole tree twice per save and the animation spent
-    /// its first frames competing with that. Reading `deps.savedToasts` now
-    /// subscribes to nothing; only `SavedToastHost` watches the contents.
+    /// The "Added to..." card. Separate from `toasts` since both can show
+    /// at once. A plain `let` rather than @Published so a save doesn't redraw every
+    /// view observing deps; only SavedToastHost watches it.
     public let savedToasts = SavedToastCenter()
 
     // MARK: - "Saved in" panel
 
-    /// The corner panel that answers "where is this song saved?". Lives here
-    /// so any view can raise it without owning a sheet — on macOS it is drawn
-    /// once by the root window, above the player bar. Same reasoning as
-    /// `savedToasts` for why it is its own observable.
+    /// The "where is this song saved?" panel. Its own observable like savedToasts.
     public let savedInPanel = SavedInPanelCenter()
 
-    /// Show where a song just went.
+    /// Show where a song just went, with View to go there.
     public func showSavedToast(_ destination: SaveDestination, count: Int = 1) {
-        savedToasts.show(destination, count: count)
+        let id = destination.playlistID
+        savedToasts.show(destination, count: count, action: Toast.Action(title: "View") { Toast.openPlaylist(id) })
     }
 
-    /// Show where a song just left. Same pill, same corner — see the rule below
-    /// for why this is deliberately *not* wired into every remove in the app.
-    public func showRemovedToast(_ destination: SaveDestination, count: Int = 1) {
-        savedToasts.show(destination, count: count, direction: .removed)
+    /// Removal version of the pill. Pass `undo` only when the songs can still be put back.
+    public func showRemovedToast(_ destination: SaveDestination, count: Int = 1,
+                                 undo: (@MainActor () -> Void)? = nil) {
+        savedToasts.show(destination, count: count, direction: .removed,
+                         action: undo.map { Toast.Action(title: "Undo", run: $0) })
     }
 
     // MARK: - Library writes that announce themselves
-    //
-    // Thin wrappers over the same `LibraryService` calls, and the only reason
-    // they exist is that the card has to mean the same thing everywhere. There
-    // are around twenty places in the app that favourite a song or drop it in a
-    // playlist — a context menu on every list, both player bars, the sidebar's
-    // drag target, Discover — and asking each one to remember the rule was how
-    // the old toasts ended up on some of them and not others.
-    //
-    // The rule, in one place: an add says where the song went, and a remove says
-    // where it left *only when the removal is the whole point of the gesture* —
-    // which in practice means the "Saved in" sheet, where you went looking for
-    // the filing to change it. Un-favouriting from a context menu still says
-    // nothing: the heart empties in front of you, and a card for every such
-    // fidget turns a reversible one into an event. Anything genuinely
-    // destructive still gets the full-width toast, which is a sentence.
-    //
-    // Import and merge deliberately keep calling `libraryService` directly:
-    // they move hundreds of songs and are not a gesture anyone is watching for.
+    // Wrappers so every add and remove shows the same card. Import and merge call libraryService directly.
 
-    /// A smart playlist's songs right now. One call site for the rule's inputs,
-    /// so the cover, the page and Home can't resolve it three different ways.
+    /// A smart playlist's current songs. One place so the cover, page and Home agree.
     /// Kept per library revision: the sidebar and list rows ask on every draw, and every
     /// play bumps `revision`, so history rules stay current.
     public func smartTracks(_ smart: SmartPlaylist) -> [Track] {
@@ -127,22 +226,61 @@ public final class AppDependencies: ObservableObject {
         smartTracks(smart).map(\.id)
     }
 
-    /// The smart playlists Your Library shows: the ones the user added, and
-    /// nothing else. The shipped five live on Home until someone opens one and
-    /// presses +; a rule the user wrote arrives added, because writing it was
-    /// the gesture.
+    /// Smart playlists in Your Library: only ones the user added. Built-in ones
+    /// live on Home until added. User-written rules start added.
     public var visibleSmartPlaylists: [SmartPlaylist] {
         smartPlaylistService.playlists.filter(\.inLibrary)
     }
 
-    /// Favourite or un-favourite, showing the card only on the way in.
-    /// Returns the new state, like the service call it wraps.
+    /// Toggles the like and says so. Returns the new state.
     @discardableResult
     public func toggleFavourite(trackID: UUID) -> Bool {
+        let before = libraryService.playlist(id: Playlist.favouritesID)?.trackIDs ?? []
         let favourited = libraryService.toggleFavourite(trackID: trackID)
         if favourited { showSavedToast(.favourites) }
+        else { announceRemove([trackID], from: Playlist.favouritesID, order: before) }
         playbackEngine.syncRemoteCommandState()
         return favourited
+    }
+
+    /// Remove a selection from a playlist and say so.
+    public func removeTracks(ids trackIDs: [UUID], fromPlaylist playlistID: UUID) {
+        let before = libraryService.playlist(id: playlistID)?.trackIDs ?? []
+        SupabaseSyncService.allowBulk("user-remove")
+        libraryService.removeTracks(ids: trackIDs, fromPlaylist: playlistID)
+        // Only what was there, so Undo doesn't fill in a playlist that held some of them.
+        let held = Set(before)
+        announceRemove(trackIDs.filter(held.contains), from: playlistID, order: before)
+    }
+
+    /// Offers Undo only while the songs still exist. One only this playlist held is deleted with its file.
+    private func announceRemove(_ trackIDs: [UUID], from playlistID: UUID, order before: [UUID]) {
+        guard !trackIDs.isEmpty, let playlist = libraryService.playlist(id: playlistID) else { return }
+        let destination: SaveDestination = switch playlistID {
+        case Playlist.favouritesID: .favourites
+        case Playlist.allSongsID:   .library
+        default:                    .playlist(id: playlistID, name: playlist.name)
+        }
+        guard trackIDs.allSatisfy({ libraryService.track(id: $0) != nil }) else {
+            showRemovedToast(destination, count: trackIDs.count)
+            return
+        }
+        showRemovedToast(destination, count: trackIDs.count) { [weak self] in
+            self?.putBack(trackIDs, in: playlistID, order: before)
+        }
+    }
+
+    /// Adds the songs back at the places they had.
+    private func putBack(_ trackIDs: [UUID], in playlistID: UUID, order before: [UUID]) {
+        libraryService.addTracks(ids: trackIDs, toPlaylist: playlistID)
+        guard var now = libraryService.playlist(id: playlistID)?.trackIDs else { return }
+        let restored = Set(trackIDs)
+        now.removeAll(where: restored.contains)
+        for (index, id) in before.enumerated() where restored.contains(id) {
+            now.insert(id, at: min(index, now.count))
+        }
+        libraryService.setTracks(now, inPlaylist: playlistID)
+        playbackEngine.syncRemoteCommandState()
     }
 
     /// Add one song to a playlist and say which one.
@@ -153,14 +291,12 @@ public final class AppDependencies: ObservableObject {
 
     /// Add a selection to a playlist and say where it went.
     public func addTracks(ids trackIDs: [UUID], toPlaylist playlistID: UUID) {
+        SupabaseSyncService.allowBulk("user-add")
         libraryService.addTracks(ids: trackIDs, toPlaylist: playlistID)
         announceAdd(to: playlistID, count: trackIDs.count)
     }
 
-    /// Name the destination from the playlist itself, so Favourites and Your
-    /// Library read as themselves rather than as playlists that happen to be
-    /// called that — they are both really playlists underneath, and a card
-    /// saying "Added to All Songs" would leak that.
+    /// Names Liked Songs and Your Library as themselves, not as playlists.
     private func announceAdd(to playlistID: UUID, count: Int) {
         guard count > 0 else { return }
         switch playlistID {
@@ -193,7 +329,18 @@ public final class AppDependencies: ObservableObject {
         client: SupabaseConfig.client, engine: playbackEngine, continuity: continuity,
         deviceID: Self.deviceID, currentUser: { [weak self] in self?.authService.currentUser },
         toast: { [weak self] in self?.showToast($0) })
+    /// Two-person shared playlists, rebuilt daily.
+    public lazy var blends = BlendService(
+        client: SupabaseConfig.client, catalog: itunesClient,
+        toast: { [weak self] in self?.showToast($0) })
     public let downloadManager: DownloadManager
+    /// Posted edits, likes and comments (song edits phase 4).
+    public lazy var community = CommunityService(client: SupabaseConfig.client)
+    /// Last month's listening, once a month.
+    public lazy var recap = RecapService(
+        client: SupabaseConfig.client, history: PlayHistoryRepository(), library: libraryService,
+        snapshots: PlayedTrackSnapshotRepository(),
+        deviceNames: { [weak self] in await self?.syncService.deviceNames() ?? [:] })
     /// Named queues you switch between (7.6).
     public lazy var tapeDecks = TapeDeckService(
         engine: playbackEngine, coordinator: onlineCoordinator, library: libraryService,
@@ -203,19 +350,15 @@ public final class AppDependencies: ObservableObject {
     // MARK: - Library & Import
 
     public let libraryService:    LibraryService
-    /// Owned here rather than by a view: the Library's Smart section and the
-    /// "New Smart Playlist" editor behind the + menu are two different screens
-    /// that have to see the same list the moment one of them changes it.
+    /// Shared so the Library's Smart section and the editor see the same list.
     public let smartPlaylistService: SmartPlaylistService
     public let importService:     ImportService
-    /// Recreates a Spotify playlist locally (same cover + songs); songs resolve
-    /// their audio lazily on play via the online coordinator.
+    /// Recreates a Spotify playlist locally. Audio resolves on play.
     public let spotifyImportService: SpotifyImportService
-    /// The user's watched folders, and the songs found in them. Derived — see
-    /// `LocalFilesService`; nothing here is in the database.
+    /// Watched folders and their songs. Derived, not in the database.
     public let watchedFolders: WatchedFoldersStore
     public let localFiles:     LocalFilesService
-    /// Spotify user OAuth (PKCE) — required to read playlist tracks for import.
+    /// Spotify OAuth (PKCE), needed to read playlist tracks.
     public let spotifyAuth: SpotifyAuth
     /// Keeps imported Spotify playlists in step with the account they came from.
     public let spotifyFollowService: SpotifyFollowService
@@ -232,11 +375,11 @@ public final class AppDependencies: ObservableObject {
 
     /// iTunes Search client powering the Discover result cards.
     public let itunesClient: ITunesSearchClient
-    /// Spotify Web API client — current artist images for Discover.
+    /// Spotify Web API, for artist images in Discover.
     public let spotifyClient: SpotifyClient
     /// yt-dlp wrapper + orchestration for online streaming/caching.
     public let onlineCoordinator: OnlinePlaybackCoordinator
-    /// "Paste a Spotify or YouTube link" → one song in the library.
+    /// "Paste a Spotify or YouTube link" -> one song in the library.
     public let linkImport: LinkImportService
 
     #if os(iOS)
@@ -248,16 +391,12 @@ public final class AppDependencies: ObservableObject {
 
     // MARK: - Supabase Client
 
-    /// Shared across all Supabase-backed services (auth, sync, storage).
-    /// Computed, not stored: see the provider comment in SupabaseAuthService.
-    /// `SupabaseConfig.client` is a `static let`, so this stays a single
-    /// shared instance — it is just built on first use instead of at launch.
+    /// Shared Supabase client, built on first use.
     public var supabase: SupabaseClient { SupabaseConfig.client }
 
     // MARK: - Persistence
 
-    /// The store that is open right now. `ModelStore` owns it — one file per
-    /// account, so signing back in opens a library rather than rebuilding one.
+    /// The open store. One file per account, owned by ModelStore.
     public var modelContainer: ModelContainer { ModelStore.shared.container }
 
     // MARK: - Device Identity
@@ -273,6 +412,8 @@ public final class AppDependencies: ObservableObject {
     // MARK: - Private
 
     private var cancellables = Set<AnyCancellable>()
+    /// The Downloaded filter was turned on by losing the network, not by the user.
+    private var filterWentOnOffline = false
     #if os(iOS)
     private(set) var nowPlayingSurfaces: NowPlayingSurfaces?
     #endif
@@ -288,8 +429,7 @@ public final class AppDependencies: ObservableObject {
         self.fileStorage    = SupabaseFileStorageService(client: SupabaseConfig.client)
         self.queueService   = QueueService()
         LaunchTimeline.mark("deps/auth+storage")
-        // Opening the last account's file is what the launch cost is; the
-        // repositories below just read whichever one is open.
+        // Opening the last account's store is the launch cost.
         _ = mixMainActivity("launch/model-container") { ModelStore.shared.container }
 
         LaunchTimeline.mark("deps/container-ready")
@@ -309,14 +449,11 @@ public final class AppDependencies: ObservableObject {
             favoriteRepo: favoriteRepo,
             deviceID:     Self.deviceID
         )
-        // Pins are stored on the playlist row so they sync; the screens still ask
-        // `PlaylistMetadataService`, which writes back through here.
+        // Pins live on the playlist row so they sync.
         PlaylistMetadataService.shared.pinWriter = { [weak libraryService] id, pinned in
             libraryService?.setPlaylistPinned(id: id, pinned: pinned)
         }
-        // The chosen sort order rides on the account rather than the device —
-        // same shape as the pin writer above: the screens keep asking the
-        // shared service, which writes back through here.
+        // Sort order is per account, written back through here.
         let auth = self.authService
         PlaylistSortSyncService.shared.pushWriter = { raw in
             Task { await auth.updatePlaylistSortOrder(raw) }
@@ -330,6 +467,15 @@ public final class AppDependencies: ObservableObject {
         }
         CrateService.shared.pushWriter = { raw in
             Task { await auth.updateCrates(raw) }
+        }
+        PlaylistMetadataService.shared.showsAllSongsWriter = { on in
+            Task { await auth.updateShowsAllSongs(on) }
+        }
+        PlaylistMetadataService.shared.importDestinationWriter = { raw in
+            Task { await auth.updateImportDestination(raw) }
+        }
+        ThemeManager.shared.backdropWriter = { raw in
+            Task { await auth.updateBackdrop(raw) }
         }
         SavedAlbumsService.shared.onUnsave = { [libraryService] ids in libraryService.deleteTracks(ids: ids) }
         queueService.playlistLookup = { [weak libraryService] id in
@@ -368,9 +514,7 @@ public final class AppDependencies: ObservableObject {
         self.localFiles = LocalFilesService(
             folders:  watchedFolders,
             deviceID: Self.deviceID,
-            // A promoted file stops showing under Local Files only for as long
-            // as its library row lives. Delete the song and the file — still in
-            // the folder — comes back.
+            // A promoted file shows again once its library row is deleted.
             isInLibrary: { [weak libraryService] id in
                 libraryService?.track(id: id) != nil
             }
@@ -385,11 +529,9 @@ public final class AppDependencies: ObservableObject {
             deviceID:       Self.deviceID
         )
 
-        // Auto-sync 1 s after the last imported track lands.
-        // Weak capture breaks the AppDependencies → importService → closure → AppDependencies cycle.
+        // Sync 1 s after the last imported track. Weak capture avoids a retain cycle.
         let syncRef = self.syncService
-        // Resetting the history has to reach the server, or the next pull — or
-        // another device's backlog — puts it straight back.
+        // Reset history on the server too, or the next pull brings it back.
         self.statsService.remoteWipe = {
             Task { try? await syncRef.deleteAllServerPlayHistory() }
         }
@@ -407,9 +549,7 @@ public final class AppDependencies: ObservableObject {
             try? await syncRef.sync()
         }
 
-        // Shrinks artwork stored before covers were downsampled on the way in.
-        // Runs once per device, after launch rather than during it — nothing
-        // waits on it and it stops the moment anything destructive starts.
+        // Shrinks old full-size artwork once per device, after launch.
         let compaction = ArtworkCompaction()
         self.artworkCompaction = compaction
         self.libraryService.onCancelBackgroundWork = { [weak compaction] in
@@ -428,13 +568,11 @@ public final class AppDependencies: ObservableObject {
 
 LaunchTimeline.mark("deps/engine")
                 // Discover audio resolution is platform-specific: macOS shells out to
-        // yt-dlp; iOS asks the Mac/server resolver over HTTP. Both satisfy
-        // TrackResolver, so the coordinator is identical either way.
+        // macOS runs yt-dlp; iOS asks the resolver over HTTP. Both are TrackResolvers.
         #if os(macOS)
         let trackResolver: any TrackResolver = YTDLPService()
         #else
-        // iOS: share one status service between resolution (failover reports the
-        // source that served) and Settings (status dot).
+        // One status service for resolution and the Settings status dot.
         let resolverStatus = ResolverStatusService()
         self.resolverStatus = resolverStatus
         let trackResolver: any TrackResolver = RemoteResolverService(status: resolverStatus)
@@ -453,14 +591,12 @@ LaunchTimeline.mark("deps/engine")
         self.spotifyClient = SpotifyClient()
 
         self.spotifyImportLedger = SpotifyImportLedger(libraryService: libraryService)
-        // Which Spotify playlists you've already imported is a fact about the
-        // account, not the device — see the ledger's header.
+        // Imported playlists are per account, not per device.
         self.spotifyImportLedger.pushWriter = { raw in
             Task { await auth.updateSpotifyImports(raw) }
         }
         if case .authenticated(let user) = auth.authState {
-            // Built after sign-in on a warm launch, so it misses the adoption
-            // the auth service does when the state changes.
+            // On a warm launch this is built after sign-in, so adopt now.
             self.spotifyImportLedger.adoptRemote(user.spotifyImports)
         }
         self.spotifyExportService = SpotifyExportService(client: self.spotifyClient,
@@ -473,8 +609,7 @@ LaunchTimeline.mark("deps/engine")
             exportService:  self.spotifyExportService,
             libraryService: libraryService
         )
-        // Which playlists follow Spotify is a fact about the account too — see
-        // the follow service's header for what losing it cost.
+        // Follows are per account too.
         self.spotifyFollowService.pushWriter = { raw in
             Task { await auth.updateSpotifyLinks(raw) }
         }
@@ -490,8 +625,7 @@ LaunchTimeline.mark("deps/engine")
             importService: importService,
             deviceID:      Self.deviceID
         )
-        // Same resolver as Discover, so a song saved from a link and the same
-        // song saved from a search share their cached audio and their identity.
+        // Same resolver as Discover, so link saves and search saves are the same song.
         self.linkImport = LinkImportService(
             resolver:      trackResolver,
             importService: importService,
@@ -499,48 +633,23 @@ LaunchTimeline.mark("deps/engine")
             catalogue:     self.itunesClient,
             library:       libraryService
         )
-        // Route online tracks with no local file (Spotify imports, history
-        // replays) through the coordinator so they resolve & stream, instead of
-        // hitting the local-file path. Weak capture breaks the retain cycle.
+        // Online tracks with no local file go through the coordinator. Weak to avoid a cycle.
         self.playbackEngine.onlineRouter = { [weak coordinator = self.onlineCoordinator] track, tracks in
             await coordinator?.playStandaloneOnline(track, context: tracks)
         }
 
-        // A song leaving the library has to leave the two places the library
-        // can't see: the offline store (with its queue, its retries and its
-        // cached audio) and the player. Deleting a playlist now takes its songs
-        // with it, so this is no longer one row at a time — a download left
-        // behind is disk the user asked to have back. Weak captures both ways:
-        // each of these holds the library, and the library now holds this.
-        //
-        // Playback is deliberately *not* one of them any more. Leaving the
-        // library is a filing decision, not an instruction to stop the music,
-        // and stopping it was the loudest thing that happened when you unsaved
-        // the song you were listening to: it vanished from the mini player
-        // mid-bar as though it had been deleted from existence. The audio file
-        // still open on the player keeps feeding it to the end of the track
-        // even after the copy on disk goes; what happens *next* time is the
-        // normal cold path, which resolves and streams it again.
-        //
-        // The delete paths that genuinely mean "and stop playing this" — the
-        // Delete from Library commands in Songs, Albums, Artists and the
-        // playlist pages — call `stopIfPlaying` themselves, immediately before
-        // the delete, and are unaffected.
+        // Deleted songs are removed from the offline store too. Playback isn't stopped;
+        // unsaving the playing song shouldn't cut it off. Delete commands that should
+        // stop it call stopIfPlaying themselves.
         libraryService.onTracksWillDelete = { [weak downloads = self.downloadManager,
                                                weak engine = self.playbackEngine] trackIDs in
             downloads?.removeDownloads(for: trackIDs)
-            // Home's shelves read the played list, not the library, so a delete
-            // that stops here leaves the song on the landing page — playable,
-            // with a plus that has nothing to add to. The snapshot goes with it
-            // or the next launch puts the row straight back.
+            // Home reads the played list, so remove deleted songs there too.
             engine?.forgetFromRecentlyPlayed(ids: trackIDs)
             try? snapshotRepo.delete(ids: trackIDs)
         }
 
-        // The other half of the same seam: a playlist arriving from outside may
-        // be one the user has standing orders to keep on the device. The
-        // download manager decides whether it is — this only tells it a playlist
-        // landed.
+        // An imported playlist may be set to stay downloaded. The download manager decides.
         libraryService.onPlaylistImported = { [weak downloads = self.downloadManager] playlistID in
             downloads?.autoKeepImportedPlaylist(playlistID)
         }
@@ -554,8 +663,7 @@ LaunchTimeline.mark("deps/engine")
             coordinator: onlineCoordinator
         )
 
-        // The remote heart means what the player bar's does: like a saved song,
-        // save an unsaved one (saving is liking).
+        // The remote heart: like a saved song, save an unsaved one.
         self.playbackEngine.isLiked = { [weak self] in self?.libraryService.isFavourited(trackID: $0.id) ?? false }
         self.playbackEngine.onRemoteLike = { [weak self] track in
             guard let self else { return }
@@ -575,31 +683,25 @@ LaunchTimeline.mark("deps/engine")
             do { try historyRepo.record(trackID: track.id, deviceID: deviceID, secondsPlayed: seconds,
                                         source: source) }
             catch { MixLog.playback.error("[history] persist FAILED: \(error)") }
-            // Online (Discover) tracks have no library row — persist a lightweight
-            // snapshot so they survive relaunch on Home and resolve in stats.
+            // Discover tracks have no library row, so keep a snapshot for Home and stats.
             if track.isOnline {
                 do { try snapshotRepo.upsert(track); MixLog.playback.debug("[history] snapshot upserted '\(track.title)'") }
                 catch { MixLog.playback.error("[history] snapshot upsert FAILED: \(error)") }
             }
         }
 
-        // Correct the logged play's listen time once the user leaves the track —
-        // the difference between "started this" and "actually listened to this".
+        // Records how long the track was actually listened to.
         self.playbackEngine.onPlaySecondsFinalised = { trackID, seconds in
             do { try historyRepo.finaliseLatestPlay(trackID: trackID, secondsPlayed: seconds) }
             catch { MixLog.playback.error("[history] finalise FAILED: \(error)") }
         }
 
-        // Restore persisted history so the "Recently Played" list is populated on
-        // launch. Resolve each id against the library first, then fall back to the
-        // online-track snapshot store.
+        // Restore Recently Played: library first, then online snapshots.
         mixMainActivity("launch/history-restore") {
         if let recentIDs = try? historyRepo.fetchRecentTrackIDs() {
             let snapshots = (try? snapshotRepo.fetchAll()) ?? [:]
             let tracks = recentIDs.compactMap { id -> Track? in
-                // `fetch(id:)` sees tombstones, unlike `fetchAll`. A deleted song
-                // is deleted on Home too, and must not fall through to its
-                // snapshot either — that copy outlives the library row.
+                // fetch(id:) sees tombstones. A deleted song stays hidden and skips its snapshot.
                 if let row = try? trackRepo.fetch(id: id) { return row.isDeleted ? nil : row }
                 return snapshots[id]
             }
@@ -608,12 +710,8 @@ LaunchTimeline.mark("deps/engine")
         }
         }
 
-        // Which songs a playlist borrows its cover from is a `LibraryService`
-        // rule; drawing it is the design system's job. This is the seam — the
-        // loader asks, the library answers, and neither has to know the other's
-        // type.
-        // Smart playlists aren't library rows, so their id falls through to
-        // the songs they resolve to right now — same rule, same cover.
+        // The library decides which songs a playlist's cover uses; the loader draws it.
+        // Smart playlist ids fall through to their current songs.
         ArtworkImageLoader.shared.playlistCoverRefs = { [weak self] id in
             guard let self else { return [] }
             if let smart = self.smartPlaylistService.playlists.first(where: { $0.id == id }) {
@@ -629,8 +727,7 @@ LaunchTimeline.mark("deps/engine")
             .debounce(for: .seconds(2), scheduler: DispatchQueue.main)
             .sink { _ in MixtapeShortcuts.updateAppShortcutParameters() }
             .store(in: &cancellables)
-        // Not before the first load: the empty launch value would read as
-        // "every song was deleted" and cost a full rebuild of the index.
+        // Skip the empty launch value, it would look like every song was deleted.
         libraryService.$tracks.combineLatest(libraryService.$artists).dropFirst()
             .debounce(for: .seconds(5), scheduler: DispatchQueue.main)
             .sink { [weak self] tracks, artists in
@@ -642,60 +739,34 @@ LaunchTimeline.mark("deps/engine")
         nowPlayingSurfaces = NowPlayingSurfaces(engine: playbackEngine, library: libraryService)
         #endif
         wireAuthObserver()
-        // Off the main actor, and the session restore that needs the library
-        // rides along behind it. The synchronous form held the main thread for
-        // 3.1 s on the phone — the three bulk fetches alone were 1.4 s of it —
-        // which is time the first window spends not existing.
+        // Off the main actor; session restore waits for it.
         Task { [weak self, libraryService] in
             await libraryService.refreshOffMain()
-            // Needs the library to have been read once, and has no business
-            // holding up the first window. See its own comment.
+            // After the first library load, off the launch path.
             libraryService.reclaimNeverUploadedAudioFromCache()
             mixMainActivity("launch/restore-session") {
                 self?.playbackEngine.restoreLastSession(allTracks: libraryService.tracks)
             }
         }
 
-        // Followed Spotify playlists: check once now, then quietly every quarter
-        // of an hour. Returns immediately when nothing is followed or the account
-        // isn't connected, so the cost for everyone else is one `if`.
+        // Refresh followed Spotify playlists now and every 15 minutes.
+        // Returns early when nothing is followed.
         LaunchTimeline.mark("deps/refresh-task-spawned")
         spotifyFollowService.startAutoSync()
 
-        // Libraries imported before the backfill existed are full of artists
-        // wearing an album cover. This finds them on launch and fetches real
-        // profile photos; once an artist has one it's skipped, so it's a
-        // one-time cost rather than a burst of lookups every launch.
+        // Fetches real artist photos for old imports. Skips artists that have one.
         libraryService.scheduleArtistImageBackfill()
-
-        // Restore the last playback session (paused at its saved position) so the
-        // user can resume where they left off. Does NOT auto-play.
 
         LaunchTimeline.mark("deps/backfills-scheduled")
         libraryService.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
 
-        // DownloadManager is deliberately NOT forwarded.
-        //
-        // It publishes on every status transition — a song starting, finishing,
-        // failing — and forwarding that invalidated all 81 views that hold
-        // `deps` as an @EnvironmentObject, most of which draw nothing to do with
-        // downloads. A large download run put the whole tree through that
-        // thousands of times, and the Mac songs table re-hashes the entire
-        // library each time it re-renders.
-        //
-        // The views that actually draw download state subscribe to the manager
-        // themselves (a `downloadTick` bumped from `.onReceive`), and the leaf
-        // components — DownloadStatusBar, DownloadStatusRing, DownloadsPane,
-        // StoragePane — take it as an @ObservedObject. Anything new that reads
-        // `deps.downloadManager` inside a `body` has to do one of those two
-        // things or it will draw a stale badge.
+        // DownloadManager isn't forwarded: it publishes on every status change and
+        // would redraw every view holding deps. Views that show download state observe
+        // it directly.
 
-        // And the local-files scan. A nested ObservableObject doesn't republish
-        // through its parent on its own, so without this the sidebar row and the
-        // Settings count would both sit on whatever the first scan happened to
-        // find and never move again.
+        // Nested ObservableObjects don't republish through their parent.
         localFiles.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
@@ -704,35 +775,44 @@ LaunchTimeline.mark("deps/engine")
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
 
-        // The first look at the watched folders. Cheap when the list is empty,
-        // which it is for everyone who has never opened this feature.
+        // First scan of watched folders. Cheap when there are none.
         mixMainActivity("launch/local-files-rescan") { localFiles.rescan() }
 
-        // Forward authService publishes so views can react to authentication changes (like user logins/logouts)
         authService.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
 
-        // Off-actor, so the first real Supabase call finds the client already
-        // built rather than paying for it on the main thread. See SupabaseConfig.warm().
+        // Build the Supabase client off the main actor.
         Task { await SupabaseConfig.warm(); LaunchTimeline.mark("deps/supabase-warmed") }
         // Eager, so a song started before sign-in still counts as "playing here".
         _ = continuity
         // Lets a handoff carry the upload the sending device already resolved.
         continuity.online = onlineCoordinator
-        // The device picker lists each device's audio quality, so the setting
-        // has to travel with presence rather than sit in local Settings.
+        // The device picker shows each device's quality, so it goes with presence.
         downloadManager.$downloadQuality
             .sink { [weak self] q in self?.continuity.setQuality(q.title) }
             .store(in: &cancellables)
         // Eager too, so a guest's queue redirect is back before the first tap.
         jam.online = onlineCoordinator
+        syncService.onBulkRefused = { [weak self] in
+            self?.showToast(.failed("A change to more than 50 songs wasn't confirmed, so it was undone"))
+        }
         syncService.onRealtimeReady = { [weak self] uid in
             guard let self else { return }
             // A Jam guest mirrors the host, not its own devices.
             if !jam.isGuest { continuity.start(userID: uid) }
             jam.resume()
+            InboxService.shared.start(userID: uid)
+            MessagesService.shared.start(userID: uid)
         }
+        InboxService.shared.onToast = { [weak self] in self?.showToast(Toast($0, symbol: "bell.fill")) }
+        MessagesService.shared.onToast = { [weak self] in self?.showToast(Toast($0, symbol: "bubble.left.fill")) }
+        // Playback errors were a second banner at the top. Now they're the same card.
+        playbackEngine.$errorMessage
+            .merge(with: onlineCoordinator.$errorMessage)
+            .compactMap { $0 }
+            .sink { [weak self] in self?.showToast(.failed($0)) }
+            .store(in: &cancellables)
         LaunchTimeline.mark("deps/init-end")
     }
 
@@ -740,10 +820,7 @@ LaunchTimeline.mark("deps/engine")
 
     public func restoreSessionIfNeeded() async {
         isRestoringSession = true
-        // Run the session restore and a minimum splash duration concurrently.
-        // The splash stays visible for at least 1.8 s — long enough to feel
-        // intentional — but never longer than the actual network call if that
-        // takes more time.
+        // Restore the session and hold the splash at least 1.8 s, concurrently.
         async let session: Void = authService.restoreSession()
         async let minDelay: Void = Task.sleep(nanoseconds: 1_800_000_000)
         await session
@@ -773,9 +850,7 @@ LaunchTimeline.mark("deps/engine")
             }
             .store(in: &cancellables)
 
-        // Losing the network turns the Downloaded filter on for the user; it
-        // stays a filter they can switch off, and what isn't downloaded is then
-        // drawn grey rather than hidden. See `LibraryService.downloadedOnly`.
+        // Going offline turns on the Downloaded filter. Non-downloaded songs show grey.
         libraryService.offlinePlayableIDs = { [weak self] in
             self?.downloadManager.downloadedTrackIDs ?? []
         }
@@ -784,22 +859,33 @@ LaunchTimeline.mark("deps/engine")
         }
         onlineCoordinator.onStatus = { [weak self] in self?.showToast($0) }
         downloadManager.onlineCoordinator = onlineCoordinator
+        // Edits synced from another device are rendered here from the original, not searched for.
+        let rebuildEdit: (Track) async throws -> URL = { [weak self] track in
+            guard let self else { throw CancellationError() }
+            return try await self.rebuildEdit(track)
+        }
+        playbackEngine.editRebuilder = rebuildEdit
+        downloadManager.editRebuilder = rebuildEdit
         downloadManager.$isConnected
             .combineLatest(authService.$isOffline)
             .map { !$0 || $1 }
             .removeDuplicates()
             .receive(on: RunLoop.main)
             .sink { [weak self] offline in
-                self?.libraryService.offlineOnly = offline
-                // Only on the way out — coming back doesn't yank a filter away
-                // from somebody who may have chosen it.
-                if offline { self?.libraryService.downloadedOnly = true }
+                guard let self else { return }
+                libraryService.offlineOnly = offline
+                // Coming back undoes it only if going offline turned it on.
+                if offline, !libraryService.downloadedOnly {
+                    libraryService.downloadedOnly = true
+                    filterWentOnOffline = true
+                } else if !offline, filterWentOnOffline {
+                    libraryService.downloadedOnly = false
+                    filterWentOnOffline = false
+                }
             }
             .store(in: &cancellables)
 
-        // The network coming back is the only signal an offline session gets
-        // that it can try again — nothing else asks. The retry is a no-op
-        // unless we are actually running on a cached session.
+        // Reconnecting retries a cached-session sign-in. No-op otherwise.
         downloadManager.$isConnected
             .removeDuplicates()
             .filter { $0 }
@@ -808,8 +894,7 @@ LaunchTimeline.mark("deps/engine")
             }
             .store(in: &cancellables)
 
-        // A refresh that lands turns isOffline off — which is the moment the
-        // sync `onSignIn` skipped can finally run.
+        // Coming back online runs the sync that onSignIn skipped.
         authService.$isOffline
             .removeDuplicates()
             .dropFirst()
@@ -822,13 +907,8 @@ LaunchTimeline.mark("deps/engine")
     }
 
     private func onSignInSync(user: AppUser) {
-        // The store goes first. Everything below writes through a repository or
-        // seeds rows of its own, and until this has run those land in whichever
-        // account's file was open a moment ago.
-        //
-        // Each account has its own store, so this opens theirs rather than
-        // wiping anyone's: the outgoing library stays on disk for when they
-        // come back, which is the whole point of it.
+        // Switch the store first so nothing below writes into the previous account's file.
+        // Each account keeps its own store on disk.
         let lastUserKey = ModelStore.lastUserKey
         let lastUserID = UserDefaults.standard.string(forKey: lastUserKey)
         if ModelStore.shared.open(for: user.id) {
@@ -842,15 +922,12 @@ LaunchTimeline.mark("deps/engine")
         ExportManager.shared.currentUsername = user.username ?? user.displayName
         downloadManager.currentUserID = user.id.uuidString
         smartPlaylistService.currentUserID = user.id.uuidString
-        // The outside connections are the account's, not the device's. Both are
-        // told who is signing in *before* the marker moves, since "was this
-        // grant made by this user?" is a question only the outgoing name can
-        // answer for connections made before either service recorded an owner.
+        recap.currentUserID = user.id
+        // Connections belong to the account. Told before the marker moves, since only
+        // the previous id can say who made an unowned grant.
         spotifyAuth.accountDidChange(to: user.id, previous: lastUserID)
         LastFmScrobbler.shared.accountDidChange(to: user.id, previous: lastUserID)
-        // What follows the account is replaced outright rather than cleared: an
-        // incoming user with no copy of their own gets an empty one, which is
-        // the truth, and the outgoing user's records are never pushed to them.
+        // Replaced, not cleared: a new user gets their own (possibly empty) copy.
         if let lastUserID, lastUserID != user.id.uuidString {
             spotifyImportLedger.accountDidChange(remote: user.spotifyImports)
             spotifyFollowService.accountDidChange(remote: user.spotifyLinks)
@@ -860,9 +937,7 @@ LaunchTimeline.mark("deps/engine")
     }
 
     private func onSignIn(user: AppUser) async {
-        // Signed in on a cached session: there is no token to sync with, and
-        // handing the sync service an empty one only buys a round of failures.
-        // `wireAuthObserver` runs this again when the network comes back.
+        // No token on a cached session. wireAuthObserver runs this when back online.
         guard !authService.isOffline else { return }
         let token = authService.accessToken ?? ""
         // Force-logout hook: when this device is revoked from the web, sign out.
@@ -874,9 +949,10 @@ LaunchTimeline.mark("deps/engine")
 
         // Publish a fresh listening-stats snapshot for the discovery profile.
         await profileStatsService.publishMyStats(userID: user.id)
+        await recap.refresh()
+        Task { await refreshPostWaveforms(user: user.id) }
 
-        // Covers saved before the 1024 px ceiling (300/512 px) stay soft forever
-        // unless re-fetched. Do it once per install, in the background.
+        // Refetch covers saved below 1024 px, once per install.
         let upgradeKey = "mix.coverUpgrade.v1"
         if !UserDefaults.standard.bool(forKey: upgradeKey) {
             let low = ArtworkProvider.shared.trackIDsWithLowResArtwork(maxDimension: 600)
@@ -890,13 +966,15 @@ LaunchTimeline.mark("deps/engine")
     }
 
     private func onSignOutSync() {
-        jam.leave()
+        jam.leave(quietly: true)
         continuity.stop()
+        InboxService.shared.stop()
+        MessagesService.shared.stop()
         clearPlaybackSession()
-        // The filter is a choice the signed-out person made; the next one starts
-        // with it off unless there is genuinely no network.
+        // The next user starts with the filter off unless offline.
         libraryService.downloadedOnly = libraryService.offlineOnly
         smartPlaylistService.currentUserID = nil
+        recap.signedOut()
 
         fileStorage.currentUserID = nil
         PlaylistMetadataService.shared.currentUserID = nil
@@ -904,25 +982,15 @@ LaunchTimeline.mark("deps/engine")
         ExportManager.shared.currentUsername = nil
         downloadManager.currentUserID = nil
 
-        // Connections follow the account out. The stored grants stay on disk,
-        // stamped with their owner, exactly as the local library does — they are
-        // simply unreachable until an account claims them again.
+        // Grants stay on disk with their owner until the account signs in again.
         spotifyAuth.signedOut()
         LastFmScrobbler.shared.signedOut()
     }
 
     private func onSignOut() async {
         await syncService.onSignOut()
-        // Deliberately keeps the local library, and keeps the last-user marker
-        // that guards it. Signing out is not a request to delete anything: this
-        // is still the same person's data a minute later, and wiping it here
-        // cost a full re-pull on every sign-in — and lost, permanently, anything
-        // the server hadn't seen yet. Isolation is enforced at the point it
-        // actually matters, when a *different* user signs in (onSignInSync).
-        //
-        // Nothing of the signed-out account stays on screen: onSignOutSync has
-        // already stopped playback and cleared the in-memory history, and the
-        // app shows the sign-in wall until someone authenticates.
+        // Keeps the local library and the last-user marker. Isolation happens when a
+        // different user signs in (onSignInSync).
     }
 
     /// Nothing playing, nothing queued, nothing to resume, no history.
@@ -933,14 +1001,8 @@ LaunchTimeline.mark("deps/engine")
         tapeDecks.reset()
     }
 
-    /// Rebuild what a wipe invalidated.
-    ///
-    /// The stores that own their own derived state (the Discover landing, the
-    /// playlist last-played dates) subscribe to the reset themselves. What's left
-    /// is the state that lives on services this container wired together, and
-    /// which nothing else is in a position to refresh: the in-memory
-    /// recently-played list, and the library's own published arrays. See
-    /// `UserDataReset`.
+    /// Rebuilds what a wipe invalidated that nothing else refreshes: recently
+    /// played and the library's published arrays. See UserDataReset.
     private func wireResetObserver() {
         NotificationCenter.default.addObserver(
             forName: .mixUserDataReset, object: nil, queue: .main
@@ -949,11 +1011,10 @@ LaunchTimeline.mark("deps/engine")
                 guard let self else { return }
                 let reset = UserDataReset.from(note)
                 if reset.clearedHistory { self.playbackEngine.clearRecentlyPlayed() }
-                if reset.clearedLibrary { SuggestionFeedback.clear() }
+                // A switch adopts the incoming account's copy on its first pull.
+                if reset.clearedLibrary && !reset.isAccountSwitch { SuggestionFeedback.clear() }
                 if reset.clearedLibrary {
-                    // The recently-played entries that survive a library-only
-                    // wipe are the Discover plays — the library ones no longer
-                    // resolve to anything playable.
+                    // Only Discover plays survive a library wipe.
                     self.playbackEngine.clearRecentlyPlayed()
                     self.libraryService.refresh()
                 }
@@ -961,30 +1022,14 @@ LaunchTimeline.mark("deps/engine")
         }
     }
 
-    /// Brings the app in line with the store `ModelStore` just opened.
-    ///
-    /// Nothing is deleted here, which is the whole point: the outgoing
-    /// account's rows, history and snapshots are in their own file, and the
-    /// incoming account's are in the one now open. What has to change is
-    /// everything held *outside* the store — in-memory lists, caches, and
-    /// anything derived from a library that is no longer the one on screen.
-    ///
-    /// Their sync watermarks are deliberately left alone. They were written the
-    /// last time this device pulled *their* rows, and those rows are still
-    /// here, so the next pull is a few seconds of changes rather than the
-    /// five-minute full re-download that made signing back in feel like a
-    /// fresh install.
+    /// Syncs in-memory state with the store ModelStore just opened. Nothing is
+    /// deleted. Sync watermarks stay, so the next pull is incremental.
     private func adoptSwitchedStore() {
-        // A session restored on launch, before anyone signed in, is the last
-        // account's — and it may have been restored from an older build that
-        // never cleared it on sign-out.
+        // A session restored at launch belongs to the previous account.
         clearPlaybackSession()
         libraryService.storeDidOpen()
         playbackEngine.restoreHistory([]) // clear in-memory recently played
-        // A different person is signing in, so nothing derived from the last
-        // one's library or history may survive into their home page. Announced
-        // as a switch rather than a wipe: what follows the account has already
-        // been handed the incoming user's own copy and must not be cleared.
+        // Announced as a switch, not a wipe, so per-account state isn't cleared.
         UserDataReset.announce(.accountSwitch)
     }
 }

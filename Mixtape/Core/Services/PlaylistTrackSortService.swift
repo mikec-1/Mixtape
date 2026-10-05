@@ -1,22 +1,6 @@
-// PlaylistTrackSortService.swift
-// Mixtape — Core/Services
-//
-// Remembers how each individual playlist is sorted — "Playlist Order",
-// "Date Added", "Title" and the direction — and carries that with the account
-// rather than the device.
-//
-// A sort used to last exactly as long as the visit: `PlaylistDetailView` held
-// it in `@State` and reset it on the way out. That is right for a filter and
-// wrong for a sort. Someone who reads one playlist newest-first is going to
-// want it newest-first tomorrow, and having to say so on every visit — and
-// again on the other device — is the app forgetting something it watched the
-// user decide.
-//
-// Only *non-default* sorts are stored. A playlist left in its own running
-// order writes nothing and drops any entry it had, so the map stays a handful
-// of rows even in a library of hundreds of playlists — which matters, because
-// it rides in `user_metadata` beside the library sort order. See
-// [PlaylistSortSyncService] for why that store and not a table.
+// Per-playlist track sort, synced with the account in `user_metadata`
+// (see `PlaylistSortSyncService`). Only non-default sorts are stored, keeping
+// the map small.
 
 import Foundation
 import Combine
@@ -26,11 +10,10 @@ final class PlaylistTrackSortService: ObservableObject {
 
     static let shared = PlaylistTrackSortService()
 
-    /// Playlist id → the sort chosen for it. Absent means "the playlist's own
-    /// order", which is also what a reset writes.
+    /// Playlist id -> sort. Absent means the playlist's own order.
     @Published private(set) var sorts: [UUID: TrackSort] = [:]
 
-    /// Set by `AppDependencies` — writes the encoded map into `user_metadata`.
+    /// Writes the encoded map to `user_metadata`.
     var pushWriter: ((String) -> Void)?
 
     private var isApplyingRemote = false
@@ -45,14 +28,8 @@ final class PlaylistTrackSortService: ObservableObject {
 
     // MARK: - Reading and writing
 
-    /// What a playlist opens in when nothing has been chosen for it.
-    ///
-    /// Favourites is the exception: it is not a sequenced playlist, it is a
-    /// running log of what you saved, so it opens newest-first the way Liked
-    /// Songs does in Spotify. Its running order is *not* chronological — songs
-    /// arrive there from a Spotify pull, a heart press and a sync in whatever
-    /// order those happen — so "Custom Order" there was an order nobody chose,
-    /// and songs saved an hour ago landed in the middle of the list.
+    /// Default sort for a playlist. Favourites opens newest-first since its
+    /// running order is arbitrary.
     static func defaultSort(for playlistID: UUID) -> TrackSort {
         playlistID == Playlist.favouritesID
             ? TrackSort(field: .dateAdded, ascending: false)
@@ -64,9 +41,8 @@ final class PlaylistTrackSortService: ObservableObject {
     }
 
     func setSort(_ sort: TrackSort, for playlistID: UUID) {
-        // Compared against *this* playlist's default rather than `isDefault`, or
-        // choosing Custom Order on Favourites would store nothing and fall
-        // straight back to newest-first.
+        // Compare against this playlist's default, not `isDefault`, or Custom Order
+        // on Favourites would never be stored.
         let next: TrackSort? = sort == Self.defaultSort(for: playlistID) ? nil : sort
         guard sorts[playlistID] != next else { return }
         sorts[playlistID] = next
@@ -75,21 +51,17 @@ final class PlaylistTrackSortService: ObservableObject {
         schedulePush()
     }
 
-    /// Drops a playlist's remembered sort — for when the playlist itself goes.
-    /// A map that keeps naming deleted playlists is one that only ever grows.
+    /// Drops a deleted playlist's sort so the map doesn't grow forever.
     func forget(playlistID: UUID) {
         guard sorts.removeValue(forKey: playlistID) != nil else { return }
         persist()
         schedulePush()
     }
 
-    /// Takes the account's copy as authoritative, on sign-in and on every
-    /// session refresh — the same contract as `PlaylistSortSyncService`.
+    /// The account's copy wins, same as `PlaylistSortSyncService`.
     func adoptRemote(_ raw: String?) {
         guard let raw else { return }
-        // A change made in the last second hasn't been pushed yet, so the
-        // account's copy is behind us and adopting it would undo the choice the
-        // user just made.
+        // An unpushed local change is newer than the account's copy.
         guard pushTask == nil else { return }
         let remote = Self.decode(raw)
         guard remote != sorts else { return }
@@ -105,9 +77,7 @@ final class PlaylistTrackSortService: ObservableObject {
         UserDefaults.standard.set(Self.encode(sorts), forKey: Self.key)
     }
 
-    /// Coalesces a burst of changes into one write. Flipping through four
-    /// fields to find the one you meant is a single decision, not four, and
-    /// each push costs an auth round trip and a `.userUpdated` event.
+    /// Debounces a burst of changes into one write.
     private func schedulePush() {
         pushTask?.cancel()
         let payload = Self.encode(sorts)
@@ -121,9 +91,8 @@ final class PlaylistTrackSortService: ObservableObject {
 
     // MARK: - Coding
 
-    /// A flat `[String: String]` of `id → "field:direction"`, so the value
-    /// stays readable in the Supabase dashboard and survives a new sort field
-    /// being added later (an unknown field simply drops out on read).
+    /// Flat `id -> "field:direction"` map: readable in the dashboard, and unknown
+    /// fields drop out on read.
     static func encode(_ sorts: [UUID: TrackSort]) -> String {
         let pairs = sorts.map { ($0.key.uuidString, "\($0.value.field.rawValue):\($0.value.ascending ? "asc" : "desc")") }
         let dict = Dictionary(uniqueKeysWithValues: pairs)
@@ -144,10 +113,7 @@ final class PlaylistTrackSortService: ObservableObject {
                   let field = TrackSortField(rawValue: String(fieldRaw))
             else { continue }
             let sort = TrackSort(field: field, ascending: parts.last != "desc")
-            // Against *this* playlist's default, not `isDefault`. Favourites
-            // defaults to newest-first, so "Playlist Order" there is a real
-            // choice — dropping it on read is what made that one playlist snap
-            // back to Date Added on every session refresh.
+            // Against this playlist's default, not `isDefault` (Favourites defaults to newest-first).
             guard sort != defaultSort(for: id) else { continue }
             result[id] = sort
         }

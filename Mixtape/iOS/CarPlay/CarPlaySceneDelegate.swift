@@ -1,8 +1,5 @@
-// CarPlaySceneDelegate.swift
-// Playlists and Recently Played on the car's screen. Now Playing is the system
-// template, fed by the same MPNowPlayingInfoCenter and remote commands as the
-// Lock Screen. Runs in the CarPlay simulator only: a device build needs Apple's
-// carplay-audio entitlement, which a personal team can't be granted.
+// CarPlay: Playlists and Recently Played. Now Playing is the system template, fed by
+// MPNowPlayingInfoCenter. Simulator only: a device build needs the carplay-audio entitlement.
 
 #if os(iOS)
 import CarPlay

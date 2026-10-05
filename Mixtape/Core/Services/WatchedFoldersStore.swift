@@ -1,19 +1,7 @@
-// WatchedFoldersStore.swift
-// Mixtape — Core/Services
-//
-// The folders on this device that the user has asked Mixtape to look in.
-//
-// This is deliberately *not* the export folder. Mixtape writes to the export
-// folder, which is what made scanning it such a bad idea: a copy Mixtape wrote
-// looks exactly like new music to a scanner, so "Sync" could resurrect songs
-// the user had deleted on another device. A watched folder is the opposite —
-// Mixtape never writes to one, so everything found in it is, by definition,
-// the user's own file that they put there themselves.
-//
-// Folders are held as security-scoped bookmarks rather than paths so they
-// survive a rename or a move, and so a folder picked on iOS stays reachable
-// after relaunch. macOS isn't sandboxed today, where the scope calls are
-// harmless no-ops; iOS very much needs them.
+// Folders the user asked Mixtape to watch on this device. Not the export
+// folder: Mixtape never writes here, so everything found is the user's.
+// Stored as security-scoped bookmarks so they survive moves and iOS relaunches
+// (no-ops on unsandboxed macOS).
 
 import Foundation
 import Combine
@@ -24,10 +12,9 @@ import SwiftUI
 /// One folder the user has added, as stored.
 public struct WatchedFolder: Identifiable, Codable, Hashable, Sendable {
     public let id: UUID
-    /// Bookmark data — the durable reference. The path below is a label.
+    /// The durable reference; the path is just a label.
     public var bookmark: Data
-    /// Last known path, for display and for a fallback when the bookmark
-    /// cannot be resolved (an unplugged drive, a folder deleted outright).
+    /// Last known path, for display and as a fallback when the bookmark fails.
     public var lastKnownPath: String
 
     public var displayName: String { (lastKnownPath as NSString).lastPathComponent }
@@ -49,13 +36,8 @@ public final class WatchedFoldersStore: ObservableObject {
     private let defaults: UserDefaults
     private static let key = "localFiles.watchedFolders.v1"
 
-    /// Scopes opened this launch, kept open until the process ends.
-    ///
-    /// A security-scoped URL has to stay open for as long as anything may read
-    /// through it, and "anything" here includes an AVPlayer that holds the file
-    /// for the length of a song. Balancing each start with a stop at the end of
-    /// a scan would pull the floor out from under playback, so the scope is
-    /// opened once per folder per launch and released when the app exits.
+    /// Scopes opened this launch and kept open (AVPlayer may read a file for a
+    /// whole song). Released at exit.
     private var openScopes: [UUID: URL] = [:]
 
     public init(defaults: UserDefaults = .standard) {
@@ -65,10 +47,8 @@ public final class WatchedFoldersStore: ObservableObject {
 
     // MARK: Reading
 
-    /// Every watched folder that can actually be reached right now, paired with
-    /// its live URL. A folder whose bookmark no longer resolves is skipped, not
-    /// removed: an external drive comes back when it is plugged in again, and
-    /// deleting the user's setting because a disk was unmounted would be rude.
+    /// Reachable watched folders with live URLs. Unresolvable ones are skipped,
+    /// not removed (e.g. an unplugged drive).
     public func resolvedFolders() -> [(folder: WatchedFolder, url: URL)] {
         folders.compactMap { folder in
             guard let url = resolve(folder) else { return nil }
@@ -80,8 +60,7 @@ public final class WatchedFoldersStore: ObservableObject {
 
     // MARK: Editing
 
-    /// Adds a folder. Adding one already in the list is a no-op rather than an
-    /// error — the user has said what they want either way.
+    /// Adds a folder. No-op if already present.
     @discardableResult
     public func add(_ url: URL) -> Bool {
         let path = url.standardizedFileURL.path(percentEncoded: false)
@@ -129,9 +108,7 @@ public final class WatchedFoldersStore: ObservableObject {
                                  options: options,
                                  relativeTo: nil,
                                  bookmarkDataIsStale: &stale) else {
-            // Fall back to the recorded path. Unsandboxed macOS reads it fine,
-            // and a readable folder is better than a folder the user has to add
-            // again because its bookmark went bad.
+            // Fall back to the recorded path; unsandboxed macOS can read it.
             let fallback = URL(fileURLWithPath: folder.lastKnownPath)
             return FileManager.default.fileExists(atPath: folder.lastKnownPath) ? fallback : nil
         }

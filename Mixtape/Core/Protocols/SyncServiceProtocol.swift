@@ -1,9 +1,4 @@
-// SyncServiceProtocol.swift
-// Mixtape — Core Protocols
-//
-// Implemented by StubSyncService and SupabaseSyncService.
-// The sync service is the only component that talks to the remote database.
-// All other services go through local repositories; sync runs in the background.
+// The only component that talks to the remote database.
 
 import Foundation
 import Combine
@@ -26,9 +21,7 @@ public enum SyncState: Equatable {
 // MARK: - Conflict Resolution Strategy
 
 public enum ConflictResolution {
-    /// Server record wins — overwrites the local change.
     case serverWins
-    /// Local record wins — will be re-pushed to the server.
     case localWins
 }
 
@@ -53,8 +46,7 @@ public protocol SyncServiceProtocol: AnyObject {
     /// Full sync: push all pending local changes, then pull all remote changes.
     func sync() async throws
 
-    /// Push a single entity change immediately (e.g. playlist rename).
-    /// Falls back to queuing if offline.
+    /// Queues instead when offline.
     func push<T: Codable>(_ entity: T, table: String) async throws
 
     // MARK: Background sync

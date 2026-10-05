@@ -1,10 +1,5 @@
-// ArtistBioService.swift
-// Mixtape — Core/Services/Enrichment
-//
-// A paragraph about the artist for the About block. Deezer's catalogue has no
-// biography, so this asks Wikipedia's REST summary endpoint — no key, no
-// scraping, one small JSON per artist — and caches what comes back for the
-// session.
+// Artist bio for the About block. Deezer has none, so this uses Wikipedia's
+// REST summary (no key) and caches it for the session.
 
 import Foundation
 
@@ -14,16 +9,12 @@ actor ArtistBioService {
 
     private var cache: [String: String?] = [:]
 
-    /// The opening paragraph of the artist's Wikipedia article, or nil when
-    /// there isn't one we can trust. Disambiguation pages are dropped: a page
-    /// listing seven people with this name is not a biography of any of them.
+    /// First paragraph of the artist's Wikipedia article. Disambiguation pages are dropped.
     func bio(for artistName: String) async -> String? {
         let key = artistName.lowercased()
         if let hit = cache[key] { return hit }
 
-        // Bare name first, then the disambiguated titles a musician actually
-        // lives under, then Wikipedia's own search — which is what finds the
-        // ones whose article is titled something else entirely.
+        // Bare name, then the usual musician titles, then Wikipedia search.
         var text = await fetch(artistName)
         for suffix in ["(rapper)", "(musician)", "(band)", "(singer)"] where text == nil {
             text = await fetch("\(artistName) \(suffix)")
@@ -54,8 +45,7 @@ actor ArtistBioService {
         return extract
     }
 
-    /// Wikipedia's own search, restricted to musician-ish articles. Used only
-    /// when guessing the title failed.
+    /// Wikipedia search limited to musician articles. Fallback only.
     private func searchTitle(_ artistName: String) async -> String? {
         var components = URLComponents(string: "https://en.wikipedia.org/w/api.php")!
         components.queryItems = [

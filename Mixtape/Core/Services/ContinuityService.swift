@@ -1,20 +1,8 @@
-// ContinuityService.swift
-// Mixtape — Core/Services
-//
-// Spotify Connect-style playback across one account's open apps. Every signed-in
-// device joins a private Realtime channel, `playback:<user id>`:
-//
-//   presence   which devices are open (keyed by device id)
-//   "state"    what a device is playing — sent only by a device playing itself
-//   "command"  play / pause / next / previous / seek / transfer, aimed at one device
-//
-// A device that isn't playing mirrors the one that is: the engine shows the
-// remote song and hands its transport here (`PlaybackEngine.remoteTransport`),
-// so the player bar, mini player, Now Playing, media keys and lock screen all
-// drive the other device without knowing about it.
-//
-// The web player speaks the same protocol (mixtape-web src/lib/continuity.ts).
-// The wire shapes below are that contract — change both or neither.
+// Spotify Connect-style playback between one account's devices over the
+// `playback:<user id>` Realtime channel: presence for open devices, "state"
+// from whoever is playing, "command" aimed at one device. Idle devices mirror
+// the player through PlaybackEngine.remoteTransport.
+// Shares its protocol with mixtape-web src/lib/continuity.ts, keep them in sync.
 
 import Foundation
 import Combine
@@ -29,15 +17,12 @@ public final class ContinuityService: ObservableObject {
         public let name: String
         /// "macOS" | "iOS" | "web"
         public let platform: String
-        /// The device's audio quality — "High" / "Normal" / "Low". Optional
-        /// because the web player has no download quality to report.
+        /// Nil on web.
         public var quality: String?
     }
 
-    /// What a device is doing, for the picker. Derived from its last `state`
-    /// broadcast; for this device, from the engine.
     public struct DeviceStatus: Equatable, Sendable {
-        /// "Song — Artist", or nil when that device isn't playing anything.
+        /// "Song - Artist", nil when idle.
         public var line: String?
         public var isPlaying: Bool
     }
@@ -50,22 +35,18 @@ public final class ContinuityService: ObservableObject {
         var duration: Double
         var artworkKey: String?
         var sourceRef: String?
-        /// A catalogue cover address, for songs with no stored blob and no
-        /// storage key — everything played straight out of Discover. Without it
-        /// the other device has nothing at all to draw: it can't reach into this
-        /// one's memory, and there is no row in the database to sign.
+        /// Catalogue cover URL for Discover songs with no stored artwork.
         var coverURL: String?
-        /// The upload the sending device resolved this song to.
-        ///
-        /// Finding it is the larger half of a cold resolve — the transcode is
-        /// the rest — and the device that was just playing already knows. Sent
-        /// so the one taking over can skip straight to the download instead of
-        /// searching again, which is the 5–10 s of silence on a handoff.
+        /// The sender's resolved upload, so the receiver can skip the search.
         var videoID: String?
+        /// A signed link to the sender's own file, for imports a search can't find.
+        var audioURL: String?
+        /// Set for an edit, so the receiver renders it from their own copy of the original.
+        var edit: SongEdit?
         enum CodingKeys: String, CodingKey {
-            case id, title, artist, album, duration
+            case id, title, artist, album, duration, edit
             case artworkKey = "artwork_key", sourceRef = "source_ref"
-            case coverURL = "cover_url", videoID = "video_id"
+            case coverURL = "cover_url", videoID = "video_id", audioURL = "audio_url"
         }
     }
 
@@ -75,8 +56,7 @@ public final class ContinuityService: ObservableObject {
         var position: Double
         var duration: Double
         var playing: Bool
-        /// ms since epoch of the sender's last start. A new value is "someone
-        /// pressed play over there"; the newest start wins.
+        /// Sender's last start time in ms. Newest wins.
         var since: Double
         /// Current + upcoming track ids, so a transfer keeps the queue going.
         var queue: [String]
@@ -93,8 +73,7 @@ public final class ContinuityService: ObservableObject {
     @Published public private(set) var devices: [Device] = []
     /// The device this one is showing and controlling; nil while playback is local.
     @Published public private(set) var activeRemote: Device?
-    /// What each device is playing, keyed by device id. Published so the picker
-    /// follows a remote device's song without polling it.
+    /// Keyed by device id.
     @Published public private(set) var statuses: [String: DeviceStatus] = [:]
     /// This device. `quality` changes when the user changes it in Settings.
     @Published public private(set) var me: Device
@@ -102,11 +81,9 @@ public final class ContinuityService: ObservableObject {
     private let client: SupabaseClient
     private let engine: PlaybackEngine
     private let library: LibraryService
-    private let toast: (String) -> Void
+    private let toast: (Toast) -> Void
 
-    /// Owner of the resolved-upload index. Installed by `AppDependencies`;
-    /// weak because the coordinator holds the whole online session and this
-    /// only ever borrows one lookup from it.
+    /// Weak, only used for one lookup.
     public weak var online: OnlinePlaybackCoordinator?
 
     private var channel: RealtimeChannelV2?
@@ -121,10 +98,7 @@ public final class ContinuityService: ObservableObject {
     private var presenceRefs: [String: Set<String>] = [:]
     private var sendScheduled = false
 
-    /// Catalogue cover lookups, both directions, memoized per track: the address
-    /// to advertise for what we're playing, and the bytes for what a remote
-    /// device is playing. `nil` value = looked and found nothing, so we don't
-    /// ask again every 500 ms tick.
+    /// Memoized cover lookups both ways. A nil value means nothing was found.
     private let catalogue = ITunesSearchClient()
     private var coverURLs: [UUID: String?] = [:]
     private var remoteCovers: [UUID: Data?] = [:]
@@ -133,7 +107,7 @@ public final class ContinuityService: ObservableObject {
 
     public init(client: SupabaseClient, engine: PlaybackEngine, library: LibraryService,
                 deviceID: String, name: String, platform: String,
-                toast: @escaping (String) -> Void) {
+                toast: @escaping (Toast) -> Void) {
         self.client  = client
         self.engine  = engine
         self.library = library
@@ -157,11 +131,9 @@ public final class ContinuityService: ObservableObject {
 
     // MARK: - Lifecycle
 
-    /// Called once Realtime has credentials — sign-in and every foreground.
     public func start(userID: UUID) {
         let topic = "playback:\(userID.uuidString.lowercased())"
-        // Sign-in and the first foreground arrive within the same second. Tearing
-        // down a join still in flight is what left this channel dead for good.
+        // Don't tear down a join that's still in flight.
         if channel?.topic == "realtime:\(topic)", channel?.status == .subscribing { return }
         let old = channel
         channel = nil
@@ -172,15 +144,13 @@ public final class ContinuityService: ObservableObject {
             if let old { await client.removeChannel(old) }
             var delay: Duration = .seconds(1)
             while !Task.isCancelled {
-                // Never let `subscribe()` be the one to open the socket — see
-                // `connectRealtimeSocket()` for the 70 s of silence that causes.
+                // Open the socket ourselves, see connectRealtimeSocket().
                 await client.connectRealtimeSocket()
                 let channel = client.channel(topic) {
                     $0.isPrivate = true
                     $0.presence.key = key
                 }
-                // Stored before subscribing, so a restart mid-join removes this
-                // channel rather than being handed it back from the client's cache.
+                // Stored first so a restart removes this channel.
                 self.channel = channel
                 let presence = channel.presenceChange()
                 let states   = channel.broadcastStream(event: "state")
@@ -192,8 +162,7 @@ public final class ContinuityService: ObservableObject {
                     MixLog.sync.error("[Continuity] join failed, retrying in \(delay): \(error)")
                     self.channel = nil
                     await client.removeChannel(channel)
-                    // A join only ever fails here because the socket is dead —
-                    // and a dead socket stays dead until it is replaced.
+                    // Only fails on a dead socket, so replace it.
                     await client.reconnectRealtimeSocket()
                     try? await Task.sleep(for: delay)
                     delay = min(delay * 2, .seconds(30))
@@ -264,8 +233,7 @@ public final class ContinuityService: ObservableObject {
         statuses[device.id] ?? DeviceStatus(line: nil, isPlaying: false)
     }
 
-    /// The audio quality this device is set to, re-announced to the others.
-    /// Cheap to call repeatedly — a no-op unless the value actually changed.
+    /// No-op unless it changed.
     public func setQuality(_ quality: String) {
         guard me.quality != quality else { return }
         me.quality = quality
@@ -273,8 +241,7 @@ public final class ContinuityService: ObservableObject {
         Task { [me] in try? await channel.track(me) }
     }
 
-    /// Recomputed on the ticker rather than from the engine's publishers: those
-    /// fire in `willSet`, so the queue's current track is still the old one there.
+    /// Polled because the engine's publishers fire in willSet.
     private func refreshMyStatus() {
         let next: DeviceStatus
         if engine.remoteTransport == nil, let track = engine.queue.currentTrack {
@@ -341,8 +308,7 @@ public final class ContinuityService: ObservableObject {
                 joined = true
             }
         }
-        // A device that just opened should see what's playing without waiting
-        // for the next heartbeat.
+        // Send state right away to newly joined devices.
         if joined { scheduleSend() }
     }
 
@@ -372,8 +338,7 @@ public final class ContinuityService: ObservableObject {
             return
         }
         if activeRemote != device { activeRemote = device }
-        // Before `mirrorRemote`, so the state sink already sees a mirror and
-        // doesn't broadcast the remote song back as ours.
+        // Set before mirroring so we don't echo the remote song back.
         engine.remoteTransport = { [weak self] in self?.forward($0) }
         engine.remotePlayRedirect = { [weak self] track, context in
             self?.sendToRemote(track, context: context) ?? false
@@ -404,8 +369,7 @@ public final class ContinuityService: ObservableObject {
     private func takeOver(_ state: StateMessage, position: TimeInterval) async {
         guard let summary = state.track else { return }
         let track = resolve(summary)
-        // Before the play: an online song resolves through the pinned index, so
-        // the sender's pick has to be in it by the time the resolve starts.
+        // Pin the sender's upload before playing.
         if let vid = summary.videoID, let ref = track.sourceRef ?? summary.sourceRef {
             online?.adoptVideoID(vid, forSourceRef: ref)
         }
@@ -417,12 +381,11 @@ public final class ContinuityService: ObservableObject {
         await engine.waitUntilPlaying(timeout: 20)
         guard engine.queue.currentTrack?.id == track.id else { return }
         guard engine.state == .playing else {
-            toast("Couldn't play “\(track.title)” on this device")
+            toast(.failed("Couldn't play “\(track.title)” on this device"))
             return
         }
         if position > 1 { engine.seek(to: position) }
-        // ponytail: a paused session starts then pauses (a blip of audio);
-        // load-without-playing in the engine if anyone notices.
+        // ponytail: starts then pauses (brief blip); add a load-without-play if noticed.
         if !state.playing { engine.pause() }
     }
 
@@ -472,8 +435,7 @@ public final class ContinuityService: ObservableObject {
         }
     }
 
-    /// Only a device playing its own music speaks, and only once it has
-    /// played this session — a restored, untouched session is not "playing here".
+    /// Only a device actually playing its own music broadcasts.
     private func sendState() {
         guard engine.remoteTransport == nil, since > 0,
               let channel, channel.status == .subscribed else { return }
@@ -499,14 +461,11 @@ public final class ContinuityService: ObservableObject {
                      artist: track.artistName, album: track.albumTitle, duration: track.duration,
                      artworkKey: track.artworkKey, sourceRef: track.sourceRef,
                      coverURL: coverURL(for: track),
-                     videoID: track.sourceRef.flatMap { online?.knownVideoID(forSourceRef: $0) })
+                     videoID: track.sourceRef.flatMap { online?.knownVideoID(forSourceRef: $0) },
+                     edit: track.edit)
     }
 
-    /// The user picked a song while this device was mirroring another one.
-    ///
-    /// It plays *there*. Which device is the player is a choice the user makes
-    /// in the picker — not something a tap on a song quietly changes — so this
-    /// device stays a mirror and follows the song it just sent.
+    /// Picking a song while mirroring plays it on the other device.
     private func sendToRemote(_ track: Track, context: [Track]) -> Bool {
         guard let remote = activeRemote else { return false }
         let state = StateMessage(
@@ -514,7 +473,7 @@ public final class ContinuityService: ObservableObject {
             playing: true, since: Date().timeIntervalSince1970 * 1000,
             queue: context.prefix(50).map { $0.id.uuidString.lowercased() })
         send(CommandMessage(target: remote.id, action: "transfer", state: state))
-        toast("Playing on \(remote.name)")
+        toast(Toast("Playing on \(remote.name)", symbol: "hifispeaker.fill"))
         return true
     }
 
@@ -551,17 +510,26 @@ public final class ContinuityService: ObservableObject {
         last.msg.playing ? last.msg.position + (uptime - last.at) : last.msg.position
     }
 
-    /// The library's copy when it has one; otherwise an online row the resolver
-    /// can fetch by title and artist.
+    /// The library copy, or an online row the resolver can fetch.
     func resolve(_ s: TrackSummary) -> Track {
         let id = UUID(uuidString: s.id) ?? UUID()
         if var track = library.track(id: id) {
-            // A library row with no cover of its own draws a grey square; the
-            // sender already found one, so take that rather than nothing.
+            // Use the sender's cover if ours is missing.
             if track.displayArtwork == nil {
                 track.artworkData = remoteArtwork(for: id, summary: s)
             }
             return track
+        }
+        // Someone else's edit: rendered here from the original, never searched for by its own title.
+        if let edit = s.edit {
+            return Track(id: id, title: s.title, artistName: s.artist, albumTitle: s.album,
+                         duration: s.duration, artworkData: remoteArtwork(for: id, summary: s),
+                         artworkKey: s.artworkKey, sync: SyncMetadata(deviceID: ""),
+                         file: .editPlaceholder, edit: edit)
+        }
+        // Our own copy under another id (an import, or another account's song), so it isn't fetched again.
+        if let own = library.track(matching: s.title, artistName: s.artist, duration: s.duration) {
+            return own
         }
         return Track(id: id, title: s.title, artistName: s.artist, albumTitle: s.album,
                      duration: s.duration, artworkData: remoteArtwork(for: id, summary: s),
@@ -572,12 +540,7 @@ public final class ContinuityService: ObservableObject {
 
     // MARK: - Covers
 
-    /// The cover address to advertise for the song this device is playing.
-    ///
-    /// Answers from the memo immediately and looks the song up in the
-    /// background: state goes out every half second, and a broadcast must never
-    /// wait on the network. The lookup finishing re-sends, so the cover lands on
-    /// the other devices a moment later.
+    /// Returns the memo now and looks up in the background, re-sending when done.
     private func coverURL(for track: Track) -> String? {
         if let cached = coverURLs[track.id] { return cached }
         coverURLs[track.id] = String?.none          // claim it, so the tick doesn't re-ask
@@ -590,26 +553,32 @@ public final class ContinuityService: ObservableObject {
         return nil
     }
 
-    /// Cover bytes for a song playing on another device.
-    ///
-    /// The address the sender gave us when it had one; the catalogue by title
-    /// and artist when it didn't, which is what keeps an older client's songs
-    /// from showing up as grey squares. Re-mirrors when the bytes arrive so the
-    /// placeholder picks them up.
+    /// Cover for a remote song: the sender's stored cover, else its URL, else a catalogue lookup.
     private func remoteArtwork(for id: UUID, summary: TrackSummary) -> Data? {
         if let cached = remoteCovers[id] { return cached }
         remoteCovers[id] = Data?.none
-        Task { [weak self, catalogue] in
-            var url = summary.coverURL.flatMap(URL.init(string:))
-            if url == nil {
-                let probe = Track(id: id, title: summary.title, artistName: summary.artist,
-                                  albumTitle: summary.album, duration: summary.duration,
-                                  sync: SyncMetadata(deviceID: ""),
-                                  file: .onlinePlaceholder(sourceRef: summary.sourceRef ?? ""))
-                url = await LibraryService.catalogueArtworkURL(for: probe, catalogue: catalogue)
+        Task { [weak self, catalogue, client] in
+            // The stored cover is only readable on the same account, but it's the real one.
+            // The sender's URL is a catalogue guess, which drew a different cover for imported songs.
+            var data: Data? = nil
+            if let key = summary.artworkKey {
+                data = try? await client.storage.from("artwork").download(path: key)
             }
-            guard let self, let url, let data = await LibraryService.fetchImage(url) else { return }
+            if data == nil {
+                var url = summary.coverURL.flatMap(URL.init(string:))
+                if url == nil {
+                    let probe = Track(id: id, title: summary.title, artistName: summary.artist,
+                                      albumTitle: summary.album, duration: summary.duration,
+                                      sync: SyncMetadata(deviceID: ""),
+                                      file: .onlinePlaceholder(sourceRef: summary.sourceRef ?? ""))
+                    url = await LibraryService.catalogueArtworkURL(for: probe, catalogue: catalogue)
+                }
+                if let url { data = await LibraryService.fetchImage(url) }
+            }
+            guard let self, let data else { return }
             remoteCovers[id] = data
+            // Jam adds are queued before their cover lands.
+            online?.fillArtwork(data, forTrackID: id)
             if let remote = activeRemote { mirror(remote) }
         }
         return nil

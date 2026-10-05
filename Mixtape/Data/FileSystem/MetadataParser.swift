@@ -1,9 +1,4 @@
-// MetadataParser.swift
-// Mixtape — Data/FileSystem
-//
-// Extracts title, artist, album, artwork, duration, track/disc number, year,
-// and genre from an audio file using AVFoundation's async metadata API.
-// Supports MP3 (ID3), M4A/AAC (iTunes), FLAC, WAV, AIFF.
+// Reads tags, artwork and duration via AVFoundation. MP3, M4A/AAC, FLAC, WAV, AIFF.
 
 import Foundation
 import AVFoundation
@@ -29,8 +24,7 @@ public final class MetadataParser: Sendable {
 
     public init() {}
 
-    /// Parse metadata from a local audio file URL.
-    /// The URL must already be accessible (security-scoped resource started by caller).
+    /// The caller must already have security-scoped access to `url`.
     public func parse(url: URL) async throws -> ParsedMetadata {
         let asset = AVURLAsset(url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
 
@@ -70,7 +64,7 @@ public final class MetadataParser: Sendable {
             }
         }
 
-        // --- ID3 (MP3) — track/disc number, genre, additional artist ---
+        // ID3 (MP3): track/disc number, genre, extra artist.
         var trackNumber: Int? = nil
         var discNumber:  Int? = nil
 
@@ -139,7 +133,7 @@ public final class MetadataParser: Sendable {
 
     // MARK: - Helpers
 
-    /// Parses "5/12" or "5" → 5
+    /// Parses "5/12" or "5" -> 5
     private func parseSlashSeparated(_ s: String) -> Int? {
         Int(s.split(separator: "/").first.map(String.init) ?? s)
     }

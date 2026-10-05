@@ -1,6 +1,3 @@
-// AlbumDetailView.swift
-// Mixtape — Features/Library/Detail
-
 import SwiftUI
 
 public struct AlbumDetailView: View {
@@ -9,11 +6,9 @@ public struct AlbumDetailView: View {
 
     @EnvironmentObject private var deps:   AppDependencies
     @EnvironmentObject private var engine: PlaybackEngine
-    /// Observed directly: `engine.queue` doesn't republish through the engine,
-    /// so the shuffle button lagged behind the state it shows.
+    /// Observed directly: `engine.queue` doesn't republish through the engine.
     @EnvironmentObject private var queueService: QueueService
-    /// A header's shuffle button is this list's own setting, not the queue's
-    /// live mode — see `ShufflePreferences`.
+    /// The header shuffle is this list's setting. See `ShufflePreferences`.
     @ObservedObject private var shufflePrefs = ShufflePreferences.shared
 
     private var tracks: [Track] {
@@ -36,14 +31,11 @@ public struct AlbumDetailView: View {
             }
             .padding(.bottom, 24)
         }
-        // On the container, not the hero: it stays put while the tracks scroll
-        // under it, and it feeds the window titlebar tint on macOS.
+        // On the container so it stays put while scrolling, and tints the titlebar.
         .artworkWash(source: album.displayArtwork)
-        .background(Color.mixBackground.ignoresSafeArea())
+        .background(MixPageBackground())
         .miniPlayerSafeArea()
-        // Warm the top of the album while the user is still looking at it. An
-        // album is played top-down far more often than not, so the first few
-        // rows are the ones about to be asked for.
+        // Prewarm the first rows; albums are usually played from the top.
         .task(id: album.id) {
             deps.onlineCoordinator.prefetchResolvable(tracks)
         }
@@ -83,10 +75,8 @@ public struct AlbumDetailView: View {
         return parts.joined(separator: " · ")
     }
 
-    /// True when the engine is currently playing a track from this album.
-    /// See `PlaylistDetailView.isPlayingThisPlaylist`: asked of the queue's
-    /// source, because a song on this album is very often also in whatever list
-    /// the user actually pressed play on.
+    /// Playing from this album, asked of the queue's source. See
+    /// `PlaylistDetailView.isPlayingThisPlaylist`.
     private var isPlayingThisAlbum: Bool {
         engine.state.isPlaying && queueService.source == .named(album.title)
     }
@@ -103,9 +93,7 @@ public struct AlbumDetailView: View {
             isShuffling: shufflePrefs.shuffles(shuffleKey),
             isEmpty: tracks.isEmpty,
             onPlay: {
-                // Playing this album already → the button is a pause control.
-                // Paused mid-album → resume. Otherwise start from the top —
-                // or from anywhere, when shuffle is on.
+                // Playing: pause. Paused here: resume. Otherwise start (shuffled if on).
                 if isPlayingThisAlbum {
                     engine.pause()
                 } else if isPausedInThisAlbum {
@@ -124,15 +112,12 @@ public struct AlbumDetailView: View {
             AlbumDownloadButton(ids: album.trackIDs, downloads: deps.downloadManager, library: deps.libraryService)
             ShareHeroButton(.album(album))
 
-            // The overflow, matching the playlist page's: an album page with no
-            // "…" was the only detail page you couldn't queue or leave for its
-            // artist from.
+            // Same overflow menu as the playlist page.
             Menu { AlbumActionsMenu(album: album, showsShare: false) } label: {
                 HeroCircleLabel(systemImage: "ellipsis")
             }
             #if os(macOS)
-            // Left alone a Menu draws itself as a bordered pop-up button with a
-            // chevron — the wrong shape entirely next to a circle.
+            // Otherwise a Menu draws as a bordered pop-up with a chevron.
             .menuStyle(.button)
             .buttonStyle(.plain).mixHandCursor()
             .menuIndicator(.hidden)
@@ -158,9 +143,7 @@ public struct AlbumDetailView: View {
                 .onTapGesture {
                     Task { await engine.play(track: track, in: tracks, source: .named(album.title)) }
                 }
-                // No "Go to Album" — this is that album's page. The rows had no
-                // menu at all before, which made an album the one place a song
-                // couldn't be liked, queued or downloaded.
+                // No "Go to Album" on the album's own page.
                 .contextMenu {
                     LibrarySongMenu(targets: [track], onPlay: {
                         Task { await engine.play(track: track, in: tracks, source: .named(album.title)) }
@@ -177,7 +160,7 @@ public struct AlbumDetailView: View {
 
 // MARK: - Album Track Row
 
-/// Compact row showing track number instead of artwork (shared album art is shown in the header).
+/// Compact row with the track number instead of artwork.
 private struct AlbumTrackRow: View {
     let track:     Track
     let index:     Int
@@ -231,10 +214,7 @@ private struct AlbumTrackRow: View {
 }
 
 // MARK: - Preview
-//
-// Guarded because `previewAlbums` is itself `#if DEBUG` — without this the
-// canvas works all day and only Archive (a Release build) fails, on a line
-// nothing ships.
+// Guarded because `previewAlbums` is DEBUG-only; Release would fail to build.
 
 #if DEBUG
 #Preview {

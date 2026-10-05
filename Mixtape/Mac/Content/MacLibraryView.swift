@@ -1,22 +1,5 @@
-// MacLibraryView.swift
-// Mixtape — Mac/Content
-//
-// Playlists, Songs, Albums and Artists as four tabs of one page.
-//
-// These were four sidebar rows until the sidebar overhaul. They are all views of
-// the same set of records — the same songs grouped by nothing, by release, by
-// performer — so four permanent rows spent a quarter of the sidebar restating
-// one destination, and pushed the playlists (the thing people actually navigate
-// to) below the fold behind a button.
-//
-// Nothing became unreachable. `MacSidebarItem.songs` and friends still exist and
-// still work as destinations: MacContentRouter renders this page and selecting
-// one sets the matching `appState.libraryTab`, so Home's quick links, the
-// "Go to Album" menus and the command palette all land exactly where they did.
-//
-// The tab lives on `MacAppState` rather than in `@State` here for that reason —
-// something outside this view needs to be able to set it — and it persists, so
-// someone who lives in Albums doesn't land on Playlists every launch.
+// Playlists, Songs, Albums and Artists as tabs of one page. `MacSidebarItem.songs` etc. still
+// work as destinations and set `appState.libraryTab`, which persists across launches.
 
 #if os(macOS)
 import SwiftUI
@@ -27,23 +10,19 @@ struct MacLibraryView: View {
     @EnvironmentObject private var deps: AppDependencies
     @EnvironmentObject private var library: LibraryService
 
-    /// The Smart tab's empty state offers to make one; the + menu's copy of this
-    /// sheet lives in `MacTopBar`.
+    /// The Smart tab's empty state can open the editor; the + menu's copy lives in `MacTopBar`.
     @State private var showSmartEditor = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
 
-            // Each tab keeps its own scroll view and its own padding — they were
-            // full pages a moment ago and still are, just reached differently.
+            // Each tab keeps its own scroll view and padding.
             Group {
                 switch appState.libraryTab {
                 case .all:       MacPlaylistsView(showAlbums: true, showSmart: true)
                 case .playlists: MacPlaylistsView()
-                // `activeSearchText`, not `searchText`: a query that was typed
-                // but never asked for is still sitting in the field, and it must
-                // not quietly filter the list you came here to look at.
+                // `activeSearchText`, so an uncommitted query doesn't filter the list.
                 case .songs:     MacSongsView(searchText: appState.activeSearchText)
                 case .albums:    MacAlbumsView(searchText: appState.activeSearchText)
                 case .artists:   MacArtistsView(searchText: appState.activeSearchText)

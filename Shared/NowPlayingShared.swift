@@ -1,7 +1,5 @@
-// NowPlayingShared.swift
-// Compiled into the app and the widget extension — the `Shared` folder belongs
-// to both targets. What the widgets and the Live Activity know about the song,
-// and the buttons they press.
+// Shared by the app and widget extension: the song snapshot the widgets and
+// Live Activity draw, and the intents their buttons run.
 
 import Foundation
 import AppIntents
@@ -50,10 +48,8 @@ nonisolated struct PreviousTrackIntent: AudioPlaybackIntent {
 }
 
 #if os(iOS)
-/// Adds the playing song to Liked Songs, or takes it out — the heart on the
-/// large widget. A `LiveActivityIntent` so it runs in the app's process, like
-/// the playback buttons do; a plain intent would run in the extension, which
-/// can't reach the library.
+/// The large widget's heart. A `LiveActivityIntent` so it runs in the app's
+/// process; a plain intent would run in the extension, which can't reach the library.
 nonisolated struct ToggleLikeIntent: LiveActivityIntent {
     static var title: LocalizedStringResource { "Like Song" }
     static var description: IntentDescription { "Adds the playing song to Liked Songs, or takes it out." }
@@ -83,11 +79,8 @@ nonisolated struct ToggleShuffleIntent: AudioPlaybackIntent {
 
 /// The song the widgets draw: the app writes it, the extension reads it.
 ///
-/// Through the keychain because there is no App Group — a personal team can't
-/// register one — and a shared keychain access group is the one store an app and
-/// its extension can both reach without it. Both targets list the group in
-/// their entitlements; the team prefix is spelled out because an extension
-/// has no way to look it up.
+/// Stored in a shared keychain group since a personal team can't register an App
+/// Group. The team prefix is hardcoded; an extension can't look it up.
 nonisolated struct NowPlayingSnapshot: Codable, Sendable {
     struct Song: Codable, Sendable {
         var title: String
@@ -98,7 +91,7 @@ nonisolated struct NowPlayingSnapshot: Codable, Sendable {
     var title: String
     var artist: String
     var album = ""
-    var source: String?             // "Playing from …"
+    var source: String?             // "Playing from ..."
     var isPlaying: Bool
     var isLiked = false
     var shuffle = false

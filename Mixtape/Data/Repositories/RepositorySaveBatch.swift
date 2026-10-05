@@ -1,23 +1,10 @@
-// RepositorySaveBatch.swift
-// Mixtape — Data/Repositories
-
 import Foundation
 import SwiftData
 
-/// Collapses a run of repository writes into a single `ModelContext.save()`.
-///
-/// Every repository save commits on its own, which is right for a one-off edit
-/// and badly wrong for a loop. Saving a mix files ~30 songs into their album and
-/// artist buckets, and each song costs a `findOrCreate` save plus one save per
-/// credited artist — well over a hundred commits, each of them tens of
-/// milliseconds. None is slow enough to cross the 100 ms instrumentation
-/// threshold, which is why this cost was invisible in the log while the app sat
-/// there frozen for a second or two (much longer on the phone).
-///
-/// Inside a batch the repositories mutate the context and skip the commit; the
-/// batch commits once at the end. Reads are unaffected — uncommitted changes are
-/// visible to the context that made them, so anything the loop looks up mid-run
-/// still sees its own earlier writes.
+/// Collapses a run of repository writes into one `ModelContext.save()`.
+/// Each repository save commits on its own, which adds up in loops (saving a mix
+/// is 100+ commits). Inside a batch they skip the commit and the batch commits once.
+/// Reads still see the uncommitted writes.
 @MainActor
 public enum RepositorySaveBatch {
 
@@ -26,11 +13,7 @@ public enum RepositorySaveBatch {
     /// True while a batch is open, i.e. while commits should be deferred.
     public static var isOpen: Bool { depth > 0 }
 
-    /// Runs `body` with repository commits held, then commits once.
-    ///
-    /// The commit happens even if `body` throws: the writes are already in the
-    /// context either way, and leaving them uncommitted only means losing them
-    /// at the next launch.
+    /// Runs `body` with commits held, then commits once, even if `body` throws.
     @discardableResult
     public static func run<T>(_ context: ModelContext, _ body: () throws -> T) rethrows -> T {
         depth += 1

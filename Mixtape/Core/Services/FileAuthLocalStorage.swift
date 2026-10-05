@@ -1,16 +1,6 @@
-// FileAuthLocalStorage.swift
-// Mixtape — Core/Services
-//
-// A Supabase `AuthLocalStorage` that persists the auth session to a file in
-// Application Support instead of the macOS Keychain.
-//
-// Why: the default `KeychainLocalStorage` triggers a recurring
-// "Mixtape wants to access key supabase.gotrue.swift in your keychain"
-// password prompt — on first launch and after every update. The cause is our
-// ad-hoc code signature: it changes on every build, so the keychain's
-// per-item ACL no longer recognizes the app and macOS re-prompts. A plain file
-// has no such ACL, so the prompt never appears. The session is written to a
-// 0600 file in the user's container, readable only by their account.
+// Stores the Supabase session in a 0600 file in Application Support instead of
+// the Keychain. Ad-hoc signing changes every build, so the Keychain would prompt
+// for access after every update.
 
 import Foundation
 import Supabase  // re-exports Auth (AuthLocalStorage)
@@ -31,8 +21,6 @@ final class FileAuthLocalStorage: AuthLocalStorage {
     }
 
     private func fileURL(for key: String) -> URL {
-        // Keys (e.g. "supabase.gotrue.swift") are filesystem-safe, but guard
-        // defensively against path separators just in case.
         let safe = key.replacingOccurrences(of: "/", with: "_")
         return directory.appendingPathComponent(safe)
     }

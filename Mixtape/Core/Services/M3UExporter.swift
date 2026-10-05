@@ -1,15 +1,4 @@
-// M3UExporter.swift
-// Mixtape — Core/Services
-//
-// Generates a standard Extended M3U (#EXTM3U) playlist document from a Playlist
-// and the Tracks that back its ordered trackIDs. Fully functional, cross-platform
-// (iOS 17 / macOS 14). No UI is presented here — callers receive a String or write
-// the document to a URL and decide how to share it.
-//
-// Format reference: https://en.wikipedia.org/wiki/M3U#Extended_M3U
-//   #EXTM3U
-//   #EXTINF:<duration-seconds>,<Artist> - <Title>
-//   <file path or URI>
+// Builds an Extended M3U document for a playlist.
 
 import Foundation
 
@@ -17,15 +6,7 @@ public enum M3UExporter {
 
     // MARK: - Document generation
 
-    /// Builds an Extended M3U document for `playlist`, resolving each entry in
-    /// `playlist.trackIDs` against the supplied `tracks`.
-    ///
-    /// - Parameters:
-    ///   - playlist: The playlist whose ordered `trackIDs` define entry order.
-    ///   - tracks:   The tracks available to resolve IDs. Order is irrelevant;
-    ///               lookup is by `id`. Missing IDs are skipped.
-    /// - Returns: A newline-terminated `#EXTM3U` document. Always valid even when
-    ///   the playlist is empty (header only).
+    /// Entries follow playlist.trackIDs. Missing ids are skipped.
     public static func m3u(for playlist: Playlist, resolving tracks: [Track]) -> String {
         // Index tracks by id for O(1) lookup while preserving playlist order.
         let byID = Dictionary(tracks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -42,20 +23,15 @@ public enum M3UExporter {
             let display = "\(sanitizeLine(track.artistName)) - \(sanitizeLine(track.title))"
             lines.append("#EXTINF:\(seconds),\(display)")
 
-            // Path/URI line. Prefer the on-disk relative path when present; otherwise
-            // fall back to a sanitized "Artist - Title.ext" filename so the document is
-            // still meaningful when shared without the underlying files.
+            // File path, else "Artist - Title.ext".
             lines.append(entryPath(for: track))
         }
 
-        // Trailing newline — most parsers tolerate its absence, but it is conventional.
         return lines.joined(separator: "\n") + "\n"
     }
 
     // MARK: - Writing / sharing
 
-    /// Writes the generated M3U document to `url` (UTF-8, atomic).
-    /// - Returns: the same `url` for convenience.
     @discardableResult
     public static func write(
         playlist: Playlist,
@@ -67,11 +43,7 @@ public enum M3UExporter {
         return url
     }
 
-    /// Writes the playlist to a uniquely-named `.m3u8` file in the system temporary
-    /// directory and returns its URL — suitable for feeding into a platform share
-    /// sheet (UIActivityViewController / NSSharingServicePicker) at the call site.
-    ///
-    /// `.m3u8` is used as the extension because the document is UTF-8 encoded.
+    /// Writes a temporary .m3u8 for a share sheet.
     public static func writeTemporaryFile(
         playlist: Playlist,
         resolving tracks: [Track]
@@ -81,8 +53,6 @@ public enum M3UExporter {
         return try write(playlist: playlist, resolving: tracks, to: url)
     }
 
-    /// Convenience that returns the M3U document as a shareable `String`
-    /// (e.g. to drop straight into a share sheet as text).
     public static func shareableText(
         playlist: Playlist,
         resolving tracks: [Track]

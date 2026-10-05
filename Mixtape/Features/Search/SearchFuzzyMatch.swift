@@ -1,20 +1,11 @@
-// SearchFuzzyMatch.swift
-// Mixtape — Features/Search
-//
-// Lightweight fuzzy matcher + relevance scoring used by SearchView so results
-// rank the best matches first and tolerate typos / partial words. Pure value
-// logic, no UIKit/SwiftUI — trivially testable and cheap on the filter path.
+// Fuzzy matching and relevance scoring for SearchView. Pure logic, no UI.
 
 import Foundation
 
 nonisolated enum SearchFuzzyMatch {
 
-    /// Returns a relevance score for `needle` against `haystack`, or `nil` when
-    /// there is no reasonable match. Higher is better. Both inputs are expected
-    /// to already be trimmed; casing is normalised here.
-    ///
-    /// Tiers (roughly): exact > prefix > word-boundary prefix > substring >
-    /// subsequence (fuzzy). Shorter haystacks and earlier matches score higher.
+    /// Relevance of `needle` in `haystack`, nil for no match. Higher is better; inputs pre-trimmed.
+    /// Exact > prefix > word prefix > substring > subsequence. Shorter and earlier scores higher.
     static func score(needle: String, in haystack: String) -> Int? {
         let n = needle.lowercased()
         let h = haystack.lowercased()
@@ -42,8 +33,7 @@ nonisolated enum SearchFuzzyMatch {
             return 600 - min(offset, 100)
         }
 
-        // Subsequence (fuzzy) — every needle char appears in order. Penalise gaps
-        // so tightly-clustered matches outrank scattered ones.
+        // Subsequence: every needle char in order, penalised by gaps.
         if let gaps = subsequenceGaps(needle: n, in: h) {
             return max(120, 400 - gaps * 8 - h.count / 4)
         }
@@ -62,9 +52,7 @@ nonisolated enum SearchFuzzyMatch {
         return best
     }
 
-    /// Returns the total gap size if `needle` is an in-order subsequence of
-    /// `haystack`, else nil. A gap is the number of skipped haystack chars
-    /// between consecutive needle matches.
+    /// Total skipped chars if `needle` is an in-order subsequence of `haystack`, else nil.
     private static func subsequenceGaps(needle n: String, in h: String) -> Int? {
         var gaps = 0
         var sinceLast = 0

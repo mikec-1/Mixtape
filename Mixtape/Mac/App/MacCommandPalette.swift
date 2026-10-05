@@ -1,16 +1,6 @@
-// MacCommandPalette.swift
-// Mixtape — Mac/App
-//
-// ⌘K: one field that reaches everything — sections, playback commands, and any
-// song, album, artist or playlist in the library — without touching the mouse.
-//
-// It is deliberately *not* the toolbar search field. The toolbar field filters
-// the section you're looking at; the palette navigates and acts, and closes as
-// soon as it has done so.
-//
-// Keyboard contract: type to filter, ↑/↓ to move, Return to run, Esc to close.
-// The text field keeps focus the whole time, so arrow keys are intercepted there
-// rather than moving focus between rows.
+// ⌘K: jump to sections, run playback commands, or open any library song, album, artist or playlist.
+// Unlike the toolbar search, the palette navigates and closes.
+// Type to filter, ↑/↓ to move, Return to run, Esc to close. The field keeps focus and intercepts arrows.
 
 #if os(macOS)
 import SwiftUI
@@ -29,8 +19,7 @@ struct MacCommandPalette: View {
     @State private var selection = 0
     @FocusState private var fieldFocused: Bool
 
-    /// Each section is capped so a large library can't push the commands off
-    /// screen — the palette is for jumping, not for browsing.
+    /// Per-section cap so a large library can't push the commands off screen.
     private let perSectionLimit = 6
 
     // MARK: - Items
@@ -76,6 +65,11 @@ struct MacCommandPalette: View {
             icon: "shuffle"
         ) { engine.queue.toggleShuffle() })
 
+        out.append(PaletteItem(kind: .command, title: deps.jam.session == nil ? "Start a Jam" : "Open Jam",
+                               subtitle: "Listen together", icon: "person.2.wave.2") {
+            deps.jam.present()
+        })
+
         return out
     }
 
@@ -87,9 +81,7 @@ struct MacCommandPalette: View {
             PaletteItem(kind: .song, title: track.title,
                         subtitle: track.artistName, icon: "music.note",
                         artwork: track.displayArtwork) {
-                // Just this song: picking one out of the palette is a request
-                // for it, not for the library in stored order behind it — and a
-                // one-song context is what lets the suggestions follow it.
+                // Play just this song, so suggestions follow it.
                 Task { await engine.play(track: track, in: [track], source: .named("Search results")) }
             }
         }
@@ -135,8 +127,7 @@ struct MacCommandPalette: View {
         }
     }
 
-    /// Library lookups only run once there's something to look up — an empty
-    /// palette shows commands and recently played playlists, not 4000 songs.
+    /// Library lookups wait for a query; an empty palette shows commands and recent playlists.
     // MARK: - Verbs
 
     private struct Verb {
@@ -152,6 +143,7 @@ struct MacCommandPalette: View {
         Verb(name: "download", usage: "download <album>", summary: "Download an album", icon: "arrow.down.circle"),
         Verb(name: "dub", usage: "dub <playlist> to <person>", summary: "Dub a playlist for someone", icon: "recordingtape"),
         Verb(name: "goto", usage: "goto settings/playback", summary: "Jump to a page or a setting", icon: "arrow.turn.down.right"),
+        Verb(name: "jam", usage: "jam <code>", summary: "Join a Jam", icon: "person.2.wave.2"),
     ]
 
     /// The verb the query starts with, and what follows it.
@@ -183,7 +175,7 @@ struct MacCommandPalette: View {
                 PaletteItem(kind: .song, title: "Queue \(track.title)", subtitle: track.artistName,
                             icon: verb.icon, artwork: track.displayArtwork) {
                     engine.queue.append(track)
-                    deps.showToast("Added to Queue")
+                    deps.showToast(.done("Added to Queue"))
                 }
             }
         case "radio":
@@ -245,9 +237,28 @@ struct MacCommandPalette: View {
                 .filter { page in words.allSatisfy { page.key.contains($0) } }
                 .prefix(perSectionLimit)
                 .map { $0.item })
+        case "jam":
+            return jamItem(argument).map { [$0] } ?? []
         default:
             return []
         }
+    }
+
+    /// "Join Jam ABC234" once `text` is a whole code.
+    private func jamItem(_ text: String) -> PaletteItem? {
+        let code = JamCodeField.clean(text)
+        guard code.count == JamCodeField.length else { return nil }
+        return PaletteItem(kind: .command, title: "Join Jam \(code)", subtitle: "Listen together",
+                           icon: "person.2.wave.2") {
+            Task { await deps.jam.join(code: code) }
+        }
+    }
+
+    /// A code typed on its own, last so a six-letter song name still wins.
+    private var bareJamCode: [PaletteItem] {
+        guard verb == nil, trimmedQuery.count == JamCodeField.length,
+              JamCodeField.clean(trimmedQuery) == trimmedQuery.uppercased() else { return [] }
+        return jamItem(trimmedQuery).map { [$0] } ?? []
     }
 
     private func radioItem(_ name: String, artwork: Data?) -> PaletteItem {
@@ -289,7 +300,7 @@ struct MacCommandPalette: View {
         return commands.filter { $0.title.localizedCaseInsensitiveContains(trimmedQuery) }
     }
 
-    /// Flat, in display order — the same order arrow keys walk.
+    /// In display order, the order arrow keys walk.
     private var sections: [(String, [PaletteItem])] {
         [
             (verb?.verb.summary ?? "", verbItems),
@@ -300,6 +311,7 @@ struct MacCommandPalette: View {
             ("Albums",       albums),
             ("Artists",      artists),
             ("Playlists",    playlists),
+            ("Jam",          bareJamCode),
         ].filter { !$0.1.isEmpty }
     }
 
@@ -350,8 +362,7 @@ struct MacCommandPalette: View {
                 .onKeyPress(.upArrow)   { move(-1); return .handled }
                 .onKeyPress(.escape)    { appState.commandPaletteOpen = false; return .handled }
                 .onSubmit(run)
-                // ⌘⌫ clears what's been typed here rather than reaching the
-                // window behind the palette and offering to delete a song.
+                // ⌘⌫ clears the field instead of deleting a song behind the palette.
                 .mixEditingFocus(fieldFocused)
 
             Text("esc")
@@ -370,8 +381,7 @@ struct MacCommandPalette: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    // Index has to be tracked across sections so ↑/↓ walk the
-                    // whole palette, not each group independently.
+                    // Global index so ↑/↓ walk across sections.
                     let secs = sections
                     let starts = secs.reduce(into: [0]) { $0.append($0.last! + $1.1.count) }
                     ForEach(Array(secs.enumerated()), id: \.element.0) { s, section in
@@ -457,6 +467,8 @@ private struct PaletteRow: View {
     let item: PaletteItem
     let isSelected: Bool
 
+    @State private var isHovered = false
+
     var body: some View {
         HStack(spacing: 12) {
             leading
@@ -483,10 +495,12 @@ private struct PaletteRow: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
-        .background(isSelected ? Color.mixPrimary.opacity(0.18) : .clear,
+        // Hover is a lighter tint than the keyboard selection.
+        .background(Color.mixPrimary.opacity(isSelected ? 0.18 : isHovered ? 0.08 : 0),
                     in: RoundedRectangle(cornerRadius: 6, style: .continuous))
         .padding(.horizontal, 8)
         .contentShape(Rectangle())
+        .onHover { isHovered = $0 }
     }
 
     @ViewBuilder

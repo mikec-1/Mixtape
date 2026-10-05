@@ -1,14 +1,10 @@
-// loudness-check.swift
-// Mixtape — scripts
-//
-// The one check on LoudnessAnalyzer's BS.1770 maths. There is no test target, so
-// this compiles standalone against the real source file:
+// Checks LoudnessAnalyzer's BS.1770 maths against the real source file:
 //
 //   xcrun swiftc -O Mixtape/Core/Services/LoudnessAnalyzer.swift \
 //       scripts/loudness-check.swift -o /tmp/loudcheck && /tmp/loudcheck
 //
-// EBU Tech 3341: a 997 Hz stereo sine of peak X dBFS must read X LUFS, and a
-// silent tail must not drag the answer down (that's what the gates are for).
+// EBU Tech 3341: a 997 Hz stereo sine at X dBFS reads X LUFS; the gates keep a
+// silent tail from dragging it down.
 
 import AVFoundation
 

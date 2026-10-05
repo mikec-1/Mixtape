@@ -1,16 +1,11 @@
-// LyricVersion.swift
-// Mixtape — Core/Services
-//
-// Does a lyrics record name the same *recording* as the song we're playing?
-// Split out of `LyricsService` so it has no dependencies and can be exercised
-// on its own with a standalone `swiftc` check.
+// Whether a lyrics record matches the same recording. No dependencies,
+// so it can be tested alone.
 
 import Foundation
 
 enum LyricVersion {
 
-    /// The bracketed groups of a title plus its `- suffix` tail, lowercased and
-    /// trimmed: the places a version qualifier is ever written.
+    /// Bracketed groups and the "- suffix", lowercased.
     static func qualifierSegments(_ title: String) -> [String] {
         var segments: [String] = []
         var current = ""
@@ -38,20 +33,9 @@ enum LyricVersion {
         return segments.filter { !$0.isEmpty }
     }
 
-    /// Version qualifiers for comparison: every bracketed or dash-suffixed
-    /// segment that names a *different recording* — "(W&W Remix)", "- Live",
-    /// "(Acoustic)" — flattened to bare letters and digits.
-    ///
-    /// `bareTitle` deliberately throws these away, which is right for matching
-    /// a song across uploaders who each punctuate "(feat. …)" differently, and
-    /// wrong for a remix: "Don't Let Me Down (W&W Remix)" bares down to the
-    /// original, so the original's lyrics — correct words, useless timing —
-    /// win the match. Spaces and punctuation are dropped rather than tokenised
-    /// so "W&W", "W & W" and "WW" are one key.
-    ///
-    /// Credits (`feat.`, `with`) and remasters are not version qualifiers: a
-    /// remaster is the same performance, and gating on it would lose lyrics
-    /// that are perfectly correct.
+    /// Version qualifiers ("(W&W Remix)", "- Live") reduced to letters and digits.
+    /// bareTitle drops these, which would match a remix to the original's lyrics.
+    /// Credits and remasters aren't versions.
     static func versionKey(_ title: String) -> String {
         let keywords = ["remix", "mix", "version", "edit", "live", "acoustic",
                         "instrumental", "demo", "reprise", "cover", "bootleg",
@@ -67,10 +51,7 @@ enum LyricVersion {
         return segments.sorted().joined()
     }
 
-    /// True when two titles name the same *recording*. Either both are plain or
-    /// both carry the same qualifier; a key that merely extends the other
-    /// ("(W&W Remix) [Extended]") still matches, so a slightly differently
-    /// labelled upload of the right remix isn't thrown away.
+    /// Same recording: both plain, or the same qualifier (one may extend the other).
     static func sameVersion(_ a: String, _ b: String) -> Bool {
         let (x, y) = (versionKey(a), versionKey(b))
         if x.isEmpty != y.isEmpty { return false }

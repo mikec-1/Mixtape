@@ -1,10 +1,4 @@
-// UnfindableBadge.swift
-// Mixtape — SharedUI/Components
-//
-// The red triangle a queue row wears when nothing online has the song.
-//
-// Drawn once and used by both queue lists, because the two of them disagreeing
-// about what a warning looks like is worse than either choice.
+// Red triangle on a queue row when nothing online has the song. Shared by both queue lists.
 
 import SwiftUI
 
@@ -22,9 +16,7 @@ struct UnfindableBadge: View {
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(.red)
                 .onHover { isHovering = $0 }
-                // Not `.help()`: the system tooltip waits about a second before
-                // it appears, which is long enough that the pointer has usually
-                // moved on. This shows on the frame the pointer arrives.
+                // Not `.help()`, whose tooltip takes about a second; this shows immediately.
                 .overlay(alignment: .bottomLeading) {
                     if isHovering { tip.offset(x: 14, y: -14) }
                 }
@@ -33,8 +25,7 @@ struct UnfindableBadge: View {
         }
     }
 
-    /// Deliberately black rather than the surface colour: it has to read as
-    /// floating above the row it is covering, in both themes.
+    /// Black rather than the surface colour so it floats in both themes.
     private var tip: some View {
         Text("Not found online — will be skipped")
             .font(.mixCaption)
@@ -52,8 +43,7 @@ struct UnfindableBadge: View {
                     .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
             )
             .shadow(color: .black.opacity(0.45), radius: 8, y: 2)
-            // The pointer must never land on the tip itself — it sits over the
-            // row, and swallowing the hover would make it flicker.
+            // Never takes the hover, or it flickers.
             .allowsHitTesting(false)
             .transition(.opacity)
     }

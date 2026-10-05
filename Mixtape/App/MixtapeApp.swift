@@ -1,9 +1,3 @@
-// MixtapeApp.swift
-// Mixtape — App Entry Point
-//
-// Minimum deployment: iOS 17 / macOS 14
-// Architecture: MVVM + Clean layers (UI / Domain / Data)
-
 import SwiftUI
 import SwiftData
 
@@ -11,26 +5,23 @@ import SwiftData
 struct MixtapeApp: App {
 
     init() {
-        // First line of app code that runs. `LaunchTimeline` measures from the
-        // kernel's process start, not from here, so the pre-main cost is
-        // included — but this is where the interval opens.
+        // Launch timing is measured from process start; this just opens the interval.
         LaunchTimeline.begin()
         MainThreadHangMonitor.shared.start()
         MemoryPressureMonitor.shared.start()
+        CrashReporter.shared.start()
         LaunchTimeline.mark("app/init")
         #if os(macOS)
-        // Prevent AppKit from ever adding "Show Tab Bar" and "Show All Tabs"
-        // to the View menu. Setting this in init() stops the items from being
-        // created at all — more reliable than CommandGroup(replacing: .toolbar),
-        // which only removes them after a multi-second delay on first launch.
+        // Stops AppKit adding the tab bar items to the View menu at all.
         NSWindow.allowsAutomaticWindowTabbing = false
         MixSheetCorners.install()
         #endif
-        // Built here rather than on first use so a Siri launch, which may
-        // never get a window, still has something to play through.
+        // Built eagerly so a windowless Siri launch can still play.
         let dependencies = AppDependencies()
         _dependencies = StateObject(wrappedValue: dependencies)
         MixtapeIntents.deps = dependencies
+        // Set before launch finishes so a tap that launched the app still arrives.
+        InviteNotifier.shared.install(dependencies)
     }
 
     @StateObject private var dependencies: AppDependencies
@@ -60,10 +51,7 @@ struct MixtapeApp: App {
     var body: some Scene {
         mainWindow
         #if os(macOS)
-        // One-way on purpose: with a real binding, macOS 26 reports the item's
-        // visibility back, SwiftUI writes it into the setting, the write
-        // rebuilds the scene, which sets the visibility again — a main-thread
-        // loop from the first frame. Settings ▸ General still drives it.
+        // One-way on purpose: a real binding feeds back into the setting and loops on macOS 26.
         MenuBarExtra(isInserted: .constant(showsMenuBarPlayer)) {
             MacMenuBarPlayer(engine: dependencies.playbackEngine, queue: dependencies.playbackEngine.queue,
                              library: dependencies.libraryService)
@@ -90,6 +78,7 @@ struct MixtapeApp: App {
                 .environmentObject(dependencies.smartPlaylistService)
                 .environmentObject(dependencies.syncService)
                 .environmentObject(dependencies.onlineCoordinator)
+                .environmentObject(dependencies.recap)
                 #if os(iOS)
                 .environmentObject(dependencies.resolverStatus)
                 #endif
@@ -98,29 +87,20 @@ struct MixtapeApp: App {
                 #if os(macOS)
                 .environmentObject(updater)
                 #endif
-                // Density, motion and chrome, injected once. Every view that
-                // cares reads them from the environment, so a change here
-                // invalidates exactly those and nothing else.
+                // Density, motion and chrome go in the environment so only readers redraw.
                 .mixAppearance(density: theme.density,
                                motion:  theme.motion,
                                chrome:  theme.chrome)
                 .tint(theme.accentColor)
-                // Appearance is driven globally via NSApp.appearance in
-                // ThemeManager (single source of truth). Using
-                // .preferredColorScheme here too pinned the window appearance
-                // and left AppKit-backed controls (the appearance pop-up button)
-                // failing to redraw on change.
+                // Appearance is set globally via NSApp.appearance in ThemeManager.
+                // .preferredColorScheme here breaks AppKit control redraws.
                 #if !os(macOS)
                 .preferredColorScheme(theme.preferredColorScheme)
                 #endif
         }
         #if os(macOS)
-        // The top bar (search + add + sync) is drawn by MacTopBar inside the
-        // window's own content, not by an NSToolbar. A real toolbar centres its
-        // `.principal` item on the *content column*, so the search field slid
-        // sideways whenever the sidebar opened, and the titlebar sits outside the
-        // content's zoom transform, so ⌘+/⌘− never moved it. Hiding the titlebar
-        // hands the whole window to SwiftUI and both problems go away.
+        // MacTopBar draws the top bar in-window. An NSToolbar centres on the content
+        // column and ignores the zoom transform.
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1200, height: 740)
         .windowResizability(.contentSize)
@@ -128,32 +108,21 @@ struct MixtapeApp: App {
             CommandGroup(after: .appInfo) {
                 CheckForUpdatesView(updater: updater)
             }
-            // Replace File ▸ New Window (⌘N) with File ▸ New Playlist (⌘N).
-            // Replacing `.newItem` also prevents a second window from opening,
-            // which is what causes the extra <> navigation arrows to appear in
-            // the titlebar — AppKit adds them whenever more than one window
-            // exists and removes them the moment you're back to one.
+            // ⌘N makes a playlist. Replacing .newItem also blocks a second window.
             CommandGroup(replacing: .newItem) {
                 Button("New Playlist") {
                     NotificationCenter.default.post(name: .mixNewPlaylist, object: nil)
                 }
                 .keyboardShortcut("n", modifiers: .command)
             }
-            // ⌃⌘S came free with NavigationSplitView; the sidebar column is
-            // hand-rolled now (see MacRootView), so the menu item is too. It
-            // posts rather than calls: commands are built outside the window and
-            // can't reach its `MacAppState`.
+            // Posted, since commands can't reach the window's MacAppState.
             CommandGroup(before: .sidebar) {
                 Button("Toggle Sidebar") {
                     NotificationCenter.default.post(name: .mixToggleSidebar, object: nil)
                 }
                 .keyboardShortcut("s", modifiers: [.control, .command])
             }
-            // ── View ▸ Zoom ──────────────────────────────────────────────────
-            // The zoom actions live on `MacAppState` inside the window, so they
-            // are routed through NotificationCenter (same pattern as the sidebar
-            // toggle). The background Cmd++ button in MacRootView still catches
-            // the Shift+= variant the menu item doesn't register on its own.
+            // View > Zoom. Routed through NotificationCenter like the sidebar toggle.
             CommandGroup(after: .sidebar) {
                 Button("Actual Size") {
                     NotificationCenter.default.post(name: .mixActualSize, object: nil)
@@ -172,7 +141,7 @@ struct MixtapeApp: App {
 
                 Divider()
 
-                // ── View ▸ Navigation ────────────────────────────────────────
+                // View > Navigation
                 Button("Go Back") {
                     NotificationCenter.default.post(name: .mixGoBack, object: nil)
                 }
@@ -189,8 +158,7 @@ struct MixtapeApp: App {
                 }
                 .keyboardShortcut("r", modifiers: .command)
 
-                // Everything the plain sync does, plus every followed Spotify
-                // playlist, each one forced past its own change check.
+                // Plain sync plus every followed Spotify playlist, forced.
                 Button("Sync Everything") {
                     NotificationCenter.default.post(name: .mixSyncLibrary, object: true)
                 }
@@ -208,9 +176,7 @@ struct MixtapeApp: App {
         }
         #endif
         #if os(iOS)
-        // The only way an invite reaches a phone that isn't currently looking at
-        // the app. macOS is left out on purpose: a Mac app is either running —
-        // where RootView's poll already covers it — or quit, where nothing runs.
+        // Background refresh so a phone hears about invites while closed. Not needed on macOS.
         .backgroundTask(.appRefresh(InviteNotifier.backgroundTaskID)) {
             await InviteNotifier.shared.runBackgroundRefresh()
         }
@@ -221,12 +187,8 @@ struct MixtapeApp: App {
 }
 
 #if os(macOS)
-/// Controls ▸ — every transport action, where a Mac user looks for its shortcut.
-///
-/// Space has no key equivalent here: a menu's plain Space fires before a text
-/// field's, so typing a space in search would pause the song. It stays in
-/// `MacRootView`'s key monitor, which skips text fields; the ⌘-arrows below are
-/// handed back to text fields by that same monitor.
+/// Controls menu. Space stays in MacRootView's key monitor so it doesn't
+/// fire while typing in a text field.
 struct ControlsCommands: Commands {
     @ObservedObject var engine: PlaybackEngine
     @ObservedObject var queue: QueueService
@@ -272,8 +234,7 @@ struct ControlsCommands: Commands {
 
             Divider()
 
-            // Same path as the lock-screen heart: toggles a library song, saves
-            // anything else.
+            // Toggles a library song, saves anything else.
             Button(liked ? "Remove from Liked Songs" : "Add to Liked Songs") {
                 guard let track else { return }
                 Task { await engine.onRemoteLike?(track); engine.syncRemoteCommandState() }

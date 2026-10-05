@@ -1,60 +1,38 @@
-// StationBuilder.swift
-// Mixtape — Core/Services/Online
-//
-// The two shelves that aren't one-mix-per-favourite-artist.
-//
-// **Genre mixes** are still yours — "German Rap Mix", "UK Drill Mix" — but a
-// layer above the artist mixes: your library clustered by the *scene* each
-// artist belongs to, then drawn from the radios of your own artists in that
-// cluster. They do not turn over weekly. An artist mix churning every Monday is
-// what keeps Discover feeling alive; a genre mix churning is just noise,
-// because your genres don't change on a Monday. They hold until the cluster
-// itself moves.
-//
-// The scene labels come from MusicBrainz, not Deezer. Deezer files genre on the
-// album and only from a dozen-odd top-level buckets, which is how a first cut
-// of this shelf put German rappers in the same mix as Doja Cat: both are
-// "Rap/Hip Hop" to Deezer, and a bucket that wide isn't a mix, it's a shrug.
-// MusicBrainz tags artists with community genres — "german hip hop", "uk
-// drill", "afroswing" — which is the granularity a mix needs.
-//
-// **Radios** are the opposite: nothing to do with your library at all. Chart,
-// scene and artist radios, so a brand-new account with an empty history still
-// opens on a full page, and an old one has somewhere to go that isn't its own
-// taste reflected back.
-//
-// Both produce `PersonalMix`, so `MixDetailPage` renders them, `MixMosaicCard`
-// draws them and saving/downloading works with no new UI.
-//
-// Everything here is pinned to disk (`MixEditionStore`) — clustering costs two
-// requests per artist against a service that asks for one request a second, and
-// a shelf that refetched on every landing rebuild would be unusable.
+// Two shelves beyond the per-artist mixes.
+// Genre mixes: your library sorted into a fixed list of scenes (GenreBuckets)
+// by MusicBrainz tags or Apple's genre, drawn from your own artists' radios.
+// Radios: chart, scene and artist stations, independent of your library, so an
+// empty account still gets a full page.
+// Both are stored once a week per account (`MixEditionStore`).
 
 import Foundation
 
-/// Artist → scene, on disk, forever.
-///
-/// The answer is close to immutable — nobody's back catalogue changes genre —
-/// which makes it the ideal thing to cache and the worst thing to re-ask.
+/// Artist -> genre tags, on disk and pooled through the account's
+/// placements row, so each artist is looked up once per account, not per device.
 enum ArtistGenreStore {
 
-    /// Normalised artist → display label, e.g. "German Hip Hop". An empty
-    /// string means "asked, and there is no answer": cached on purpose, or an
-    /// artist MusicBrainz can't place would be looked up again on every build
-    /// for the rest of time.
-    private(set) static var entries: [String: String] = load()
+    /// Normalised artist -> well-supported tags, most votes first. Empty means
+    /// "asked, no answer", kept so it isn't looked up again.
+    private(set) static var entries: [String: [String]] = load()
 
-    static func genre(for artist: String) -> String? {
-        // Relabelled on read: entries written under the old caps rule
-        // ("HIP HOP") repair themselves without asking MusicBrainz again.
-        entries[RecommendationEngine.normalize(artist)].map { $0.isEmpty ? $0 : MusicBrainzGenres.label($0) }
+    static func tags(for artist: String) -> [String]? {
+        entries[RecommendationEngine.normalize(artist)]
     }
 
-    static func storeAll(_ pairs: [(artist: String, genre: String)]) {
-        guard !pairs.isEmpty else { return }
-        for pair in pairs { entries[RecommendationEngine.normalize(pair.artist)] = pair.genre }
-        guard let data = try? JSONEncoder().encode(entries) else { return }
-        try? data.write(to: url, options: .atomic)
+    /// Takes in what other devices placed.
+    static func pull() async {
+        guard let remote = await MixEditionStore.placements() else { return }
+        let merged = entries.merging(remote) { local, _ in local }
+        guard merged.count != entries.count else { return }
+        entries = merged
+        save()
+    }
+
+    static func store(_ learned: [String: [String]]) async {
+        guard !learned.isEmpty else { return }
+        entries.merge(learned) { _, new in new }
+        save()
+        await MixEditionStore.addPlacements(learned)
     }
 
     static func clear() {
@@ -62,59 +40,233 @@ enum ArtistGenreStore {
         try? FileManager.default.removeItem(at: url)
     }
 
-    private static func load() -> [String: String] {
+    private static func save() {
+        try? FileManager.default.createDirectory(at: MixEditionStore.directory, withIntermediateDirectories: true)
+        guard let data = try? JSONEncoder().encode(entries) else { return }
+        try? data.write(to: url, options: .atomic)
+    }
+
+    private static func load() -> [String: [String]] {
         guard let data = try? Data(contentsOf: url),
-              let decoded = try? JSONDecoder().decode([String: String].self, from: data)
+              let decoded = try? JSONDecoder().decode([String: [String]].self, from: data)
         else { return [:] }
         return decoded
     }
 
-    private static let url: URL = {
-        let base = FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? URL.documentsDirectory
-        let dir = base
-            .appendingPathComponent("Mixtape", isDirectory: true)
-            .appendingPathComponent("Discover", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("artist-genres.json")
-    }()
+    private static var url: URL { MixEditionStore.directory.appendingPathComponent("artist-tags.3.json") }
 }
 
-/// The scene an artist belongs to, from MusicBrainz's community genre tags.
-///
-/// Two requests — search for the artist, then read their genres — behind a
-/// one-per-second gate, because that is what MusicBrainz asks of clients and
-/// being rate-limited off it would cost the shelf entirely. Only ever called
-/// for artists `ArtistGenreStore` hasn't already answered for.
-enum MusicBrainzGenres {
+/// The fixed scenes genre mixes are built from. The web has the same table in
+/// src/lib/genreBuckets.ts; change both together.
+enum GenreBuckets {
+
+    /// Languages a Hip Hop or Pop artist's lyrics are checked for. Each has common words that aren't
+    /// English or another listed language's, and the countries used when a song has no lyrics.
+    static let languages: [(name: String, countries: [String], words: Set<String>)] = [
+        ("German", "DE AT", "ich du und nicht der das mit auf bin ist mein dein wir sie wie auch noch nur kein keine ein eine für von zu dem mir dich mich hab habe wenn weil aber jetzt immer"),
+        ("French", "FR", "je nous vous est pas les des une avec dans moi toi suis ça sur comme tout fait ai mes ce elle sont quand rien trop j qu vais veux faut"),
+        ("Spanish", "ES MX AR CO CL PE", "el los las es pero estoy eres soy muy quiero quieres cuando tengo ella ahora siempre también hay hasta así mucho noche contigo tú eso esto estás tiene puedo nadie dime pa sé"),
+        ("Italian", "IT", "io che non sono della gli ho questo perché sei anche tutto cosa ancora adesso voglio nella lei lui mio mia sto fare tutti più così dove niente qua"),
+        ("Portuguese", "BR PT", "eu não você uma com muito ela isso tudo meu minha sou estou agora nós também pra tô vai então é"),
+        ("Dutch", "NL", "ik niet het een zijn maar mijn jij wij ook nog voor naar heb weet hij mij jou niks gaat waarom"),
+        ("Turkish", "TR", "bir bu ben sen ile için çok gibi var yok daha ama beni seni benim senin değil şey kadar olan oldu mı bana sana hep yine artık hiç kim neden"),
+        ("Polish", "PL", "nie się jest że jak ty mnie ale tak już tylko był jestem mam moje gdy więc tego mój wiesz chcę nigdy zawsze kiedy nic czy"),
+        ("Russian", "RU", "я ты не и в на что это как мне меня тебя он она мы вы все так но да нет мой моя"),
+    ].map { (name: String, countries: String, words: String) in
+        (name, countries.components(separatedBy: " "), Set(words.components(separatedBy: " ")))
+    }
+
+    /// Buckets split by language, with the tag and name each split uses: German Hip Hop is "german hip hop", "German Rap".
+    static let languageScenes: [(parent: String, tag: String, name: String)] = [
+        ("Hip Hop", "hip hop", "Rap"),
+        ("Pop", "pop", "Pop"),
+    ]
+
+    private static let languageRules: [(keyword: String, bucket: String)] = languages.flatMap { language in
+        languageScenes.map { ("\(language.name.lowercased()) \($0.tag)", "\(language.name) \($0.name)") }
+    }
+
+    /// Tag keyword -> bucket. First match wins, so narrow keywords come before the
+    /// ones they contain ("reggaeton" before "reggae", "dancehall" before "dance").
+    static let rules: [(keyword: String, bucket: String)] = narrowRules + languageRules + broadRules
+
+    private static let narrowRules: [(keyword: String, bucket: String)] = [
+        ("drill", "Drill"),
+        ("grime", "Grime"),
+        ("uk garage", "UK Garage"), ("2-step", "UK Garage"), ("speed garage", "UK Garage"), ("bassline", "UK Garage"),
+        ("uk hip hop", "UK Rap"), ("british hip hop", "UK Rap"), ("uk rap", "UK Rap"), ("road rap", "UK Rap"),
+    ]
+
+    private static let broadRules: [(keyword: String, bucket: String)] = [
+        ("deutschrap", "German Rap"),
+        ("afrobeat", "Afrobeats"), ("afropop", "Afrobeats"), ("afroswing", "Afrobeats"), ("afro-fusion", "Afrobeats"),
+        ("amapiano", "Afrobeats"),
+        ("k-pop", "K-Pop"),
+        ("drum and bass", "Drum & Bass"), ("jungle", "Drum & Bass"), ("liquid funk", "Drum & Bass"),
+        ("neurofunk", "Drum & Bass"),
+        ("reggaeton", "Latin"), ("latin", "Latin"), ("bachata", "Latin"), ("salsa", "Latin"), ("cumbia", "Latin"),
+        ("corrido", "Latin"), ("dembow", "Latin"),
+        ("dancehall", "Reggae/Dancehall"), ("reggae", "Reggae/Dancehall"), ("ragga", "Reggae/Dancehall"),
+        ("r&b", "R&B"), ("rhythm and blues", "R&B"), ("soul", "Soul"),
+        ("trap", "Hip Hop"), ("hip hop", "Hip Hop"), ("hip-hop", "Hip Hop"), ("rap", "Hip Hop"), ("boom bap", "Hip Hop"),
+        ("dance-pop", "Pop"), ("electropop", "Pop"),
+        ("house", "Dance/House"), ("disco", "Dance/House"), ("dance", "Dance/House"), ("edm", "Dance/House"),
+        ("techno", "Electronic"), ("dubstep", "Electronic"), ("trance", "Electronic"), ("ambient", "Electronic"),
+        ("electro", "Electronic"), ("idm", "Electronic"), ("synthwave", "Electronic"),
+        ("metal", "Metal"),
+        ("indie", "Indie"), ("shoegaze", "Indie"), ("dream pop", "Indie"), ("bedroom pop", "Indie"),
+        ("alternative", "Indie"),
+        ("punk", "Rock"), ("rock", "Rock"), ("grunge", "Rock"),
+        ("jazz", "Jazz"), ("bebop", "Jazz"),
+        ("country", "Country"), ("americana", "Country"), ("bluegrass", "Country"),
+        ("pop", "Pop"),
+    ]
+
+    /// A narrow bucket beats its parent when both are among an artist's tags.
+    static let parents: [String: String] = [
+        "Drill": "Hip Hop", "Grime": "Hip Hop", "UK Rap": "Hip Hop",
+        "UK Garage": "Dance/House", "Drum & Bass": "Electronic", "K-Pop": "Pop",
+    ].merging(languages.flatMap { language in
+        languageScenes.map { ("\(language.name) \($0.name)", $0.parent) }
+    }) { own, _ in own }
+
+    static func bucket(forTag tag: String) -> String? {
+        rules.first { tag.contains($0.keyword) }?.bucket
+    }
+
+    /// The top tag's bucket, or a narrower one under it that's also well supported.
+    static func bucket(for tags: [String]) -> String? {
+        let buckets = tags.compactMap(bucket(forTag:))
+        guard let primary = buckets.first else { return nil }
+        return buckets.first { parents[$0] == primary } ?? primary
+    }
+
+    /// The listed language most of the lyrics' words belong to, or nil for English and anything unlisted.
+    static func lyricsLanguage(_ lyrics: String) -> String? {
+        let words = lyrics.lowercased().split { !$0.isLetter }.map(String.init)
+        guard !words.isEmpty else { return nil }
+        var best: (name: String, share: Double)?
+        for language in languages {
+            let share = Double(words.filter(language.words.contains).count) / Double(words.count)
+            // A listed language's words are 10 to 35% of its lyrics and 1% at most of English ones.
+            if share >= 0.05, share > best?.share ?? 0 { best = (language.name, share) }
+        }
+        return best?.name
+    }
+
+    static func countryLanguage(_ country: String?) -> String? {
+        languages.first { $0.countries.contains(country ?? "") }?.name
+    }
+}
+
+/// An artist's genre tags: MusicBrainz, or Apple's genre when it has none. Hip Hop and Pop
+/// artists also get a language scene. Only called for artists not already placed.
+enum ArtistGenres {
 
     private struct SearchResponse: Decodable {
         struct Artist: Decodable { let id: String; let name: String }
         let artists: [Artist]
     }
 
+    private struct RecordingResponse: Decodable {
+        struct Credit: Decodable { let name: String; let artist: SearchResponse.Artist }
+        struct Recording: Decodable {
+            let credits: [Credit]?
+            private enum CodingKeys: String, CodingKey { case credits = "artist-credit" }
+        }
+        let recordings: [Recording]
+    }
+
     private struct ArtistResponse: Decodable {
         struct Genre: Decodable { let name: String; let count: Int? }
         let genres: [Genre]?
+        let country: String?
     }
 
-    /// `none` is an answer — the artist has no usable tags — and gets cached.
-    /// `unreachable` is not an answer and must never be, or one bad afternoon
-    /// blanks half a library's genres permanently.
-    enum Placement { case genre(String), none, unreachable }
+    private struct AppleResponse: Decodable {
+        struct Result: Decodable { let artistId: Int?; let artistName: String?; let primaryGenreName: String? }
+        let results: [Result]
+    }
 
-    static func genre(for artist: String) async -> Placement {
-        let found = await search(artist)
-        guard case .id(let mbid) = found else {
-            return found == .unreachable ? .unreachable : .none
+    private struct LyricsResult: Decodable { let artistName: String?; let plainLyrics: String? }
+
+    /// `tags`, even empty, is an answer and gets stored. `unreachable` never is.
+    enum Lookup { case tags([String]), unreachable }
+
+    /// `title` is one of the artist's songs from the library. Many artists share a name
+    /// (Luciano, Dave), and the song picks the right one.
+    static func tags(for artist: String, title: String?) async -> Lookup {
+        guard let found = await musicBrainz(artist, title: title) else { return .unreachable }
+        var tags = found.tags
+        if tags.isEmpty {
+            guard let genre = await appleGenre(artist, title: title) else { return .unreachable }
+            if !genre.isEmpty { tags = [genre] }
         }
-        guard let url = URL(string: "https://musicbrainz.org/ws/2/artist/\(mbid)?inc=genres&fmt=json")
-        else { return .none }
-        guard let response: ArtistResponse = await getJSON(url) else { return .unreachable }
-        guard let genres = response.genres, !genres.isEmpty,
-              let picked = pick(from: genres) else { return .none }
-        return .genre(label(picked))
+
+        // Hip hop and pop split by the language of that song ("german hip hop"), or the country without lyrics.
+        // ponytail: one song decides, so a multilingual artist lands by the song in your library.
+        let bucket = GenreBuckets.bucket(for: tags)
+        guard let scene = GenreBuckets.languageScenes.first(where: { $0.parent == bucket }) else { return .tags(tags) }
+        var lyrics = ""
+        if let title {
+            guard let found = await lyricsFor(artist, title: title) else { return .unreachable }
+            lyrics = found
+        }
+        let language = lyrics.isEmpty ? GenreBuckets.countryLanguage(found.country) : GenreBuckets.lyricsLanguage(lyrics)
+        return .tags(language.map { tags + ["\($0.lowercased()) \(scene.tag)"] } ?? tags)
+    }
+
+    /// Well-supported tags and the artist's country. No tags when MusicBrainz doesn't know them, nil when unreachable.
+    private static func musicBrainz(_ artist: String, title: String?) async -> (tags: [String], country: String?)? {
+        var found = Found.none
+        if let title { found = await searchRecording(title, by: artist) }
+        if found == .none { found = await search(artist) }
+        switch found {
+        case .unreachable: return nil
+        case .none: return ([], nil)
+        case .id(let mbid):
+            guard let url = URL(string: "https://musicbrainz.org/ws/2/artist/\(mbid)?inc=genres&fmt=json")
+            else { return ([], nil) }
+            guard let response: ArtistResponse = await getJSON(url) else { return nil }
+            return (supported(response.genres ?? []), response.country)
+        }
+    }
+
+    /// Apple's genre for the artist, lowercased like a tag. Empty when it has none, nil when unreachable.
+    /// The artist's genre, not a song's: a label can file one release under Rock.
+    private static func appleGenre(_ artist: String, title: String?) async -> String? {
+        let key = RecommendationEngine.normalize(artist)
+        func apple(_ path: String, _ query: [String: String]) async -> [AppleResponse.Result]? {
+            guard let url = url("https://itunes.apple.com/\(path)", query) else { return [] }
+            guard let response: AppleResponse = await getJSON(url, gated: false) else { return nil }
+            return response.results.filter { RecommendationEngine.normalize($0.artistName ?? "") == key }
+        }
+        // Found by one of their songs, for the same reason as MusicBrainz (capré and Capre fold the same).
+        var songs: [AppleResponse.Result] = []
+        if let title {
+            guard let found = await apple("search", ["term": "\(artist) \(title)", "entity": "song", "limit": "10"])
+            else { return nil }
+            songs = found
+        }
+        let artists = if let id = songs.first?.artistId {
+            await apple("lookup", ["id": String(id)])
+        } else {
+            await apple("search", ["term": artist, "entity": "musicArtist", "limit": "10"])
+        }
+        guard let artists else { return nil }
+        return artists.first?.primaryGenreName?.lowercased() ?? ""
+    }
+
+    /// The song's plain lyrics. Empty when LRCLIB has none, nil when it couldn't be reached.
+    private static func lyricsFor(_ artist: String, title: String) async -> String? {
+        guard let url = url("https://lrclib.net/api/search", ["track_name": title, "artist_name": artist])
+        else { return "" }
+        guard let results: [LyricsResult] = await getJSON(url, gated: false) else { return nil }
+        let key = RecommendationEngine.normalize(artist)
+        let match = results.first {
+            !($0.plainLyrics ?? "").isEmpty && RecommendationEngine.normalize($0.artistName ?? "").contains(key)
+        }
+        return match?.plainLyrics ?? ""
     }
 
     private enum Found: Equatable { case id(String), none, unreachable }
@@ -125,67 +277,58 @@ enum MusicBrainzGenres {
               let url = URL(string: "https://musicbrainz.org/ws/2/artist?query=\(query)&fmt=json&limit=1")
         else { return .none }
         guard let response: SearchResponse = await getJSON(url) else { return .unreachable }
-        // Only an exact name match. A near miss here doesn't degrade the mix,
-        // it mislabels it — the wrong artist's scene becomes the mix's title.
+        // Exact name match only, or the wrong artist's scene becomes theirs.
         guard let first = response.artists.first,
               RecommendationEngine.normalize(first.name) == RecommendationEngine.normalize(artist)
         else { return .none }
         return .id(first.id)
     }
 
-    /// The most specific tag people actually agreed on.
-    ///
-    /// Straight "most votes" always returns the widest label — everyone tags a
-    /// Berlin rapper "hip hop" and only some add "german hip hop" — which is
-    /// the bucket problem again. So: take the well-supported tags, then prefer
-    /// the most specific of those, which for genre names means the longest.
-    private static func pick(from genres: [ArtistResponse.Genre]) -> String? {
-        let ranked = genres.sorted { ($0.count ?? 0) > ($1.count ?? 0) }
-        guard let top = ranked.first else { return nil }
+    /// The artist credited on one of their songs. Matches the credited name too,
+    /// since MusicBrainz lists some artists under a newer one (Kanye West is "Ye").
+    private static func searchRecording(_ title: String, by artist: String) async -> Found {
+        let quoted = { (text: String) in
+            "\"" + text.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
+        }
+        let query = ("recording:" + quoted(title) + " AND artist:" + quoted(artist))
+            .addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
+        guard let url = URL(string: "https://musicbrainz.org/ws/2/recording?query=\(query)&fmt=json&limit=5")
+        else { return .none }
+        guard let response: RecordingResponse = await getJSON(url) else { return .unreachable }
+        let key = RecommendationEngine.normalize(artist)
+        let credit = response.recordings.lazy.flatMap { $0.credits ?? [] }.first {
+            RecommendationEngine.normalize($0.name) == key || RecommendationEngine.normalize($0.artist.name) == key
+        }
+        return credit.map { .id($0.artist.id) } ?? .none
+    }
+
+    /// Tags with at least half the top tag's votes, most votes first. Same rule as the web.
+    private static func supported(_ genres: [ArtistResponse.Genre]) -> [String] {
+        let ranked = genres.sorted {
+            ($0.count ?? 0) == ($1.count ?? 0) ? $0.name < $1.name : ($0.count ?? 0) > ($1.count ?? 0)
+        }
+        guard let top = ranked.first else { return [] }
         let floor = max(1, (top.count ?? 1) / 2)
-        let supported = ranked.filter { ($0.count ?? 0) >= floor }
-        return supported
-            .max { lhs, rhs in lhs.name.count < rhs.name.count }?
-            .name ?? top.name
+        return ranked.filter { ($0.count ?? 0) >= floor }.map { $0.name.lowercased() }
     }
-
-    /// "german hip hop" → "German Hip Hop". MusicBrainz tags are lowercase.
-    /// Idempotent, so it also repairs labels cached under the old rule, which
-    /// uppercased every short word ("HIP HOP", "Alternative POP").
-    static func label(_ tag: String) -> String {
-        tag.lowercased().split(separator: " ").enumerated().map { index, sub -> String in
-            let word = String(sub)
-            // Scene names carry initialisms plain title case would ruin: "uk
-            // drill" is not "Uk Drill". Only these, by name — a length rule
-            // can't tell "uk" from "hip".
-            if word == "lo-fi" { return "Lo-Fi" }
-            if initialisms.contains(word) { return word.uppercased() }
-            if index > 0 && lowercaseWords.contains(word) { return word }
-            return word.split(separator: "-", omittingEmptySubsequences: false)
-                .map { $0.prefix(1).uppercased() + $0.dropFirst() }
-                .joined(separator: "-")
-        }.joined(separator: " ")
-    }
-
-    private static let lowercaseWords: Set<String> = ["and", "the", "of"]
-    private static let initialisms: Set<String> = [
-        "uk", "us", "usa", "nz", "nyc", "atl", "dmv", "edm", "idm", "ebm", "r&b", "rnb", "dnb"
-    ]
 
     // MARK: Transport
 
-    /// MusicBrainz asks for one request a second and a real User-Agent, and
-    /// enforces the first. One shared gate, so concurrent lookups queue rather
-    /// than all getting a 503.
+    /// MusicBrainz enforces one request a second; one shared gate queues lookups.
+    /// Apple and LRCLIB don't need it.
     private static let gate = RequestGate(spacing: 1.05)
 
-    private static func getJSON<T: Decodable>(_ url: URL) async -> T? {
-        await gate.waitForSlot()
+    private static func url(_ base: String, _ query: [String: String]) -> URL? {
+        var components = URLComponents(string: base)
+        components?.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) }
+        return components?.url
+    }
+
+    private static func getJSON<T: Decodable>(_ url: URL, gated: Bool = true) async -> T? {
+        if gated { await gate.waitForSlot() }
         var request = URLRequest(url: url)
         request.setValue("Mixtape/1.0 ( https://mixtaped.tech )", forHTTPHeaderField: "User-Agent")
-        // Short on purpose. MusicBrainz being unreachable is a shelf that
-        // doesn't draw; MusicBrainz being unreachable for twelve seconds a
-        // time is a minute of the app waiting to find that out.
+        // Short, so an unreachable service fails fast instead of stalling the shelf.
         request.timeoutInterval = 5
         guard let (data, response) = try? await URLSession.shared.data(for: request),
               (response as? HTTPURLResponse)?.statusCode == 200
@@ -197,93 +340,54 @@ enum MusicBrainzGenres {
 
 enum StationBuilder {
 
-    /// Under this a mix isn't a mix — the same floor the artist mixes use.
+    /// Under this a mix isn't a mix. Same floor the artist mixes use.
     private static let minimumTracks = 8
     private static let trackCount = 24
 
     // MARK: - Genre mixes
 
-    /// Artists placed per build.
-    ///
-    /// Two MusicBrainz requests each behind a one-per-second gate, so this
-    /// number *is* the shelf's cold-start delay in seconds times two. Kept
-    /// small deliberately: placements are cached forever, so a library fills
-    /// in over a handful of launches instead of holding the first one for a
-    /// minute. The shelf grows; it never blocks.
-    /// 6 was one artist's worth of shelf per launch: a library of hundreds of
-    /// artists needed dozens of launches before two of them ever landed in the
-    /// same scene, so the shelf was permanently empty and the "looking through
-    /// your genres" pass had nothing to show for itself. Still gated and still
-    /// off the critical path — it just fills in over a couple of launches now
-    /// instead of a couple of months.
+    /// Artists placed per build. Two gated MusicBrainz requests each; placements
+    /// are shared through the account, so the shelf fills in over a few launches.
     private static let genreLookupsPerBuild = 40
-    /// Two of your artists sharing a scene is a scene you're in; one is a
-    /// coincidence. Deliberately lower than it would be for Deezer's buckets —
-    /// the labels are narrow now, so the clusters are small by nature.
+    /// Two artists sharing a scene is a cluster; one is a coincidence.
     private static let minimumArtistsPerGenre = 2
     private static let maxGenreMixes = 8
-    /// Bumped when the clustering rules change, so a shelf pinned by the old
-    /// ones doesn't stand. 2: MusicBrainz scenes replaced Deezer's buckets.
-    private static let genreSchema: UInt64 = 4
 
+    /// Nil when there's nothing to show. `complete` is false while artists are
+    /// still unplaced or a scene failed to build, so the week isn't locked in early.
+    /// `titles` maps a normalised artist to one of their songs, for the lookup.
     static func genreMixes(artists: [String],
-                           using catalog: ITunesSearchClient) async -> [PersonalMix] {
-        guard artists.count >= minimumArtistsPerGenre else { return [] }
+                           titles: [String: String],
+                           using catalog: ITunesSearchClient) async -> (value: [PersonalMix], complete: Bool)? {
+        guard artists.count >= minimumArtistsPerGenre else { return nil }
+        let allPlaced = await placeGenres(for: artists, titles: titles)
 
-        let placed = await placeGenres(for: artists, using: catalog)
-        guard !placed.isEmpty else { return [] }
-
-        // Grouped in the incoming order, so a scene's mix is seeded by the
-        // artists this listener plays most within it.
-        var byGenre: [String: [String]] = [:]
-        for artist in artists {
-            guard let genre = placed[RecommendationEngine.normalize(artist)],
-                  !genre.isEmpty else { continue }
-            byGenre[genre, default: []].append(artist)
+        let placed = artists.compactMap { artist in
+            ArtistGenreStore.tags(for: artist).flatMap(GenreBuckets.bucket(for:)).map { (artist, $0) }
         }
-
-        // Fold the loners into their parent scene. MusicBrainz labels are
-        // narrow on purpose — "german hip hop", "melodic drill" — which is what
-        // makes a mix worth playing, but it also means one artist per label and
-        // no cluster ever reaching two. An unplaced artist is dropped entirely,
-        // so a coarse "Hip Hop" mix beats no shelf at all.
-        for (genre, artists) in byGenre where artists.count < minimumArtistsPerGenre {
-            let root = coarse(genre)
-            guard root != genre else { continue }
-            byGenre[genre] = nil
-            byGenre[root, default: []].append(contentsOf: artists)
+        let sizes = Dictionary(placed.map { ($0.1, 1) }, uniquingKeysWith: +)
+        // Keeps incoming order, so each scene is seeded by its most-played artists.
+        var byGenre: [String: [String]] = [:]
+        for (artist, bucket) in placed {
+            // A scene with one of your artists joins its parent, so a lone French rapper still plays in Hip Hop.
+            var scene = bucket
+            if let parent = GenreBuckets.parents[bucket], sizes[bucket, default: 0] < minimumArtistsPerGenre { scene = parent }
+            byGenre[scene, default: []].append(artist)
         }
 
         let clusters = byGenre
             .filter { $0.value.count >= minimumArtistsPerGenre }
             .sorted { $0.value.count == $1.value.count ? $0.key < $1.key : $0.value.count > $1.value.count }
             .prefix(maxGenreMixes)
-        guard !clusters.isEmpty else { return [] }
-
-        // The pin key is the clustering itself: same scenes, same artists in
-        // them, same shelf — which is the whole point of these not being weekly.
-        let key = hashKey(clusters.map { "\($0.key):\($0.value.prefix(4).joined(separator: ","))" })
-            &+ genreSchema
-        if let pinned = MixEditionStore.loadList("genres", key: key) { return pinned }
+        guard !clusters.isEmpty else { return nil }
 
         let built = await ordered(Array(clusters)) { cluster in
             await genreMix(name: cluster.key,
                            seeds: Array(cluster.value.prefix(3)),
                            using: catalog)
         }
-
-        if !built.isEmpty { MixEditionStore.saveList(built, name: "genres", key: key) }
-        return built
-    }
-
-    /// The parent scene of a narrow label: the last two words of a three-word
-    /// tag ("German Hip Hop" → "Hip Hop"), the last word otherwise ("Melodic
-    /// Drill" → "Drill"). Crude, and right for how these tags are written.
-    private static func coarse(_ genre: String) -> String {
-        let words = genre.split(separator: " ")
-        guard words.count > 1 else { return genre }
-        let tail = words.count > 2 ? words.suffix(2) : words.suffix(1)
-        return tail.joined(separator: " ")
+        guard !built.isEmpty else { return nil }
+        return (built, allPlaced && built.count == clusters.count)
     }
 
     /// One scene's mix, pooled from the radios of your own artists in it.
@@ -300,8 +404,7 @@ enum StationBuilder {
         let deduped = pool.filter { seen.insert($0.id).inserted }
         guard deduped.count >= minimumTracks else { return nil }
 
-        // Deterministic in the scene and its seeds — not in the week. A genre
-        // mix is supposed to be the same list until your taste moves.
+        // Seeded by scene and artists, not the week.
         var rng = SplitMix64(seed: hashKey([name] + seeds))
         let tracks = Array(deduped.shuffled(using: &rng).prefix(trackCount))
 
@@ -314,64 +417,41 @@ enum StationBuilder {
                            covers: covers(of: tracks))
     }
 
-    /// Resolve any artist the cache can't already place, up to the per-build
-    /// budget, and return the placements for `artists`.
-    private static func placeGenres(for artists: [String],
-                                    using catalog: ITunesSearchClient) async -> [String: String] {
-        let missing = artists
-            .filter { ArtistGenreStore.genre(for: $0) == nil }
-            .prefix(genreLookupsPerBuild)
+    /// Looks up unplaced artists up to the per-build budget. True when every
+    /// artist in `artists` has an answer.
+    private static func placeGenres(for artists: [String], titles: [String: String]) async -> Bool {
+        await ArtistGenreStore.pull()
+        let missing = artists.filter { ArtistGenreStore.tags(for: $0) == nil }
+        guard !missing.isEmpty else { return true }
 
-        if !missing.isEmpty {
-            var looked: [(artist: String, genre: String)] = []
-            // Serial, not a task group: the gate would serialise them anyway,
-            // and a group here just parks ten tasks on a one-per-second queue.
-            var failures = 0
-            lookups: for name in missing {
-                switch await MusicBrainzGenres.genre(for: name) {
-                case .genre(let genre): looked.append((name, genre)); failures = 0
-                case .none:             looked.append((name, ""));    failures = 0
-                case .unreachable:
-                    // The service is down or blocked, not slow for this one
-                    // artist. Two in a row is enough to stop paying a timeout
-                    // per remaining name; next launch tries again.
-                    failures += 1
-                    if failures >= 2 { break lookups }
-                }
+        var learned: [String: [String]] = [:]
+        // Serial: the gate serialises them anyway.
+        var failures = 0
+        lookups: for name in missing.prefix(genreLookupsPerBuild) {
+            switch await ArtistGenres.tags(for: name, title: titles[RecommendationEngine.normalize(name)]) {
+            case .tags(let tags):
+                learned[RecommendationEngine.normalize(name)] = tags
+                failures = 0
+            case .unreachable:
+                // Two failures in a row means the service is down; stop and retry next launch.
+                failures += 1
+                if failures >= 2 { break lookups }
             }
-            ArtistGenreStore.storeAll(looked)
         }
-
-        var placed: [String: String] = [:]
-        for name in artists {
-            guard let genre = ArtistGenreStore.genre(for: name) else { continue }
-            placed[RecommendationEngine.normalize(name)] = genre
-        }
-        return placed
+        await ArtistGenreStore.store(learned)
+        return learned.count == Set(missing.map(RecommendationEngine.normalize)).count
     }
 
     // MARK: - Radios
 
-    /// A list called "Top 50" with 24 songs in it is a list that lied in its
-    /// own title, so the chart radio keeps the whole chart.
-    ///
-    /// Fetched ten over the cap, because the dedupe runs *after* the fetch:
-    /// Deezer ships the odd repeat in its chart, and a "Top 50" that came back
-    /// with 49 songs is a title that doesn't match its own list.
+    /// The chart radio keeps the whole chart. Fetched with headroom since dedupe
+    /// runs after the fetch.
     private static let chartRadioTracks = 50
     private static let sceneRadios = 4
     private static let artistRadios = 4
-    private static let stationSchema: UInt64 = 2
 
-    /// The non-personal shelf. Pinned weekly: the charts behind it move weekly
-    /// too, and a radio that reshuffled on every visit would be a different
-    /// radio every time you came back to it.
-    static func stations(edition: UInt64, using catalog: ITunesSearchClient) async -> [PersonalMix] {
-        // Bumped when the shelf's own rules change, so a week's pin built by
-        // the old ones doesn't stand. 1: everything is a Radio, chart keeps 50.
-        let key = edition &+ stationSchema
-        if let pinned = MixEditionStore.loadList("stations", key: key) { return pinned }
-
+    /// The non-personal shelf. Stored weekly, like the charts behind it.
+    static func stations(using catalog: ITunesSearchClient) async -> [PersonalMix] {
         async let global = catalog.chartTracks(limit: chartRadioTracks + 10)
         async let genres = catalog.genres()
         async let chartArtists = catalog.chartArtists(limit: artistRadios)
@@ -383,8 +463,7 @@ enum StationBuilder {
             out.append(top)
         }
 
-        // Scene radios, from the genres Deezer actually charts. Taken in the
-        // order the API returns them so the shelf is the same shelf tomorrow.
+        // Scene radios in API order, so the shelf is stable day to day.
         let scenes = Array(await genres.prefix(sceneRadios))
         out += await ordered(scenes) { genre in
             let tracks = await catalog.chartTracks(genreId: genre.id, limit: 50)
@@ -395,7 +474,7 @@ enum StationBuilder {
                        tracks: tracks)
         }
 
-        // Artist radios off today's chart — the "Central Cee Radio" shape.
+        // Artist radios off today's chart.
         let artists = await chartArtists
         out += await ordered(artists) { artist in
             let tracks = await catalog.radioTracks(artistId: artist.id, limit: 40)
@@ -407,27 +486,18 @@ enum StationBuilder {
                        tracks: tracks)
         }
 
-        if !out.isEmpty { MixEditionStore.saveList(out, name: "stations", key: key) }
         return out
     }
 
     // MARK: - Song radio
 
-    /// "Go to Song Radio" — the station one song seeds.
-    ///
-    /// Deezer has no per-track radio endpoint, so the seed is the song's
-    /// credits: every artist on it gets their own radio and the lists are
-    /// interleaved, so a featured artist's corner is actually in the mix rather
-    /// than forming a tail nobody scrolls to.
-    ///
-    /// ponytail: seeded at artist level, not track level — a real track-radio
-    /// endpoint (or an audio-features nearest-neighbour) would replace the body
-    /// of this function and nothing else.
+    /// "Go to Song Radio". Deezer has no track radio, so each credited artist gets
+    /// a radio and the lists are interleaved.
+    /// ponytail: artist-level seeding; a real track-radio endpoint would replace the body.
     static func songRadio(title: String,
                           artistName: String,
                           using catalog: ITunesSearchClient) async -> PersonalMix? {
-        // `names`, not `credits` — the helper below is called `credits` too, and
-        // a local of that name would shadow it.
+        // `names` because a local `credits` would shadow the helper below.
         let names = Array(ImportService.creditedArtists(from: artistName).prefix(3))
         guard let seed = names.first, !title.isEmpty else { return nil }
 
@@ -470,21 +540,12 @@ enum StationBuilder {
 
     // MARK: - Artist page stations
 
-    /// The two stations an artist page carries.
-    ///
-    /// This is our answer to Spotify's "Appears On"/"Discovered on" shelves,
-    /// which are made of playlists *other people* made. Nobody has made any
-    /// here yet, so instead of an empty shelf the page offers the two lists
-    /// that are worth making from what the page already fetched: the artist's
-    /// own best songs, and Deezer's radio around them.
-    ///
-    /// Synchronous and free — both lists come out of the catalogue the page
-    /// loaded, so the cards are there when the page is.
+    /// The two stations on an artist page ("This Is" and "Appears On"). Built
+    /// synchronously from the catalogue the page already loaded.
     static func artistStations(_ artist: OnlineArtist,
                                catalogue: OnlineArtistCatalogue) -> [PersonalMix] {
         var out: [PersonalMix] = []
-        // A lower floor than a shelf mix: a small artist with six songs still
-        // has a "This Is", and it is the most useful thing on their page.
+        // Lower floor than shelf mixes, so small artists still get a "This Is".
         if let thisIs = mix(id: "artist:this-is:\(artist.id)",
                             title: "This Is \(artist.name)",
                             subtitleText: "\(artist.name)'s biggest songs, most played first",
@@ -503,9 +564,7 @@ enum StationBuilder {
                            cap: 50) {
             out.append(radio)
         }
-        // "Appears on" as a record rather than a list: it is a playlist by
-        // definition — other people's songs that credit this artist — and as a
-        // card it plays, saves and downloads like any other mix.
+        // "Appears On" as a mix so it plays, saves and downloads like any other.
         if let appears = mix(id: "artist:appears-on:\(artist.id)",
                              title: "Featuring \(artist.name)",
                              subtitleText: "Songs by other artists that credit \(artist.name)",
@@ -520,9 +579,8 @@ enum StationBuilder {
 
     // MARK: - Helpers
 
-    /// Build each item concurrently, keep the input's order, drop the nils.
-    /// A shelf whose cards reshuffle by whichever request answered first isn't
-    /// the shelf that was pinned.
+    /// Builds items concurrently but keeps input order and drops nils, so a pinned
+    /// shelf doesn't reshuffle.
     private static func ordered<T: Sendable>(_ items: [T],
                                              _ make: @escaping @Sendable (T) async -> PersonalMix?)
                                              async -> [PersonalMix] {
@@ -555,7 +613,7 @@ enum StationBuilder {
                            covers: covers(of: picks))
     }
 
-    /// "A, B and more" — the same shape the artist mixes' line has.
+    /// "A, B and more", same shape as the artist mixes.
     private static func credits(of tracks: [OnlineTrack], excluding seed: String, limit: Int) -> String {
         var seen = Set<String>()
         let names = tracks
@@ -566,8 +624,7 @@ enum StationBuilder {
         return names.isEmpty ? "\(tracks.count) songs" : names.joined(separator: ", ") + " and more"
     }
 
-    /// Stable across launches — Swift's own hashing is per-process seeded and
-    /// would repin on every relaunch.
+    /// Stable across launches, unlike Swift's per-process seeded hashing.
     private static func hashKey(_ parts: [String]) -> UInt64 {
         RecommendationEngine.hash(parts.joined(separator: "|"))
     }

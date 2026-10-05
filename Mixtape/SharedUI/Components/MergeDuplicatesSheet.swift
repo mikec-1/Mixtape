@@ -1,19 +1,10 @@
-// MergeDuplicatesSheet.swift
-// Mixtape — SharedUI/Components
-//
-// The preview half of `DuplicateMerger`: what the cleanup would do, before it
-// does it.
-//
-// Merging is a delete under a friendlier name, so nothing here happens on the
-// way in. The sheet opens, scans, and shows the list — every doubled song, the
-// copy that survives, and the playlists that get repointed — and the button
-// stays the only thing that acts.
+// Preview for `DuplicateMerger`: scans and lists what would be merged.
+// Only the button acts.
 
 import SwiftUI
 
 extension Notification.Name {
-    /// Posted by the macOS Library menu. `MacRootView` listens and presents the
-    /// sheet — the menu bar lives outside every view that could show it itself.
+    /// Posted by the macOS Library menu; `MacRootView` presents the sheet.
     static let mixMergeDuplicates = Notification.Name("mix.mergeDuplicates")
 }
 
@@ -35,9 +26,7 @@ struct MergeDuplicatesSheet: View {
         .task { if plan == nil { plan = DuplicateMerger.plan(library: deps.libraryService) } }
     }
 
-    /// Only the list of duplicates needs a window you can scroll. Every other
-    /// state of this sheet is one sentence, and asking for `.large` there is
-    /// what left an eighth of the screen empty under a single line of text.
+    /// Only the duplicate list needs `.large`.
     private var size: MixSheetSize {
         guard mergedCount == nil, let plan, !plan.isEmpty else { return .compact }
         return .large
@@ -45,8 +34,7 @@ struct MergeDuplicatesSheet: View {
 
     // MARK: Header text
 
-    /// Nil in every state whose message is a status row below — the sentence
-    /// belongs in one place, and up here it would be printed twice.
+    /// Nil when the status row already says it.
     private var subtitle: String? {
         guard mergedCount == nil, let plan, !plan.isEmpty else { return nil }
         return "\(plan.groups.count) song\(plan.groups.count == 1 ? "" : "s") are in your library more than once. One copy of each is kept — the rest are removed, and every playlist and like is moved onto the copy that stays."
@@ -123,6 +111,7 @@ struct MergeDuplicatesSheet: View {
         let count = plan.duplicateCount
         return MixSheetAction("Merge \(count) Duplicate\(count == 1 ? "" : "s")",
                               isDestructive: true) {
+            SupabaseSyncService.allowBulk("merge-duplicates")
             mergedCount = DuplicateMerger.apply(plan, library: deps.libraryService)
         }
     }

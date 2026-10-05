@@ -1,38 +1,19 @@
-// SuggestionFeedback.swift
-// Mixtape — Core/Services
-//
-// "Don't suggest this again."
-//
-// Every recommendation the app makes is built from two things: what you play and
-// what Deezer's radio says goes with it. Neither has a way of hearing "no". A
-// song you skip every single time keeps coming back in next week's mix, because
-// nothing was ever written down when you skipped it — the engine only ever got
-// positive signal, so its idea of your taste could only grow.
-//
-// This is the negative half. Two lists, both small by nature: songs that should
-// never be suggested, and artists that should never be suggested. They filter
-// the radio the mixes are built from, the queue's autoplay top-up, and the
-// seeds themselves, so a blocked artist can't come back as the reason for a
-// whole mix.
-//
-// Read from any thread, so the lists live in UserDefaults rather than behind the
-// main actor: a filter sits in the middle of a catalogue fetch, and a hop to the
-// main actor per Deezer response is a hop per row of the landing page.
-//
-// ponytail: local to this device — hiding a song on the Mac doesn't hide it on
-// iOS. Move both lists into `user_metadata` alongside the sort order if that
-// starts to matter.
+// "Don't suggest this again": blocked songs and artists. Filters mix radios,
+// autoplay, mix seeds and the stored shelves.
+// In UserDefaults so it can be read off the main actor mid-fetch. Synced to the
+// account's `suggestion_feedback` row: every edit pushes both sets, realtime and
+// each sync pull bring other devices' edits in.
 
 import Foundation
+import os
+import Supabase
 
 public enum SuggestionFeedback {
 
     private static let songsKey   = "mix.suggestions.hiddenSongs"
     private static let artistsKey = "mix.suggestions.blockedArtists"
 
-    /// `title|artist`, lowercased — the same key every other cross-source list
-    /// here uses, because the same song arrives as a library row, a queue mirror
-    /// and a Deezer suggestion with three different ids.
+    /// Lowercased `title|artist`, the shared cross-source key.
     public static func key(title: String, artist: String) -> String {
         "\(title.lowercased())|\(artist.lowercased())"
     }
@@ -43,8 +24,7 @@ public enum SuggestionFeedback {
         Set(UserDefaults.standard.stringArray(forKey: songsKey) ?? [])
     }
 
-    /// Folded through `ArtistAliases`, so blocking "Digga D" also blocks the
-    /// library's "Digga".
+    /// Folded through `ArtistAliases`, so "Digga D" also blocks "Digga".
     public static var blockedArtists: Set<String> {
         Set(UserDefaults.standard.stringArray(forKey: artistsKey) ?? [])
     }
@@ -57,10 +37,18 @@ public enum SuggestionFeedback {
         blockedArtists.contains(ArtistAliases.fold(artist))
     }
 
-    /// Whether a suggestion may be made. Every credited artist counts: a feature
-    /// by a blocked artist is still a song with them on it.
+    /// What filtering reads: the hidden list plus songs this device saw skipped early.
+    public static var filteredSongs: Set<String> {
+        hiddenSongs.union(SkipHistory.skippedOut)
+    }
+
+    /// Every credited artist counts, so features by blocked artists are filtered too.
     public static func allows(title: String, artist: String) -> Bool {
-        let songs = hiddenSongs, artists = blockedArtists
+        allows(title: title, artist: artist, songs: filteredSongs, artists: blockedArtists)
+    }
+
+    /// Takes the sets, so filtering a whole shelf reads them once.
+    static func allows(title: String, artist: String, songs: Set<String>, artists: Set<String>) -> Bool {
         guard !songs.contains(key(title: title, artist: artist)) else { return false }
         guard !artists.isEmpty else { return true }
         return !ImportService.creditedArtists(from: artist)
@@ -80,13 +68,13 @@ public enum SuggestionFeedback {
     public static func hide(title: String, artist: String) {
         var songs = hiddenSongs
         guard songs.insert(key(title: title, artist: artist)).inserted else { return }
-        UserDefaults.standard.set(Array(songs), forKey: songsKey)
+        edit(songs: songs, artists: blockedArtists)
     }
 
     public static func unhide(title: String, artist: String) {
         var songs = hiddenSongs
         guard songs.remove(key(title: title, artist: artist)) != nil else { return }
-        UserDefaults.standard.set(Array(songs), forKey: songsKey)
+        edit(songs: songs, artists: blockedArtists)
     }
 
     public static func block(artist: String) {
@@ -94,19 +82,146 @@ public enum SuggestionFeedback {
         guard !folded.isEmpty else { return }
         var artists = blockedArtists
         guard artists.insert(folded).inserted else { return }
-        UserDefaults.standard.set(Array(artists), forKey: artistsKey)
+        edit(songs: hiddenSongs, artists: artists)
     }
 
     public static func unblock(artist: String) {
         var artists = blockedArtists
         guard artists.remove(ArtistAliases.fold(artist)) != nil else { return }
-        UserDefaults.standard.set(Array(artists), forKey: artistsKey)
+        edit(songs: hiddenSongs, artists: artists)
     }
 
-    /// Both lists name songs and artists that were in the library. A wipe takes
-    /// the reason for them with it — see `UserDataReset`.
+    /// "Show These Again" and a library wipe. Clears the account's copy too.
     public static func clear() {
-        UserDefaults.standard.removeObject(forKey: songsKey)
-        UserDefaults.standard.removeObject(forKey: artistsKey)
+        SkipHistory.clear()
+        edit(songs: [], artists: [])
     }
+
+    // MARK: - Account sync
+
+    /// Set by a local edit, cleared once the server has it. A dirty device wins its next pull.
+    private static let dirtyKey = "mix.suggestions.dirty"
+    /// Whose sets these are. Nil on a device that predates sync, whose sets merge in once.
+    private static let ownerKey = "mix.suggestions.owner"
+
+    private struct Row: Codable {
+        var userID: UUID?
+        var hiddenSongs: [String]
+        var blockedArtists: [String]
+
+        enum CodingKeys: String, CodingKey {
+            case userID = "user_id", hiddenSongs = "hidden_songs", blockedArtists = "blocked_artists"
+        }
+    }
+
+    private static func edit(songs: Set<String>, artists: Set<String>) {
+        write(songs: songs, artists: artists)
+        UserDefaults.standard.set(true, forKey: dirtyKey)
+        Task { await push() }
+    }
+
+    private static func write(songs: Set<String>, artists: Set<String>) {
+        let defaults = UserDefaults.standard
+        if songs.isEmpty { defaults.removeObject(forKey: songsKey) } else { defaults.set(Array(songs), forKey: songsKey) }
+        if artists.isEmpty { defaults.removeObject(forKey: artistsKey) } else { defaults.set(Array(artists), forKey: artistsKey) }
+        NotificationCenter.default.post(name: .suggestionFeedbackChanged, object: nil)
+    }
+
+    private static func push() async {
+        guard let userID = SupabaseConfig.client.auth.currentUser?.id else { return }
+        let songs = hiddenSongs, artists = blockedArtists
+        do {
+            try await SupabaseConfig.client.from("suggestion_feedback")
+                .upsert(Row(userID: userID, hiddenSongs: songs.sorted(), blockedArtists: artists.sorted()),
+                        onConflict: "user_id", returning: .minimal)
+                .execute()
+            UserDefaults.standard.set(userID.uuidString, forKey: ownerKey)
+            // An edit that landed mid-flight still owes its own push.
+            if hiddenSongs == songs, blockedArtists == artists {
+                UserDefaults.standard.set(false, forKey: dirtyKey)
+            }
+        } catch {
+            MixLog.sync.error("Suggestion feedback push failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Reconciles with the account's row. Runs on every sync pull and realtime change.
+    public static func pull(userID: UUID) async {
+        let remote: Row?
+        do {
+            let rows: [Row] = try await SupabaseConfig.client.from("suggestion_feedback")
+                .select("hidden_songs,blocked_artists")
+                .eq("user_id", value: userID)
+                .execute()
+                .value
+            remote = rows.first
+        } catch {
+            MixLog.sync.error("Suggestion feedback pull failed: \(error.localizedDescription, privacy: .public)")
+            return
+        }
+        let defaults = UserDefaults.standard
+        let owner = defaults.string(forKey: ownerKey)
+        let songs = hiddenSongs, artists = blockedArtists
+        let remoteSongs = Set(remote?.hiddenSongs ?? []), remoteArtists = Set(remote?.blockedArtists ?? [])
+
+        if owner == nil, !songs.isEmpty || !artists.isEmpty {
+            // First sync on a device that already had choices: keep both.
+            edit(songs: songs.union(remoteSongs), artists: artists.union(remoteArtists))
+        } else if owner == userID.uuidString, defaults.bool(forKey: dirtyKey) {
+            await push()
+        } else {
+            defaults.set(userID.uuidString, forKey: ownerKey)
+            defaults.set(false, forKey: dirtyKey)
+            if remoteSongs != songs || remoteArtists != artists {
+                write(songs: remoteSongs, artists: remoteArtists)
+            }
+        }
+    }
+}
+
+/// Songs skipped in their first 30 seconds, counted per account on this device only.
+/// Never uploaded, so it works without the analytics opt-in. Two early skips keep a song
+/// out of suggestions; a full listen forgives it.
+public enum SkipHistory {
+
+    static let threshold = 2
+
+    private static var countsKey: String {
+        "mix.skips.\(SupabaseConfig.client.auth.currentUser?.id.uuidString ?? "local")"
+    }
+
+    // ponytail: grows by one entry per early-skipped song, no cap; trim oldest if it ever gets big.
+    private static var counts: [String: Int] {
+        get { UserDefaults.standard.dictionary(forKey: countsKey) as? [String: Int] ?? [:] }
+        set { UserDefaults.standard.set(newValue, forKey: countsKey) }
+    }
+
+    static var skippedOut: Set<String> {
+        Set(counts.filter { $0.value >= threshold }.keys)
+    }
+
+    public static func noteEarlySkip(title: String, artist: String) {
+        guard !PrivateSession.isActive else { return }
+        let key = SuggestionFeedback.key(title: title, artist: artist)
+        var all = counts
+        all[key, default: 0] += 1
+        counts = all
+        if all[key] == threshold { NotificationCenter.default.post(name: .suggestionFeedbackChanged, object: nil) }
+    }
+
+    public static func forgive(title: String, artist: String) {
+        var all = counts
+        guard let was = all.removeValue(forKey: SuggestionFeedback.key(title: title, artist: artist)) else { return }
+        counts = all
+        if was >= threshold { NotificationCenter.default.post(name: .suggestionFeedbackChanged, object: nil) }
+    }
+
+    static func clear() {
+        UserDefaults.standard.removeObject(forKey: countsKey)
+    }
+}
+
+extension Notification.Name {
+    /// A song or artist was hidden or shown again, here or on another device.
+    public static let suggestionFeedbackChanged = Notification.Name("mix.suggestionFeedbackChanged")
 }

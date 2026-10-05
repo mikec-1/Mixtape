@@ -1,5 +1,5 @@
 // The maths behind "your #3 artist this year". Split out from ListeningStatsService
-// so it can be checked without the model layer — see scripts/artist-rank-check.swift.
+// so it can be checked without the model layer; see scripts/artist-rank-check.swift.
 
 import Foundation
 
@@ -10,7 +10,7 @@ enum ArtistRanking {
     ///
     /// Equal totals share a place: only strictly busier artists are counted ahead.
     static func place(of spellings: Set<String>, in plays: [String: Int]) -> (plays: Int, rank: Int)? {
-        // Every spelling is the same artist, so they sum — and none of them counts
+        // Every spelling is the same artist, so they sum, and none of them counts
         // as a rival, or an artist with two spellings would rank below themselves.
         let mine = spellings.reduce(0) { $0 + (plays[$1] ?? 0) }
         guard mine > 0 else { return nil }

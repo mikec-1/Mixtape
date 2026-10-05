@@ -1,13 +1,6 @@
-// OfflineBanner.swift
-// Mixtape — SharedUI/Components
-//
-// "Offline" — the one line that explains why a song won't start.
-//
-// Two different facts read the same way to a listener: the network is gone
-// (`DownloadManager.isConnected`), or the session could not be refreshed and
-// the app is running on the cached one (`SupabaseAuthService.isOffline`). The
-// second usually implies the first, but not always — a captive-portal Wi-Fi
-// counts as connected — so the banner shows for either.
+// "Offline" banner. Shows when the network is gone (`DownloadManager.isConnected`)
+// or the session is running on the cached one (`SupabaseAuthService.isOffline`);
+// captive-portal Wi-Fi counts as connected, so either triggers it.
 
 import SwiftUI
 
@@ -16,8 +9,7 @@ struct OfflineBanner: View {
     @ObservedObject var downloads: DownloadManager
     @ObservedObject var auth: SupabaseAuthService
 
-    /// Collapses to nothing when there's a connection, so the host can place it
-    /// unconditionally next to `DownloadStatusBar`.
+    /// Empty when connected, so the host can place it unconditionally.
     var body: some View {
         if !downloads.isConnected || auth.isOffline {
             HStack(spacing: 8) {
@@ -50,29 +42,27 @@ struct OfflineBanner: View {
 
 // MARK: - Watcher
 
-/// Reports the network to a view that can't observe it: a screen reached
-/// through `AppDependencies` holds the download manager but doesn't watch it,
-/// and observing it there would redraw the whole page on every progress tick.
-/// Fires on appear too, so a screen opened while already offline hears about it.
+/// Reports the network to a view that doesn't observe the download manager
+/// (observing it would redraw the page on every progress tick). Fires on appear too.
 struct OfflineWatcher: View {
     @ObservedObject var downloads: DownloadManager
+    @ObservedObject var auth: SupabaseAuthService
     let onChange: (Bool) -> Void
+
+    private var offline: Bool { !downloads.isConnected || auth.isOffline }
 
     var body: some View {
         Color.clear
             .frame(width: 0, height: 0)
-            .onAppear { onChange(!downloads.isConnected) }
-            .onChange(of: downloads.isConnected) { _, connected in onChange(!connected) }
+            .onAppear { onChange(offline) }
+            .onChange(of: offline) { _, now in onChange(now) }
     }
 }
 
 // MARK: - Strip
 
-/// The same fact as a band on the player, opposite the continuity strip: that
-/// one names the device playing and sits above the controls, this one names the
-/// network and sits below them. Coming back is worth saying too — a green line
-/// for a couple of seconds, then gone, because "online" is the normal state and
-/// a permanent badge for it is noise.
+/// A small pill above the mini player (or the tab bar when nothing plays). Coming back online
+/// turns it blue for a couple of seconds, then it goes.
 struct OfflineStrip: View {
 
     @ObservedObject var downloads: DownloadManager
@@ -80,8 +70,7 @@ struct OfflineStrip: View {
 
     /// Nil while there is nothing to say. `false` = offline, `true` = just back.
     @State private var back: Bool? = nil
-    /// Discarded when a newer change arrives, so a flap doesn't leave the green
-    /// line to be cleared by a timer that belongs to an older state.
+    /// Bumped on each change so an older timer can't clear a newer state.
     @State private var generation = 0
 
     private var offline: Bool { !downloads.isConnected || auth.isOffline }
@@ -89,14 +78,16 @@ struct OfflineStrip: View {
     var body: some View {
         Group {
             if let back {
-                Text(back ? "You're back online" : "You're offline")
-                    .font(.system(size: MixFontScale.size(13), weight: back ? .semibold : .regular))
-                    .foregroundStyle(back ? Color.black : Color.mixTextSecondary)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 22)
-                    .background(back ? Color(red: 0.24, green: 0.57, blue: 0.96) : Color.mixBackground)
+                Label(back ? "You're back online" : "You're offline",
+                      systemImage: back ? "wifi" : "wifi.slash")
+                    .font(.system(size: MixFontScale.size(12), weight: .semibold))
+                    .foregroundStyle(back ? Color.white : Color.mixTextSecondary)
+                    .padding(.horizontal, 12)
+                    .frame(height: 26)
+                    .background(back ? AnyShapeStyle(Color(red: 0.24, green: 0.57, blue: 0.96)) : AnyShapeStyle(.regularMaterial),
+                                in: Capsule())
                     .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .accessibilityLabel(back ? "You're back online" : "You're offline")
+                    .accessibilityElement(children: .combine)
             }
         }
         .mixAnimation(.snappy(duration: 0.25), value: back)

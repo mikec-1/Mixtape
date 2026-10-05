@@ -1,26 +1,19 @@
-// DownloadStateBadge.swift
-// Mixtape — SharedUI/Components
-//
-// "Is this playlist on my device?" in one glyph, on both platforms.
-//
-// Three states, one of which used to be missing: nothing at all, a ring that
-// fills while the songs come down, and the green disc once they are all here.
-// Without the middle one a long download looked exactly like no download until
-// the moment it finished, which is why people pressed the button twice.
+// Playlist offline state in one glyph: nothing, a filling ring, or the green disc.
 
 import SwiftUI
 
 struct DownloadStateBadge: View {
 
-    /// The songs this badge speaks for — a playlist, an album, one track.
+    /// The songs this badge speaks for: a playlist, an album, one track.
     let ids: [UUID]
     @ObservedObject var downloads: DownloadManager
     var size: CGFloat = 11
+    /// False for a playlist nobody asked to keep: a shared song downloading elsewhere isn't its download.
+    var showsProgress = true
 
     var body: some View {
-        // Read once: `downloadFraction` is nil unless something is in flight,
-        // so the ring never outlives the run it belongs to.
-        if let fraction = downloads.downloadFraction(ids) {
+        // Nil unless a download is in flight.
+        if showsProgress, let fraction = downloads.downloadFraction(ids) {
             ZStack {
                 Circle()
                     .stroke(Color.mixTextTertiary.opacity(0.35), lineWidth: size * 0.16)

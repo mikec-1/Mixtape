@@ -1,19 +1,6 @@
-// MixTabStrip.swift
-// Mixtape — SharedUI/Components
-//
-// Text tabs with a sliding underline, for switching between slices of one page.
-//
-// Deliberately not a `Picker(.segmented)`. A segmented control is a *control* —
-// a bordered capsule that reads as a form field, sized to its widest label and
-// visually competing with whatever content sits under it. That is right for
-// "sort ascending / descending" and wrong for the top-level structure of a
-// page, where the tabs are the page's own headings and should read as type
-// rather than as chrome. Underlined text is what Monochrome, Apple Music's web
-// player and most editorial layouts use for exactly this reason.
-//
-// The underline is one shape moved between tabs with `matchedGeometryEffect`,
-// not one per tab faded in and out, so switching reads as a single indicator
-// travelling rather than two unrelated animations.
+// Text tabs with a sliding underline, for slices of one page. Not
+// `Picker(.segmented)`, which reads as a form control rather than headings.
+// One underline moved with `matchedGeometryEffect`, so it travels between tabs.
 
 import SwiftUI
 
@@ -23,8 +10,7 @@ struct MixTabStrip<Tab: Hashable>: View {
     let title: (Tab) -> String
     @Binding var selection: Tab
 
-    /// Trailing accessory — a refresh button, a count, a "Show all". Sits on the
-    /// baseline of the strip so it reads as part of the same row.
+    /// Trailing accessory (refresh button, count, "Show all") on the strip's baseline.
     var accessory: AnyView? = nil
 
     @Namespace private var underline
@@ -42,8 +28,7 @@ struct MixTabStrip<Tab: Hashable>: View {
                 if let accessory { accessory.padding(.bottom, 8) }
             }
 
-            // A hairline the full width of the content, so the active tab's
-            // underline reads as sitting *on* a rule rather than floating.
+            // Full-width hairline so the active underline sits on a rule.
             Rectangle()
                 .fill(Color.mixSeparator)
                 .frame(height: 1)
@@ -67,8 +52,7 @@ struct MixTabStrip<Tab: Hashable>: View {
                                                       : Color.mixTextSecondary)
                     .fixedSize()
 
-                // The inactive tabs still reserve the underline's height, so
-                // nothing shifts vertically when the selection moves.
+                // Inactive tabs reserve the underline's height so nothing shifts.
                 ZStack {
                     Color.clear.frame(height: 2)
                     if isActive {

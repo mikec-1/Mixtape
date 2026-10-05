@@ -1,23 +1,6 @@
-// TrackPreparingBar.swift
-// Mixtape — SharedUI/Components
-//
-// The strip that says what the app is doing while a cold song loads.
-//
-// Playing something the app doesn't own yet is three pieces of work — find the
-// upload, pull it down, convert it — and for as long as they run the only thing
-// on screen was a spinner on the row. A spinner says "wait" and nothing else:
-// not what it's waiting on, not whether it's nearly there, not whether it has
-// quietly given up. People pressed play twice.
-//
-// So: the song's name, the step, the percentage when there is one, and a bar
-// under it. It sits directly above the player — the place you are already
-// looking once you have pressed play — and it goes away the moment sound
-// starts.
-//
-// Small by default, because most of the time the answer is "a few seconds and
-// it's fine". Click it (or the chevron, which appears under the pointer) and it
-// opens: the song's full name, who it's by, and which of the three steps is
-// running — for the times the answer is "this one is taking a while, why?".
+// Strip above the player while a cold song loads: song name, step, percentage
+// when known, and a bar. Gone once sound starts. Tap to expand into the full
+// name, artist and the three steps (find, download, convert).
 
 import SwiftUI
 
@@ -26,8 +9,7 @@ public struct TrackPreparingBar: View {
     @ObservedObject private var coordinator: OnlinePlaybackCoordinator
     @ObservedObject private var unavailable = UnavailableTracks.shared
 
-    /// Sticks once set. Someone who opened this card wanted the detail, and the
-    /// next cold song is the one they wanted it for.
+    /// Sticks once opened.
     @State private var isExpanded = false
     @State private var isHovering = false
 
@@ -36,10 +18,8 @@ public struct TrackPreparingBar: View {
     }
 
     public var body: some View {
-        // Dropped songs stack above the spinner rather than replacing it: a run
-        // of unfindable songs is skipped in a few seconds, and one card
-        // overwriting the last would show only whichever lost the race. The
-        // song now loading keeps its own place at the bottom.
+        // Dropped songs stack above the spinner so a run of skips all show; the
+        // loading song stays at the bottom.
         VStack(alignment: .leading, spacing: 6) {
             ForEach(unavailable.recentSkips) { dropped in
                 unfindableCard(dropped)
@@ -56,9 +36,7 @@ public struct TrackPreparingBar: View {
                       value: unavailable.recentSkips.count)
     }
 
-    /// "<song> couldn't be found" — the same card, in red, with no progress to
-    /// report. Same shape and same corner as the preparing card because it
-    /// answers the same question: what happened to the song I was expecting.
+    /// "<song> couldn't be found": the same card in red, no progress.
     private func unfindableCard(_ dropped: UnavailableTracks.Announcement) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill")
@@ -97,10 +75,8 @@ public struct TrackPreparingBar: View {
     }
 
     private func card(for preparing: OnlinePlaybackCoordinator.PreparingTrack) -> some View {
-        // Not a `Button` any more. The card carries its own Cancel button now,
-        // and a button nested inside a button's label does not reliably receive
-        // taps on iOS — the outer one swallows them. A tap gesture on the
-        // content leaves the inner control as the only real button here.
+        // A tap gesture, not a `Button`: the inner Cancel button doesn't get taps
+        // inside a button's label on iOS.
         VStack(alignment: .leading, spacing: isExpanded ? 9 : 7) {
             titleRow(for: preparing)
 
@@ -129,31 +105,20 @@ public struct TrackPreparingBar: View {
         .help(isExpanded ? "Hide the detail" : "Show what's happening")
     }
 
-    /// Abandons the song being prepared.
-    ///
-    /// A resolve is seconds of waiting that the user cannot otherwise get out
-    /// of: the wrong row was clicked, and the only options were to sit through
-    /// it or to play something else on top of it. The two platforms want
-    /// different things from the control — a pointer can afford a small mark
-    /// that stays out of the way until it is wanted, a thumb cannot — so this
-    /// is one action drawn twice rather than one compromise drawn once.
+    /// Cancel the song being prepared. Small hover mark on macOS, a 44pt target on iOS.
     @ViewBuilder
     private var cancelButton: some View {
         Button {
             coordinator.cancelPreparing()
         } label: {
             #if os(macOS)
-            // Quiet until the pointer is on the card, and never a layout jump:
-            // it fades rather than appears, so the disclosure beside it doesn't
-            // shift as the pointer arrives.
+            // Fades in on hover so nothing shifts.
             Image(systemName: "xmark.circle.fill")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(isHovering ? Color.mixTextSecondary : Color.clear)
                 .contentShape(Rectangle())
             #else
-            // Always visible, and sized for a thumb rather than a pointer. The
-            // glyph stays small — the 44pt square around it is what does the
-            // work, and it is invisible.
+            // Always visible; small glyph, 44pt invisible target.
             Image(systemName: "xmark.circle.fill")
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(Color.mixTextSecondary)
@@ -186,8 +151,7 @@ public struct TrackPreparingBar: View {
                         .foregroundStyle(Color.mixTextTertiary)
                         .lineLimit(1)
                 } else {
-                    // Closed, the step rides on the title's line rather than
-                    // costing the card a second one.
+                    // Collapsed, the step shares the title's line.
                     phaseLine(for: preparing)
                 }
             }
@@ -198,10 +162,7 @@ public struct TrackPreparingBar: View {
             cancelButton
             disclosure
             #else
-            // On iOS the cancel target is 44pt tall, which would push the card
-            // taller than the two lines it holds. Negative padding lets the hit
-            // area overhang the text rows it sits beside without claiming the
-            // height for itself.
+            // Negative padding so the 44pt target doesn't make the card taller.
             disclosure
             cancelButton
                 .padding(.vertical, -12)
@@ -210,8 +171,7 @@ public struct TrackPreparingBar: View {
         }
     }
 
-    /// "downloading 43%" — the verb and the number together, because the number
-    /// on its own at the far edge of the card read as a separate thing.
+    /// "downloading 43%": verb and number together.
     private func phaseLine(for preparing: OnlinePlaybackCoordinator.PreparingTrack) -> some View {
         HStack(spacing: 4) {
             Text(preparing.phaseLabel)
@@ -219,9 +179,7 @@ public struct TrackPreparingBar: View {
                 .foregroundStyle(Color.mixTextTertiary)
                 .lineLimit(1)
 
-            // Only when there is a real number behind it. A percentage the app
-            // made up is worse than no percentage: it sets a clock the work
-            // isn't running against.
+            // Only a real percentage, never an invented one.
             if let percent = percent(preparing) {
                 Text("\(percent)%")
                     .font(.mixCaptionBold)
@@ -241,9 +199,7 @@ public struct TrackPreparingBar: View {
             .mixAnimation(.easeOut(duration: 0.15), value: isHovering)
     }
 
-    /// A pointer can go looking for a control that isn't drawn yet; a finger
-    /// can't, so the phone keeps the chevron visible and the Mac fades it in
-    /// under the cursor.
+    /// Always visible on iOS; fades in on hover on the Mac.
     private var chevronOpacity: Double {
         #if os(macOS)
         return isHovering || isExpanded ? 1 : 0
@@ -254,10 +210,7 @@ public struct TrackPreparingBar: View {
 
     // MARK: Expanded detail
 
-    /// The three pieces of work, in order, with the running one called out.
-    /// Which step it's on is the question the collapsed card answers in one
-    /// word; this is the same answer with the other two steps left in for
-    /// context — how much is done, and how much is still to come.
+    /// The three steps in order, the running one highlighted.
     private func steps(for preparing: OnlinePlaybackCoordinator.PreparingTrack) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             ForEach(ResolveProgress.Phase.ordered, id: \.self) { phase in
@@ -343,11 +296,8 @@ private extension ResolveProgress.Phase {
 
 // MARK: - The bar itself
 
-/// Determinate when a fraction is known, and a travelling sweep when it isn't —
-/// rather than an empty track, which reads as stuck.
-/// The thin capsule under a preparing card: a real fraction when the work can
-/// report one, and a sweep when it can't. Shared with the full player, which
-/// draws the same progress where its seek bar would be.
+/// Thin bar under a preparing card: a real fraction when known, else a sweep.
+/// Also used by the full player in place of its seek bar.
 struct PreparingProgressTrack: View {
 
     let fraction: Double?
@@ -371,8 +321,7 @@ struct PreparingProgressTrack: View {
                         .frame(width: geo.size.width * 0.4)
                         .offset(x: sweep * geo.size.width)
                         .onAppear { startSweep() }
-                        // See `AppVisibility`: a resolve that runs on while
-                        // the app is away must not animate while it does.
+                        // No animating in the background. See `AppVisibility`.
                         .onChange(of: visibility.isForeground) { _, _ in startSweep() }
                 }
             }

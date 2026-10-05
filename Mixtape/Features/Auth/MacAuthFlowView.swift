@@ -1,15 +1,8 @@
-// MacAuthFlowView.swift
-// Mixtape — Features/Auth
-//
-// Four-screen macOS onboarding.
-//
-// Flow:
-//   MacAuthLandingView      — logo + wordmark + "Sign In" / "Create Account"
-//       ↓ Sign In           → MacSignInView   (passkey-first, email fallback)
-//       ↓ Create Account    → MacCreateAccountView → MacCheckEmailView (if confirmation needed)
-//
-// Navigation is a simple enum + spring animation — no NavigationStack needed.
-// The AuthViewModel is unchanged; each screen sets vm.isSignUpMode before submit().
+// macOS onboarding:
+// Landing -> Sign In (passkey first, email fallback)
+// -> Create Account -> Check Email (if confirmation is needed)
+// Navigation is an enum with a spring animation. Each screen sets
+// `vm.isSignUpMode` before submit().
 
 #if os(macOS)
 import SwiftUI
@@ -445,7 +438,7 @@ private struct MacSetNewPasswordView: View {
                 Task { await vm.updatePassword() }
             }
 
-            // Escape hatch — destroys the recovery session so no one is locked on this screen
+            // Drops the recovery session so nobody is stuck on this screen.
             Button {
                 Task { await vm.signOut() }
             } label: {

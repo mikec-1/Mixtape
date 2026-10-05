@@ -1,18 +1,5 @@
-// MemoryPressureMonitor.swift
-// Mixtape — Core/Utilities
-//
-// Gives memory back before the system takes the app away.
-//
-// The app had no memory-warning handling at all. On the Mac that mostly shows
-// up as swap; on iOS it is the difference between a jettison and a survivable
-// hiccup, and Mixtape is a heavy target for one — it holds four image caches
-// with a combined allowance of ~224 MB on top of a library whose artwork lives
-// in SwiftData blobs.
-//
-// A `DispatchSource` memory-pressure source rather than
-// `UIApplicationDidReceiveMemoryWarning`: it works on both platforms from one
-// piece of code, and it distinguishes *warning* from *critical*, which deserve
-// different answers.
+// Frees caches on memory pressure. A DispatchSource works on both platforms
+// and distinguishes warning from critical.
 
 import Foundation
 import Dispatch
@@ -26,8 +13,7 @@ public final class MemoryPressureMonitor: @unchecked Sendable {
 
     private init() {}
 
-    /// Begin listening. Idempotent — a second call is ignored rather than
-    /// stacking a second source that would purge everything twice.
+    /// Idempotent.
     public func start() {
         guard source == nil else { return }
 
@@ -46,19 +32,14 @@ public final class MemoryPressureMonitor: @unchecked Sendable {
     private func handle(_ event: DispatchSource.MemoryPressureEvent) {
         let critical = event.contains(.critical)
 
-        // Downloaded remote covers first: every byte is re-fetchable and the
-        // grid that wanted them is usually not even on screen any more.
+        // Remote covers first; all re-fetchable.
         RemoteImageCache.shared.purge()
 
-        // Then the decoded bitmaps. These are the expensive ones — a decode is
-        // several times the size of the blob it came from — and the blobs are
-        // still in the database, so this only costs a re-decode.
+        // Then decoded bitmaps; the blobs are still in the database.
         ArtworkDecodeCache.shared.purge()
 
-        // Under real pressure, give up the blob caches as well. Not on a plain
-        // warning: those are read straight back out on the next draw, and
-        // dropping them turns a warning into a burst of database reads at
-        // exactly the moment the device is struggling.
+        // Blob caches only when critical; dropping them on a warning just causes a
+        // burst of database reads.
         if critical {
             Task { @MainActor in
                 ArtworkProvider.shared.invalidateAll()

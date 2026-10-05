@@ -1,29 +1,11 @@
-// ArtworkDiskCache.swift
-// Mixtape — Core/Services
-
 import Foundation
 import OSLog
 
-/// Cover bytes, kept beside the store instead of only inside it.
-///
-/// The store is one account's local copy and goes away with it: signing into a
-/// second account on this Mac drops it, and signing back in leaves a library
-/// whose rows arrive long before their covers do — a few thousand objects
-/// fetched 150 per sync run, which is the wait a returning user actually sees.
-/// The bytes never needed re-fetching. This device uploaded most of them.
-///
-/// So they also live here, keyed by the bucket path they came from, in
-/// `Library/Caches` — where a store wipe can't reach them, the OS may purge
-/// them if the disk fills, and backups skip them. Nothing here is
-/// authoritative: a miss is just a download, and that is the whole failure
-/// mode.
-///
-/// Keyed by path alone for tracks, albums and artists, whose object paths are
-/// derived from the row id and so never name different art. A playlist cover
-/// *is* overwritten in place, so its callers pass the bucket's `updatedAt` and
-/// get a different key each time the cover changes; nothing writes a playlist
-/// cover here on upload, since the stamp it would be filed under isn't known
-/// until the bucket reports one.
+/// Cover bytes cached outside the store, keyed by bucket path, in `Library/Caches`.
+/// The store goes away on an account switch; this lets a returning account get its
+/// covers back without re-downloading. Purgeable and never authoritative.
+/// Track/album/artist paths never change art. Playlist covers are overwritten in place,
+/// so callers pass the bucket's `updatedAt` to get a new key.
 nonisolated enum ArtworkDiskCache {
 
     /// Roughly two full libraries of covers. Past this the oldest go.
@@ -40,8 +22,7 @@ nonisolated enum ArtworkDiskCache {
 
     private static func file(_ path: String, _ stamp: Date?) -> URL? {
         guard let directory, !path.isEmpty else { return nil }
-        // The bucket path is already unique and filename-safe apart from its
-        // separators — no hashing needed to tell two covers apart.
+        // Bucket paths are already unique.
         var name = path.replacingOccurrences(of: "/", with: "-")
         if let stamp { name += "@\(Int(stamp.timeIntervalSince1970))" }
         return directory.appendingPathComponent(name)
@@ -57,13 +38,7 @@ nonisolated enum ArtworkDiskCache {
         try? data.write(to: url, options: .atomic)
     }
 
-    /// Drops the oldest files until the folder is back under budget.
-    ///
-    /// Modification date, not access date: a cover that is read but never
-    /// rewritten looks equally old either way, and the only thing being chosen
-    /// between here is which library gets re-downloaded after a device has held
-    /// several. Cheap enough to run at the end of a sync that wrote something,
-    /// which is the only time this can have grown.
+    /// Drops the oldest files (by modification date) until under budget. Run after a sync that wrote something.
     static func trim() {
         guard let directory,
               let files = try? FileManager.default.contentsOfDirectory(
@@ -85,6 +60,6 @@ nonisolated enum ArtworkDiskCache {
             try? FileManager.default.removeItem(at: url)
             total -= size
         }
-        MixLog.library.debug("[ArtworkCache] 🧹 Trimmed to \(total / 1024 / 1024)MB")
+        MixLog.library.debug("[ArtworkCache] Trimmed to \(total / 1024 / 1024)MB")
     }
 }

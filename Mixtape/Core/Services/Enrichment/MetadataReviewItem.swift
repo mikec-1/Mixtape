@@ -1,29 +1,13 @@
-// MetadataReviewItem.swift
-// Mixtape — Core/Services/Enrichment
-//
-// Represents one pending metadata review, held in MacAppState's review queue.
-// When the user imports a track and the enrichment service finds a candidate,
-// a MetadataReviewItem is enqueued and the review sheet is shown.
-//
-// The candidate here is the *starting* one, and for a file import it's the
-// filename reading — cheap, local, immediate. Import used to await the iTunes
-// lookup before it could hand anything back, which meant the sheet appeared
-// around ten seconds after the drop: long enough for the user to move on and
-// be surprised by it. The lookup now runs from the sheet, which is up straight
-// away, and folds its answer in when it lands.
+// One pending metadata review in MacAppState's queue. The candidate starts as
+// the filename reading so the sheet opens straight away; the iTunes lookup runs
+// from the sheet and folds in when it lands.
 
 import Foundation
 
 public struct MetadataReviewItem: Identifiable, Sendable {
 
-    /// The inputs the iTunes lookup needs, when there's still one worth doing.
-    ///
-    /// Nil once the answer can't improve: metadata that's already complete, or
-    /// an online import that arrived with correct tags.
-    ///
-    /// `sourceURL` is only ever read for its *name* — the enrichment service
-    /// parses the filename and never opens the file — so it stays usable after
-    /// the import's security-scoped access has been given back.
+    /// What the iTunes lookup needs, or nil when it can't improve anything.
+    /// Only sourceURL's name is read, so it's fine after security-scoped access ends.
     public struct Lookup: Sendable {
         public let sourceURL: URL
         public let existing:  ParsedMetadata
@@ -38,11 +22,24 @@ public struct MetadataReviewItem: Identifiable, Sendable {
     public let track:     Track
     public let candidate: EnrichmentCandidate
     public let lookup:    Lookup?
+    /// Opened from Edit Metadata, so Skip reads Cancel.
+    public private(set) var isEdit = false
 
     public init(track: Track, candidate: EnrichmentCandidate, lookup: Lookup? = nil) {
         self.id        = UUID()
         self.track     = track
         self.candidate = candidate
         self.lookup    = lookup
+    }
+
+    /// A review on the tags a song arrived with. Link imports.
+    public init(imported track: Track) {
+        self.init(track: track, candidate: EnrichmentCandidate(confidence: 1.0, source: .existingMetadata))
+    }
+
+    /// Edit Metadata on a song already in the library.
+    public init(editing track: Track) {
+        self.init(imported: track)
+        isEdit = true
     }
 }

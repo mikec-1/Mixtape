@@ -1,9 +1,4 @@
-// MacAlbumsView.swift
-// Mixtape — Mac/Content
-//
-// Responsive album grid.
-// Single tap on a card → MacAlbumDetailView (track list, stats, play button).
-// Hover on artwork → instant-play overlay button.
+// Album grid. Tap opens MacAlbumDetailView; hover shows a play button.
 
 #if os(macOS)
 import SwiftUI
@@ -70,7 +65,7 @@ struct MacAlbumsView: View {
             .padding(20)
         }
         .scrollContentBackground(.hidden)
-        .background(Color.mixBackground)
+        .background(MixPageBackground())
     }
 
     private var subtitle: String {
@@ -84,7 +79,7 @@ struct MacAlbumsView: View {
 
 private struct MacAlbumCard: View {
     let album:    Album
-    let onSelect: () -> Void          // single tap → open detail
+    let onSelect: () -> Void          // single tap -> open detail
 
     @EnvironmentObject private var library: LibraryService
     @EnvironmentObject private var engine:  PlaybackEngine
@@ -117,7 +112,7 @@ private struct MacAlbumCard: View {
                 .aspectRatio(1, contentMode: .fit)
                 .mixShadow(color: .black.opacity(0.3), radius: 8, y: 4)
 
-            // Instant-play overlay — fires play, NOT the detail navigation
+            // Plays without navigating.
             if isHovered {
                 Button {
                     guard let first = albumTracks.first else { return }
@@ -181,17 +176,12 @@ struct MacAlbumDetailView: View {
         library.tracks(in: album)
     }
 
-    /// Bumped whenever the download manager publishes.
-    ///
-    /// This view reads download state (`status(for:)` and friends) straight off
-    /// the manager inside `body`, which is not observation — nothing here holds
-    /// the manager, so nothing here hears it change. `AppDependencies` used to
-    /// rebroadcast every service's publishes, which covered this by invalidating
-    /// all 81 views that hold `deps` on every status transition. The views that
-    /// actually draw download state say so themselves now.
+    /// Bumped when the download manager publishes, since `body` reads its state without observing it.
     @State private var downloadTick = 0
 
     var body: some View {
+        // Read so the bump below redraws; an unread @State never does.
+        let _ = downloadTick
         bodyContent
             .onReceive(deps.downloadManager.didChangeThrottled) { _ in
                 downloadTick &+= 1
@@ -203,21 +193,19 @@ struct MacAlbumDetailView: View {
             albumHeader
             trackList
         }
-        .background(Color.mixBackground)
+        .background(MixPageBackground())
         .artworkWash(source: album.artworkData, intensity: 0.72)
-        // Warm the top of the album while the user is still looking at it — an
-        // album is played top-down far more often than not.
+        // Warm the top of the album; albums are usually played top-down.
         .task(id: album.id) {
             deps.onlineCoordinator.prefetchResolvable(tracks)
         }
-        // Album detail is rendered flat (no NavigationStack), so there is no
-        // system back button; the page carries its own.
+        // Flat page with no NavigationStack, so it carries its own back button.
         .pageBack { appState.selectedAlbum = nil }
     }
 
     // MARK: - Header
 
-    /// Same hero as a playlist page — Spotify's album layout.
+    /// Same hero as a playlist page.
     private var albumHeader: some View {
         let playingHere = tracks.contains { $0.id == engine.queue.currentTrack?.id }
         return DetailHero(eyebrow: "Album",
@@ -256,8 +244,7 @@ struct MacAlbumDetailView: View {
         }
         .padding(.horizontal, 24)
         .padding(.bottom, 20)
-        // Clears the floating back control, which sits over this header rather
-        // than in a bar above it.
+        // Clears the floating back button.
         .padding(.top, 52)
     }
 
@@ -273,9 +260,12 @@ struct MacAlbumDetailView: View {
             onPlayNext:         { engine.queue.insertNext($0) },
             onAddToQueue:       { engine.queue.append($0) },
             onGetInfo:          { appState.showInspector(for: $0) },
+            onEditMetadata:     { appState.enqueueReview(MetadataReviewItem(editing: $0)) },
+            onEditSong:         { appState.editTrack = $0 },
+            onPostSong:         { appState.postTrack = $0 },
             onDragTracksChanged: { appState.isDraggingTracks = $0 },
 
-            // No "Go to Album" here — this *is* the album page.
+            // No Go to Album here.
             onGoToArtist:       { appState.openDiscoverArtist(named: $0) },
             onSongRadio:        deps.downloadManager.isConnected
                                 ? { appState.openSongRadio(for: $0) } : nil,
@@ -283,6 +273,7 @@ struct MacAlbumDetailView: View {
             onOpenAlbumLink:    { appState.openDiscoverAlbum(for: $0) },
             onRemove:           { selection in
                 for track in selection { engine.stopIfPlaying(trackID: track.id) }
+                SupabaseSyncService.allowBulk("user-remove")
                 deps.libraryService.deleteTracks(ids: selection.map(\.id))
             },
             onToggleFavourite:  { deps.toggleFavourite(trackID: $0.id) },
@@ -305,7 +296,7 @@ struct MacAlbumDetailView: View {
             showsIndex:         true,
             resolvingIDs:       engine.routingTrackIDs
         )
-        .background(Color.mixBackground)
+        .background(MixPageBackground())
     }
 
     // MARK: - Meta

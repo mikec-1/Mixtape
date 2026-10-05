@@ -1,9 +1,5 @@
-// IOSDiscoverComponents.swift
-// Mixtape — iOS/Online
-//
-// Rows, cards, song hero, and drill-down pages for iOS Discover. Touch versions
-// of the macOS OnlineDiscoverView components — play is a tap, secondary actions
-// live in a long-press menu instead of on hover.
+// iOS Discover rows, cards, song hero and drill-down pages. Touch versions of the macOS
+// OnlineDiscoverView components: tap to play, long-press for the rest.
 
 #if os(iOS)
 import SwiftUI
@@ -15,26 +11,26 @@ enum DiscoverDestination: Hashable {
     case artist(OnlineArtist)
     case album(OnlineAlbum)
     case genre(BrowseGenre)
-    /// Your favourited library tracks by this artist — the only local page in
-    /// the stack. Carries the artist rather than the name so it can wear the
-    /// same photo the page it was opened from does.
+    /// Your favourited library songs by this artist, the only local page in the stack. Carries the artist
+    /// for its photo.
     case likedSongs(OnlineArtist)
-    /// Every library song matching a search — "See all" on the results.
+    /// Every library song matching a search ("See all").
     case librarySongs(String)
-    /// A personalized mix. Carries the whole thing, tracks included, because it
-    /// was already fetched to draw the card — so the page opens instantly
-    /// instead of spinning through a request the app has the answer to.
+    /// A personal mix, tracks included, so the page opens instantly.
     case mix(PersonalMix)
-    /// Mixtape's own profile, reached from the owner name on a mix. Carries
-    /// nothing: the page reads the mixes straight out of the session store, so
-    /// there is no snapshot here that could go stale behind it.
+    /// Mixtape's profile. Carries nothing: the page reads the session store.
     case mixtapeProfile
-    /// Someone's profile — in practice whoever a mix was made for, reached from
-    /// the "Made for" name.
+    /// Someone's profile, usually whoever a mix was made for.
     case profile(UserProfile)
+    /// A community post, by share code.
+    case post(String)
+    /// A smart playlist, e.g. the month's tape from the end of a recap.
+    case smart(SmartPlaylist)
+    /// A mix of downloads from the offline Home. Ids, so the page keeps the order it was opened with.
+    case downloads(title: String, ids: [UUID])
 }
 
-/// The promoted "Top result" — an artist or a song.
+/// The promoted "Top result": an artist or a song.
 enum IOSTopResult {
     case artist(OnlineArtist)
     case song(OnlineTrack)
@@ -87,8 +83,7 @@ struct IOSSongRow: View {
     /// Opens the song's album / artist. Nil hides the menu item.
     var onOpenAlbum: (() -> Void)? = nil
     var onOpenArtist: ((String) -> Void)? = nil
-    /// Forget the cached source and re-resolve (mirrors macOS's
-    /// "Wrong Version?" action). Nil hides the menu item.
+    /// Forget the cached source and re-resolve (macOS "Wrong Version?"). Nil hides the item.
     var onWrongVersion: (() -> Void)? = nil
     /// Leading track number (album page). Nil hides it.
     var index: Int? = nil
@@ -130,12 +125,11 @@ struct IOSSongRow: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
-            // Always visible on iOS — there's no hover to reveal it with.
+            // Always visible: no hover on iOS.
             SaveToLibraryButton(trackID: song.stableTrackID,
                                 identity: (song.title, song.artistName, song.duration),
                                 action: onAdd)
-            // Fixed width so the save button beside it doesn't shift when the
-            // duration gives way to the waveform. See the Mac SongRow.
+            // Fixed width so the save button doesn't shift when the duration becomes the waveform.
             Group {
                 if isCurrent {
                     Image(systemName: "waveform")
@@ -269,19 +263,8 @@ struct IOSTopResultCard: View {
         }
     }
 
-    /// One row, no card.
-    ///
-    /// The filled `mixSurface` rectangle is gone. It boxed the top result off
-    /// from the list of songs directly under it, when the two are the same kind
-    /// of thing — a result you tap — and a tinted panel is not how a first-party
-    /// app distinguishes them; size and spacing are. Losing the fill also loses
-    /// its 16pt inset, so the artwork now lines up with the song rows below.
-    ///
-    /// The whole-row `onTapGesture` becomes a `Button`, which is what gives the
-    /// row its press state, its VoiceOver trait and its Full Keyboard Access
-    /// focus for free. A song gets a second, explicit play button beside it,
-    /// because opening a result and playing it are two intents and the gesture
-    /// could only ever mean one of them.
+    /// One row, no card. A `Button` for press state, VoiceOver and keyboard focus. Songs get a separate play
+    /// button, since opening and playing are different intents.
     private func card(imageURL: URL?, circle: Bool, title: String, subtitle: String,
                       play: (() -> Void)? = nil,
                       action: @escaping () -> Void) -> some View {
@@ -314,8 +297,7 @@ struct IOSTopResultCard: View {
                     Image(systemName: "play.fill")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(Color.mixOnAccent)
-                        // 44pt: the minimum comfortable target, and the size the
-                        // system's own circular glyph buttons use.
+                        // 44pt: minimum comfortable target, same as the system's circular buttons.
                         .frame(width: 44, height: 44)
                         .background(Color.mixAccentFill, in: Circle())
                 }
@@ -342,9 +324,6 @@ struct IOSArtistCircle: View {
                 .font(.mixLabel.weight(.semibold))
                 .foregroundStyle(Color.mixTextPrimary)
                 .lineLimit(1)
-            // The word "Artist" under a circular photo of a person, in a grid
-            // headed "Popular artists". Dropped: it cost a line on every tile to
-            // restate the section it was in.
         }
         .frame(width: 112)
         .contentShape(Rectangle())
@@ -389,25 +368,20 @@ func discoverSectionHeader(_ text: String) -> some View {
 
 // MARK: - Feature card
 
-/// Spotify's big "More like X" card: cover on the left, a bold title beside it,
-/// and the card's own play button — on a dark ground washed with the item's
-/// accent. Kept for the handful of things on Home that deserve a whole card
-/// (mixes, a new release); shelves stay shelves.
-///
-/// The ground is dark in both appearances on purpose: the text is always
-/// white, so the contrast doesn't depend on which accent the item drew.
+/// Spotify-style "More like X" card: cover, bold title and a play button on a dark accent-washed ground.
+/// Dark in both appearances because the text is always white.
 struct IOSFeatureCard<Cover: View, Actions: View>: View {
     let title: String
     let byline: String
     var detail: String? = nil
     let tint: Color
     var isResolving: Bool = false
-    /// The dark capsule bottom-left ("Shuffle", "Preview"…). Nil hides it.
+    /// The dark capsule bottom-left ("Shuffle", "Preview"...). Nil hides it.
     var pill: (title: String, systemImage: String, action: () -> Void)? = nil
     let onOpen: () -> Void
     let onPlay: () -> Void
     @ViewBuilder let cover: () -> Cover
-    /// The ⋯ menu and the long-press menu — same items in both.
+    /// Shared by the ... menu and the long-press menu.
     @ViewBuilder let actions: () -> Actions
 
     private let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -510,9 +484,7 @@ struct IOSFeatureCard<Cover: View, Actions: View>: View {
 
 // MARK: - Filter pills
 
-/// The row of capsules under Spotify's avatar ("All", "Music", "Podcasts") and
-/// above its search results ("Songs", "Artists"). Selection is a tinted fill,
-/// not colour alone — the selected pill also gains the `isSelected` trait.
+/// Spotify-style filter capsules. Selection is a tinted fill plus the `isSelected` trait, not colour alone.
 struct IOSFilterPills<Filter: Hashable & RawRepresentable>: View where Filter.RawValue == String {
     let filters: [Filter]
     @Binding var selection: Filter
@@ -538,6 +510,14 @@ struct IOSFilterPills<Filter: Hashable & RawRepresentable>: View where Filter.Ra
                     .buttonStyle(.plain)
                     .accessibilityAddTraits(isOn ? .isSelected : [])
                 }
+            }
+        }
+        // Fades out where the row runs out of room, instead of a hard cut. The margin lets the last pill scroll clear of it.
+        .contentMargins(.trailing, 14, for: .scrollContent)
+        .mask {
+            HStack(spacing: 0) {
+                Color.black
+                LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing).frame(width: 14)
             }
         }
     }
@@ -575,15 +555,14 @@ struct IOSDiscoverArtistPage: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
                 DiscoverArtistBanner(artist: artist, fanCount: fanCount, height: 220,
-                                     onOpenLiked: onOpenLiked,
-                                     accessory: AnyView(playButton))
+                                     onOpenLiked: onOpenLiked)
                 VStack(alignment: .leading, spacing: 28) {
+                    // Below the banner: beside the portrait a phone has no room for it.
+                    playButton
                     if loading {
                         ProgressView().frame(maxWidth: .infinity).padding(.top, 40)
                     } else {
-                        // Same two halves as the Mac, stacked instead of
-                        // side by side because there is no room to put
-                        // anything beside anything on a phone.
+                        // Same two halves as the Mac, stacked on a phone.
                         if !topTracks.isEmpty { popularSection }
                         if !albums.isEmpty { albumsGrid }
                         if !stations.isEmpty { featuringSection }
@@ -605,7 +584,7 @@ struct IOSDiscoverArtistPage: View {
         .task(id: artist.id) { await load() }
     }
 
-    /// Just the play control — the identity moved into the shared banner.
+    /// Just the play control; the identity is in the shared banner.
     @ViewBuilder
     private var playButton: some View {
         HStack(spacing: 12) {
@@ -633,15 +612,14 @@ struct IOSDiscoverArtistPage: View {
         let shown = Array(topTracks.prefix(expandedTrackCount))
         return VStack(alignment: .leading, spacing: 6) {
             discoverSectionHeader("Popular")
-            // Numbered like Spotify — the ranking is the point of the section.
+            // Numbered: the ranking is the point.
             ForEach(Array(shown.enumerated()), id: \.element.id) { index, song in
                 row(song, context: topTracks, index: index + 1)
             }
         }
     }
 
-    /// `context` is the list the row was drawn from, so playing out of
-    /// "Appears on" doesn't queue up the Popular list behind it.
+    /// `context` is the list the row came from, so playing from "Appears on" doesn't queue Popular.
     private func row(_ song: OnlineTrack, context: [OnlineTrack], index: Int? = nil) -> some View {
         IOSSongRow(
             song: song,
@@ -689,8 +667,7 @@ struct IOSDiscoverArtistPage: View {
         }
     }
 
-    /// Our stand-in for Spotify's "Featuring <name>" — two stations built from
-    /// the catalogue this page already loaded. See `StationBuilder`.
+    /// Stand-in for Spotify's "Featuring <name>": two stations from the loaded catalogue. See `StationBuilder`.
     private var featuringSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             discoverSectionHeader("Playlists with \(artist.name)")
@@ -837,7 +814,7 @@ struct IOSDiscoverAlbumPage: View {
             }
             .padding(20)
         }
-        .background(Color.mixBackground.ignoresSafeArea())
+        .background(MixPageBackground())
         .navigationTitle(album.title)
         .navigationBarTitleDisplayMode(.inline)
         .task(id: album.id) {
@@ -894,8 +871,7 @@ struct IOSBrowseSongCard: View {
 
 // MARK: - Browse landing: genre tile
 
-/// Colourful "Browse all" tile — hue picked by position, artwork tucked into the
-/// corner at an angle. Touch version of the macOS `GenreTile`.
+/// "Browse all" tile: hue by position, artwork tilted in the corner. Touch version of macOS `GenreTile`.
 struct IOSGenreTile: View {
     let genre: BrowseGenre
     let index: Int
@@ -973,7 +949,7 @@ struct IOSDiscoverGenrePage: View {
             }
             .padding(20)
         }
-        .background(Color.mixBackground.ignoresSafeArea())
+        .background(MixPageBackground())
         .navigationTitle(genre.name)
         .navigationBarTitleDisplayMode(.inline)
         .task(id: genre.id) {

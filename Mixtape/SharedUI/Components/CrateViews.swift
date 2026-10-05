@@ -78,7 +78,6 @@ struct CrateDetailView: View {
 
     @State private var isRenaming = false
     @State private var confirmDelete = false
-    @State private var draft = ""
 
     var body: some View {
         if let crate = service.crate(id: crateID) {
@@ -113,12 +112,8 @@ struct CrateDetailView: View {
             .navigationTitle(crate.name)
             .navigationBarTitleDisplayMode(.inline)
             #endif
-            .alert("Rename Crate", isPresented: $isRenaming) {
-                TextField("Name", text: $draft)
-                Button("Rename") { service.rename(crateID, to: draft) }
-                Button("Cancel", role: .cancel) {}
-            }
-            .confirmationDialog("Delete \u{201C}\(crate.name)\u{201D}?", isPresented: $confirmDelete) {
+            .sheet(isPresented: $isRenaming) { CrateEditorSheet(library: library, crate: crate) }
+            .mixConfirmationDialog("Delete \u{201C}\(crate.name)\u{201D}?", isPresented: $confirmDelete) {
                 Button("Delete Crate", role: .destructive) {
                     #if os(macOS)
                     appState.selectedCrateID = nil
@@ -127,6 +122,7 @@ struct CrateDetailView: View {
                     #endif
                     service.delete(crateID)
                 }
+                Button("Cancel", role: .cancel) {}
             } message: {
                 Text("Its playlists, albums and artists stay in your library.")
             }
@@ -154,7 +150,6 @@ struct CrateDetailView: View {
 
                 Menu {
                     Button {
-                        draft = crate.name
                         isRenaming = true
                     } label: {
                         Label("Rename\u{2026}", systemImage: "pencil")
@@ -197,12 +192,12 @@ struct CrateDetailView: View {
     }
 
     private func tileLabel(_ entry: CrateEntry) -> some View {
-        let (title, subtitle): (String, String) = {
+        let subtitle: String = {
             switch entry {
-            case .playlist(let p): return (p.name, "Playlist")
-            case .album(let a):    return (a.title, a.artistName)
-            case .artist(let a):   return (a.name, "Artist")
-            case .online(let i):   return (i.key, i.kind == .album ? (i.artist ?? "Album") : "Artist")
+            case .playlist:        return "Playlist"
+            case .album(let a):    return a.artistName
+            case .artist:          return "Artist"
+            case .online(let i):   return i.kind == .album ? (i.artist ?? "Album") : "Artist"
             }
         }()
         let isArtist: Bool = {
@@ -214,7 +209,7 @@ struct CrateDetailView: View {
             CrateEntryArtwork(entry: entry, size: nil)
                 .aspectRatio(1, contentMode: .fit)
                 .clipShape(isArtist ? AnyShape(Circle()) : AnyShape(RoundedRectangle(cornerRadius: 8, style: .continuous)))
-            Text(title)
+            Text(entry.title)
                 .font(.mixBodyBold)
                 .foregroundStyle(Color.mixTextPrimary)
                 .lineLimit(1)
@@ -313,30 +308,72 @@ struct AddToCrateMenu: View {
     }
 }
 
-/// The name alert for `CrateService.requestNewCrate`, hosted once at the root.
+/// The sheet for `CrateService.requestNewCrate`, hosted once at the root.
 struct NewCratePrompt: ViewModifier {
+    let library: LibraryService
     @ObservedObject private var service = CrateService.shared
-    @State private var draft = ""
 
     func body(content: Content) -> some View {
-        // The buttons clear the request: the alert can report dismissal before Create reads the item.
-        content.alert("New Crate", isPresented: Binding(
+        content.sheet(isPresented: Binding(
             get: { service.newCrateRequest != nil },
-            set: { _ in }
+            set: { if !$0 { service.newCrateRequest = nil } }
         )) {
-            TextField("Name", text: $draft)
-            Button("Create") {
-                service.create(named: draft, with: service.newCrateRequest?.item)
-                service.newCrateRequest = nil
-                draft = ""
-            }
-            Button("Cancel", role: .cancel) {
-                service.newCrateRequest = nil
-                draft = ""
-            }
-        } message: {
-            Text("Keep playlists, albums and artists together, and share them as one link.")
+            CrateEditorSheet(library: library, item: service.newCrateRequest?.item)
         }
+    }
+}
+
+/// New crate or rename, laid out like the playlist editor. The cover is derived, so it only previews.
+struct CrateEditorSheet: View {
+    @ObservedObject var library: LibraryService
+    var crate: Crate? = nil
+    /// The first item of a new crate.
+    var item: CrateItem? = nil
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var name = ""
+
+    var body: some View {
+        let entries = CrateService.shared.entries(
+            of: crate ?? Crate(id: UUID(), name: name, items: item.map { [$0] } ?? [], dateCreated: .now),
+            in: library)
+        MixSheet(title: crate == nil ? "New Crate" : "Rename Crate",
+                 subtitle: "Keep playlists, albums and artists together, and share them as one link.",
+                 size: .medium,
+                 primary: MixSheetAction(crate == nil ? "Create" : "Save",
+                                         isEnabled: !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                                         action: save)) {
+            HStack(alignment: .top, spacing: 16) {
+                CrateCover(entries: entries, size: 120)
+                VStack(alignment: .leading, spacing: 10) {
+                    TextField("Crate name", text: $name)
+                        .mixSheetField()
+                        .onSubmit(save)
+                    Text(summary(entries))
+                        .font(.system(size: MixFontScale.size(12)))
+                        .foregroundStyle(Color.mixTextSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .task { name = crate?.name ?? "My Crate #\(CrateService.shared.crates.count + 1)" }
+    }
+
+    private func summary(_ entries: [CrateEntry]) -> String {
+        if crate == nil, let first = entries.first { return "Starts with \(first.title)." }
+        switch entries.count {
+        case 0:  return "Empty for now. Add playlists, albums and artists from their menus."
+        case 1:  return "1 item"
+        default: return "\(entries.count) items"
+        }
+    }
+
+    private func save() {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if let crate { CrateService.shared.rename(crate.id, to: trimmed) }
+        else { CrateService.shared.create(named: trimmed, with: item) }
+        dismiss()
     }
 }
 

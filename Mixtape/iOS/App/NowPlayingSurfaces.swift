@@ -1,6 +1,5 @@
-// NowPlayingSurfaces.swift
-// Keeps the Home/Lock Screen widget and the (opt-in) Live Activity in step with
-// the engine. The widget reads a keychain snapshot — see NowPlayingShared.swift.
+// Keeps the Home/Lock Screen widget and the opt-in Live Activity in step with the engine.
+// The widget reads a keychain snapshot, see NowPlayingShared.swift.
 
 #if os(iOS)
 import Foundation
@@ -11,8 +10,7 @@ import WidgetKit
 
 @MainActor
 final class NowPlayingSurfaces {
-    /// Off by default: iOS already puts a Now Playing player on the Lock Screen
-    /// and in the Dynamic Island, and this would sit beside it.
+    /// Off by default: iOS already shows a Now Playing player on the Lock Screen and Dynamic Island.
     static let liveActivityKey = "ios.liveActivity"
 
     private let engine: PlaybackEngine
@@ -31,7 +29,7 @@ final class NowPlayingSurfaces {
         for stale in Activity<NowPlayingAttributes>.activities {
             Task { await stale.end(nil, dismissalPolicy: .immediate) }
         }
-        // `playlists` moves when a song is liked — Liked Songs is a playlist.
+        // `playlists` changes when a song is liked (Liked Songs is a playlist).
         engine.$state.combineLatest(engine.queue.$currentIndex, engine.queue.$queue, engine.$duration)
             .combineLatest(library.$playlists, engine.queue.$shuffleEnabled)
             .debounce(for: .milliseconds(300), scheduler: DispatchQueue.main)
@@ -48,8 +46,7 @@ final class NowPlayingSurfaces {
                 }
             }
             .store(in: &cancellables)
-        // Swiped away: an activity outlives its app and would keep counting a
-        // song that has stopped. A background-audio app gets a moment here.
+        // Swiped away: end the activity so it doesn't keep counting a stopped song.
         NotificationCenter.default.publisher(for: UIApplication.willTerminateNotification)
             .sink { _ in
                 let done = DispatchSemaphore(value: 0)
@@ -74,17 +71,15 @@ final class NowPlayingSurfaces {
             .store(in: &cancellables)
     }
 
-    /// Publishes now, skipping the debounce, and waits for the write. For the
-    /// widget buttons: the system reloads the widget the moment the intent
-    /// returns, and one that reads the old snapshot keeps the old button —
-    /// a pause that looked like it hadn't happened.
+    /// Publishes now, skipping the debounce. For widget buttons: the widget reloads as soon as the intent
+    /// returns, so the snapshot must already be written.
     func flush() async {
         publish()
         await writing?.value
     }
 
     private func publish() {
-        // Stopped keeps the last song on the widget, paused — a "last played" tile.
+        // Stopped keeps the last song on the widget, paused.
         guard let track = engine.queue.currentTrack else { return }
         let art = track.displayArtwork
         let key = "\(track.id)|\(art?.count ?? 0)"
@@ -100,8 +95,7 @@ final class NowPlayingSurfaces {
             },
             elapsed: engine.currentTime, duration: engine.duration > 0 ? engine.duration : track.duration, at: Date())
         shown = (snapshot.startedAt, playing, art != nil)
-        // Saved before the activity moves: the activity reads its cover from
-        // the saved snapshot, and one drawn first shows the placeholder.
+        // Saved before the activity updates, since it reads its cover from the snapshot.
         let previous = writing
         writing = Task { [weak self] in
             await previous?.value
@@ -110,8 +104,7 @@ final class NowPlayingSurfaces {
         }
     }
 
-    /// Covers shrunk here, off the main thread: the whole snapshot has to stay
-    /// small enough for the extension to decode on every redraw.
+    /// Covers shrunk off the main thread: the snapshot must stay small for the extension to decode on every redraw.
     @concurrent private static func write(_ raw: NowPlayingSnapshot) async -> NowPlayingSnapshot {
         var s = raw
         s.artwork = raw.artwork.flatMap { ImageDownsampler.downsampledJPEG(from: $0, maxDimension: 360, compressionQuality: 0.75) }
@@ -129,8 +122,7 @@ final class NowPlayingSurfaces {
         let state = NowPlayingAttributes.ContentState(
             title: s.title, artist: s.artist, isPlaying: s.isPlaying, elapsed: s.elapsed,
             duration: s.duration, startedAt: s.startedAt, tint: s.tint, hasArtwork: s.artwork != nil)
-        // Every song change and seek moves this, so passing it means the app
-        // died mid-song (a crash, jetsam): the activity then draws as stopped.
+        // Every song change and seek moves this, so passing it means the app died mid-song: draw as stopped.
         let staleDate = s.isPlaying && s.duration > 0 ? s.startedAt.addingTimeInterval(s.duration + 5) : nil
         let wanted = liveActivityOn && engine.state.isActive && ActivityAuthorizationInfo().areActivitiesEnabled
         if !wanted {

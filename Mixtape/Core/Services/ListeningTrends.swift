@@ -1,9 +1,5 @@
-// ListeningTrends.swift
-// Mixtape — Core/Services
-//
-// The date and ranking maths behind the stats page's charts: streaks, the
-// listening-over-time series and rank movement. Foundation only, so
-// `scripts/listening-trends-check.swift` can compile against the real file:
+// Date and ranking maths for the stats charts: streaks, listening over time,
+// rank movement. Foundation only so the check script compiles against it:
 //
 //   xcrun swiftc Mixtape/Core/Services/ListeningTrends.swift \
 //       scripts/listening-trends-check.swift -o /tmp/trendcheck && /tmp/trendcheck
@@ -26,9 +22,8 @@ public struct PlayPoint: Identifiable, Sendable {
 
 public enum ListeningTrends {
 
-    /// Runs of consecutive days with a play. `current` counts back from today, or from
-    /// yesterday when nothing has played yet today, so a streak doesn't read 0 over
-    /// breakfast.
+    /// Runs of consecutive days with a play. `current` counts from yesterday if
+    /// nothing has played yet today.
     public static func streaks(days: Set<Date>, today: Date,
                                calendar: Calendar) -> (current: Int, best: Int) {
         let days = Set(days.map { calendar.startOfDay(for: $0) })

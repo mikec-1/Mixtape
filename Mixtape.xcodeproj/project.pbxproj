@@ -8,8 +8,10 @@
 
 /* Begin PBXBuildFile section */
 		277381152FDF935F005192E6 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; platformFilters = (macos, ); productRef = 277381142FDF935F005192E6 /* Sparkle */; };
+		27B6E79B307038890066B221 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = 27B6E79A307038890066B221 /* Sentry */; };
 		27BE1FAD2FD8D3A50008511A /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = 27BE1FAC2FD8D3A50008511A /* Supabase */; };
 		55C1A990B05C4D3DAC81C097 /* MixtapeWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = D1E8B13A02A4478DBAEFD6D7 /* MixtapeWidgets.appex */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		5DE7C0A1B2C3D4E5F6A70003 /* DemucsMLX in Frameworks */ = {isa = PBXBuildFile; platformFilters = (macos, ); productRef = 5DE7C0A1B2C3D4E5F6A70002 /* DemucsMLX */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -89,6 +91,8 @@
 			files = (
 				277381152FDF935F005192E6 /* Sparkle in Frameworks */,
 				27BE1FAD2FD8D3A50008511A /* Supabase in Frameworks */,
+				27B6E79B307038890066B221 /* Sentry in Frameworks */,
+				5DE7C0A1B2C3D4E5F6A70003 /* DemucsMLX in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -154,6 +158,8 @@
 			packageProductDependencies = (
 				277381142FDF935F005192E6 /* Sparkle */,
 				27BE1FAC2FD8D3A50008511A /* Supabase */,
+				27B6E79A307038890066B221 /* Sentry */,
+				5DE7C0A1B2C3D4E5F6A70002 /* DemucsMLX */,
 			);
 			productName = Mixtape;
 			productReference = 27BE1F312FD8C92A0008511A /* Mixtape.app */;
@@ -210,6 +216,8 @@
 			packageReferences = (
 				277381132FDF935F005192E6 /* XCRemoteSwiftPackageReference "Sparkle" */,
 				27BE1FAA2FD8D2E60008511A /* XCRemoteSwiftPackageReference "supabase-swift" */,
+				27B6E799307038890066B221 /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
+				5DE7C0A1B2C3D4E5F6A70001 /* XCRemoteSwiftPackageReference "demucs-mlx-swift" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 27BE1F322FD8C92A0008511A /* Products */;
@@ -599,12 +607,28 @@
 				minimumVersion = 2.9.3;
 			};
 		};
+		27B6E799307038890066B221 /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/getsentry/sentry-cocoa";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 9.30.0;
+			};
+		};
 		27BE1FAA2FD8D2E60008511A /* XCRemoteSwiftPackageReference "supabase-swift" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/supabase/supabase-swift";
 			requirement = {
 				kind = upToNextMajorVersion;
 				minimumVersion = 2.5.1;
+			};
+		};
+		5DE7C0A1B2C3D4E5F6A70001 /* XCRemoteSwiftPackageReference "demucs-mlx-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/kylehowells/demucs-mlx-swift";
+			requirement = {
+				kind = revision;
+				revision = c8482739c621b90a64bf1a9f013712f6fea44eda;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
@@ -615,10 +639,20 @@
 			package = 277381132FDF935F005192E6 /* XCRemoteSwiftPackageReference "Sparkle" */;
 			productName = Sparkle;
 		};
+		27B6E79A307038890066B221 /* Sentry */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 27B6E799307038890066B221 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
+			productName = Sentry;
+		};
 		27BE1FAC2FD8D3A50008511A /* Supabase */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 27BE1FAA2FD8D2E60008511A /* XCRemoteSwiftPackageReference "supabase-swift" */;
 			productName = Supabase;
+		};
+		5DE7C0A1B2C3D4E5F6A70002 /* DemucsMLX */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5DE7C0A1B2C3D4E5F6A70001 /* XCRemoteSwiftPackageReference "demucs-mlx-swift" */;
+			productName = DemucsMLX;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

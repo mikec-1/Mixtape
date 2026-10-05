@@ -1,5 +1,5 @@
 // ModelContainerSetup.swift
-// Mixtape — Data Layer
+// Mixtape - Data Layer
 //
 // Single place to configure and vend the SwiftData ModelContainer.
 // One store per account; `ModelStore` owns which one is open.
@@ -36,17 +36,16 @@ public enum ModelContainerSetup {
         return StoreFileLayout.storeURL(for: owner, in: dir)
     }
 
-    /// Call this once per account, through `ModelStore`. Crashes only if a
-    /// freshly-wiped store also fails to open (unrecoverable — bad schema).
+    /// Call once per account, through `ModelStore`. Crashes only if a wiped store also
+    /// fails to open (bad schema).
     public static func makeContainer(for owner: UUID? = nil) -> ModelContainer {
         guard let url = storeURL(for: owner) else {
-            // No Application Support directory at all. Nothing sensible is left
-            // to do but let SwiftData pick, which is the pre-Phase-4 behaviour.
+            // No Application Support directory; let SwiftData pick.
             return open(ModelConfiguration(schema: schema, isStoredInMemoryOnly: false, allowsSave: true),
                         wiping: nil, owner: owner)
         }
         if StoreFileLayout.adoptSharedStore(at: url, owner: owner) {
-            MixLog.database.debug("[ModelContainerSetup] 📦 Adopted the shared store as \(url.lastPathComponent)")
+            MixLog.database.debug("[ModelContainerSetup] Adopted the shared store as \(url.lastPathComponent)")
         }
         return open(ModelConfiguration(schema: schema, url: url, allowsSave: true),
                     wiping: url, owner: owner)
@@ -60,14 +59,12 @@ public enum ModelContainerSetup {
                 return container
             }
         } catch {
-            MixLog.database.error("[ModelContainerSetup] ⚠️ Failed to load ModelContainer (probably schema migration issue): \(error)")
-            MixLog.database.debug("[ModelContainerSetup] 🗑️ Wiping local SQLite store to recover...")
+            MixLog.database.error("[ModelContainerSetup] Failed to load ModelContainer (probably schema migration issue): \(error)")
+            MixLog.database.debug("[ModelContainerSetup] Wiping local SQLite store to recover...")
 
             if let url { StoreFileLayout.remove(storeAt: url) }
 
-            // Reset this account's sync timestamps so the empty store is rebuilt
-            // from Supabase. Only this one: the other accounts' files on this
-            // device were never opened, so their watermarks are still honest.
+            // Reset only this account's sync timestamps so the empty store is rebuilt from Supabase.
             let defaults = UserDefaults.standard
             let keys = defaults.dictionaryRepresentation().keys.filter { key in
                 guard key.hasPrefix("mix.sync.") else { return false }
@@ -88,7 +85,7 @@ public enum ModelContainerSetup {
 
     // MARK: - In-Memory Container (Previews + Tests)
 
-    /// Ephemeral container — data is discarded when the process exits.
+    /// In-memory container for previews.
     public static func makePreviewContainer() -> ModelContainer {
         let config = ModelConfiguration(
             schema: schema,

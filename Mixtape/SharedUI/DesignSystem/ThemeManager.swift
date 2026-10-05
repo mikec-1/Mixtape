@@ -1,11 +1,6 @@
-// ThemeManager.swift
-// Mixtape — Design System
-//
-// Single source of truth for user-selectable appearance (system/light/dark)
-// and accent colour. Persists choices in UserDefaults and republishes so the
-// UI re-renders. The neutral colour tokens in MixtapeColors resolve light/dark
-// automatically via trait-aware dynamic colours; only the *accent* is a user
-// choice and therefore read back from `ThemeManager.shared`.
+// Appearance (system/light/dark) and accent colour, persisted in
+// UserDefaults. Neutral tokens resolve light/dark themselves; only the accent is
+// read from `ThemeManager.shared`.
 
 import SwiftUI
 
@@ -44,10 +39,8 @@ public enum AppAppearance: String, CaseIterable, Identifiable, Sendable {
     }
 
     #if os(macOS)
-    /// AppKit equivalent. nil = follow the system setting. Applied to
-    /// `NSApp.appearance` so AppKit-backed controls (pop-up buttons, the
-    /// NSTableView song list) flip immediately instead of lagging behind
-    /// SwiftUI's `.preferredColorScheme`.
+    /// AppKit appearance; nil follows the system. Set on `NSApp.appearance` so
+    /// AppKit controls flip immediately.
     public var nsAppearance: NSAppearance? {
         switch self {
         case .system: return nil
@@ -79,6 +72,7 @@ public final class ThemeManager: ObservableObject {
         static let density    = "theme.density"
         static let motion     = "theme.motion"
         static let chrome     = "theme.chrome"
+        static let backdrop   = "theme.backdrop"
     }
 
     @Published public var appearance: AppAppearance {
@@ -93,10 +87,7 @@ public final class ThemeManager: ObservableObject {
         didSet { UserDefaults.standard.set(density.rawValue, forKey: Keys.density) }
     }
 
-    /// How much the app animates. See `MixMotion`.
-    ///
-    /// Mirrored into `MixMotion.current` on every write, because the imperative
-    /// half of the app (`withMixAnimation`) has no environment to read from.
+    /// See `MixMotion`. Mirrored into `MixMotion.current` for `withMixAnimation`.
     @Published public var motion: MixMotion {
         didSet {
             UserDefaults.standard.set(motion.rawValue, forKey: Keys.motion)
@@ -112,11 +103,42 @@ public final class ThemeManager: ObservableObject {
         didSet { UserDefaults.standard.set(chrome.rawValue, forKey: Keys.chrome) }
     }
 
-    /// The named look the three axes currently amount to.
-    ///
-    /// Reading it is a lookup, not stored state — so tinkering with one axis
-    /// moves the picker to Custom by itself, and there is no fourth value that
-    /// can disagree with the three real ones.
+    /// A colour mixed into the app's background, nil for plain. Follows the account.
+    @Published public var backdrop: MixBackdrop? {
+        didSet {
+            guard backdrop != oldValue else { return }
+            UserDefaults.standard.set(backdrop?.raw, forKey: Keys.backdrop)
+            guard !isApplyingRemote else { return }
+            lastLocalBackdropChange = .now
+            // Debounced: the colour picker reports every step of a drag.
+            let raw = backdrop?.raw ?? MixBackdrop.offRaw
+            backdropPush?.cancel()
+            backdropPush = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled else { return }
+                self?.backdropWriter?(raw)
+            }
+        }
+    }
+
+    /// Writes the raw value to `user_metadata`. Nil in previews.
+    public var backdropWriter: ((String) -> Void)?
+    private var backdropPush: Task<Void, Never>?
+    private var isApplyingRemote = false
+    private var lastLocalBackdropChange = Date.distantPast
+
+    /// The account's colour wins. Nil (never set) leaves the local one alone.
+    public func adoptRemoteBackdrop(_ raw: String?) {
+        // An echo of an older write mid-drag would snap the picker back.
+        guard let raw, Date.now.timeIntervalSince(lastLocalBackdropChange) > 5 else { return }
+        let remote = MixBackdrop(raw: raw)
+        guard remote != backdrop else { return }
+        isApplyingRemote = true
+        backdrop = remote
+        isApplyingRemote = false
+    }
+
+    /// The preset matching the three axes. Computed, so changing an axis shows Custom.
     public var preset: MixAppearancePreset {
         get { MixAppearancePreset.matching(density: density, motion: motion, chrome: chrome) }
         set {
@@ -130,16 +152,13 @@ public final class ThemeManager: ObservableObject {
     public init() {
         let defaults = UserDefaults.standard
         self.appearance = AppAppearance(rawValue: defaults.string(forKey: Keys.appearance) ?? "") ?? .dark
-        // Defaults are the Normal preset: this is how the app has always looked,
-        // and an update must not quietly redesign anyone's library.
+        // Defaults match the Normal preset.
         self.density = MixDensity(rawValue: defaults.string(forKey: Keys.density) ?? "") ?? .comfortable
-        // No stored choice means the system gets to answer. Someone with Reduce
-        // Motion on has already said what they want and should not have to find
-        // this app's own switch; someone who has picked an axis value keeps it,
-        // in either direction.
+        // No stored choice: follow the system's Reduce Motion. A stored choice wins.
         self.motion  = MixMotion(rawValue: defaults.string(forKey: Keys.motion) ?? "")
                     ?? (Self.systemWantsReducedMotion ? .reduced : .full)
         self.chrome  = MixChrome(rawValue:  defaults.string(forKey: Keys.chrome)  ?? "") ?? .rich
+        self.backdrop = defaults.string(forKey: Keys.backdrop).flatMap(MixBackdrop.init(raw:))
         MixMotion.current = self.motion
         applyAppKitAppearance()
         observeSystemMotionSetting()
@@ -156,11 +175,7 @@ public final class ThemeManager: ObservableObject {
         #endif
     }
 
-    /// Follow the system setting while the user has never overridden it.
-    ///
-    /// Once they touch the axis in Settings the stored value wins and this stops
-    /// having an opinion — otherwise toggling the OS switch would silently undo
-    /// a deliberate choice.
+    /// Follows the system setting until the user picks an axis value in Settings.
     private func observeSystemMotionSetting() {
         #if canImport(UIKit)
         let name = UIAccessibility.reduceMotionStatusDidChangeNotification
@@ -177,9 +192,7 @@ public final class ThemeManager: ObservableObject {
             let wanted: MixMotion = Self.systemWantsReducedMotion ? .reduced : .full
             guard wanted != self.motion else { return }
             self.motion = wanted
-            // `motion`'s didSet persists the value, which would freeze the
-            // follow-the-system behaviour. Clear it again so the app keeps
-            // tracking until the user makes an actual choice.
+            // `motion`'s didSet persisted it; clear so the app keeps following the system.
             UserDefaults.standard.removeObject(forKey: Keys.motion)
         }
     }
@@ -187,8 +200,7 @@ public final class ThemeManager: ObservableObject {
     public var preferredColorScheme: ColorScheme? { appearance.colorScheme }
     public var accentColor: Color { BrandAccent.color }
 
-    /// Drive the global AppKit appearance so AppKit-backed controls update
-    /// instantly when the user changes the Light/Dark/System setting.
+    /// Sets the AppKit appearance so AppKit controls update immediately.
     private func applyAppKitAppearance() {
         #if os(macOS)
         NSApplication.shared.appearance = appearance.nsAppearance

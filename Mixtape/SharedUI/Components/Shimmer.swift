@@ -1,9 +1,5 @@
-// Shimmer.swift
-// Mixtape — SharedUI/Components
-//
-// Loading-skeleton primitives: an animated shimmer modifier plus ready-made
-// placeholder shapes and row/carousel skeletons that mirror the real content
-// layout so the transition into loaded data is calm, not jumpy.
+// Loading skeletons: a shimmer modifier plus placeholder shapes and rows
+// that mirror the real layout.
 
 import SwiftUI
 
@@ -14,13 +10,7 @@ private struct Shimmer: ViewModifier {
     @Environment(\.mixMotion) private var motion
     @ObservedObject private var visibility = AppVisibility.shared
 
-    /// The app's other forever-looping animation, and the more expensive one:
-    /// a skeleton screen wears it on every placeholder at once, each redrawing
-    /// a gradient every frame for as long as the load takes.
-    ///
-    /// Reduced motion drops the whole overlay rather than freezing it — a
-    /// stationary bright band across a grey box isn't a still shimmer, it's a
-    /// smear. The skeleton on its own already reads as "not here yet".
+    /// Reduce motion drops the overlay; a frozen band looks like a smear.
     @ViewBuilder
     func body(content: Content) -> some View {
         if motion.isReduced {
@@ -41,8 +31,7 @@ private struct Shimmer: ViewModifier {
                 )
                 .clipped()
                 .onAppear { sweep() }
-                // A skeleton left behind when the app is backgrounded kept
-                // redrawing its gradient every frame — see `AppVisibility`.
+                // Stop redrawing in the background. See `AppVisibility`.
                 .onChange(of: visibility.isForeground) { _, _ in sweep() }
         }
     }

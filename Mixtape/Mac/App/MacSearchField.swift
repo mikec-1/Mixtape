@@ -1,15 +1,5 @@
-// MacSearchField.swift
-// Mixtape — Mac/App
-//
-// The window's single search field, styled as a Spotify-style pill rather than
-// the system `.searchable` chrome. `.searchable` renders as a wide, tall bar in
-// the toolbar that dominates the Discover header; this is a capsule that reads
-// as one control among the top bar's others. Hosted by MacTopBar, which centres
-// it on the window.
-//
-// Focus: `.searchable` gave us ⌘F for free. Since the field is ours now,
-// MacRootView hosts an invisible ⌘F button that calls `appState.focusSearch()`,
-// and we pick that up through `searchFocusToken`.
+// The window's search field: a Spotify-style pill instead of `.searchable`, centred by MacTopBar.
+// ⌘F comes from an invisible button in MacRootView via `searchFocusToken`.
 
 #if os(macOS)
 import SwiftUI
@@ -22,35 +12,32 @@ struct MacSearchField: View {
     /// Incremented externally (⌘F) to request focus.
     var focusToken: Int = 0
 
-    /// ↓ pressed while typing — the host hands keyboard control to the results
-    /// list. Nil leaves the arrow key to the text field.
+    /// ↓ while typing hands keyboard control to the results list.
     var onMoveDown: (() -> Void)? = nil
 
-    /// ↑/↓ offered to the suggestions panel first. Returning true means the panel
-    /// moved its highlight and the key is spent; false falls through — ↓ to
-    /// `onMoveDown`, ↑ to the text field's own caret movement.
+    /// ↑/↓ offered to the suggestions panel first. True means it moved; false falls through.
     var onArrowDown: (() -> Bool)? = nil
     var onArrowUp:   (() -> Bool)? = nil
 
     /// Return. Activates the highlighted suggestion, or commits the query.
     var onSubmit: (() -> Void)? = nil
 
-    /// Escape. Closes the suggestions panel; MacRootView's own `.onExitCommand`
-    /// still handles Escape for panels when this returns `.ignored`.
+    /// Escape closes the suggestions panel; `.ignored` lets MacRootView handle it.
     var onCancel: (() -> Bool)? = nil
 
     /// Focus gained/lost, so the host can hide a panel anchored to this field.
     var onFocusChange: ((Bool) -> Void)? = nil
 
-    /// Pill height. The host sets it from the bar it centres this in, so the
-    /// field fills the bar the way Spotify's does instead of floating as a thin
-    /// capsule in the middle of it. Default is the old fixed value.
+    /// False refuses focus, for moments when AppKit hands the field focus on its own.
+    var acceptsFocus: (() -> Bool)? = nil
+
+    /// Set by the host so the pill fills the bar.
     var height: CGFloat = 34
 
     @FocusState private var isFocused: Bool
     @State private var isHovered = false
 
-    /// Live only while the field is focused — see `SearchBlurWatcher`.
+    /// Live only while focused; see `SearchBlurWatcher`.
     @StateObject private var blurWatcher = SearchBlurWatcher()
 
     private var isActive: Bool { isFocused || !text.isEmpty }
@@ -66,9 +53,7 @@ struct MacSearchField: View {
                 .font(.system(size: 13))
                 .foregroundStyle(Color.mixTextPrimary)
                 .focused($isFocused)
-                // The suggestions panel gets first refusal on ↓ so the arrow
-                // walks the dropdown while it's open, and only jumps focus into
-                // the results list once it isn't.
+                // ↓ walks the suggestions while open, then moves focus to the results.
                 .onKeyPress(.downArrow) {
                     if onArrowDown?() == true { return .handled }
                     guard let onMoveDown else { return .ignored }
@@ -82,13 +67,10 @@ struct MacSearchField: View {
                     onCancel?() == true ? .handled : .ignored
                 }
                 .onSubmit { onSubmit?() }
-                // ⌘⌫ clears the line here, rather than offering to delete
-                // whatever is selected in the list behind the search.
+                // ⌘⌫ clears the line instead of deleting the list selection.
                 .mixEditingFocus(isFocused)
 
-            // One trailing slot, two states: a ⌘F hint while the field is idle
-            // (the shortcut is otherwise invisible now that `.searchable` is
-            // gone), swapping to the clear button as soon as there's a query.
+            // ⌘F hint while idle, clear button once there's a query.
             ZStack(alignment: .trailing) {
                 Text("⌘F")
                     .font(.system(size: 11, weight: .medium))
@@ -114,14 +96,11 @@ struct MacSearchField: View {
                 .allowsHitTesting(!text.isEmpty)
                 .help("Clear search")
             }
-            // Fixed slot so the text field never reflows as the trailing
-            // accessory swaps between the hint and the clear button.
+            // Fixed slot so the field doesn't reflow when the accessory swaps.
             .frame(width: 24, alignment: .trailing)
         }
         .padding(.horizontal, 12)
-        // Flexible rather than a hard 360: MacTopBar centres this on the window
-        // and caps it, but at 150 % zoom the logical window is only ~640pt wide
-        // and a fixed width would have collided with the controls either side.
+        // Flexible: at 150% zoom a fixed width would collide with the controls either side.
         .frame(height: height)
         .frame(minWidth: 180, maxWidth: .infinity)
         .background(
@@ -141,10 +120,9 @@ struct MacSearchField: View {
         }
         .onChange(of: focusToken) { _, _ in isFocused = true }
         .onChange(of: isFocused) { _, focused in
+            if focused, acceptsFocus?() == false { isFocused = false; return }
             onFocusChange?(focused)
-            // Clicking anywhere else has to put the caret down. AppKit won't do
-            // it on its own (see SearchBlurWatcher), so the watcher runs for
-            // exactly as long as this field holds the keyboard.
+            // AppKit won't unfocus on an outside click, so the watcher runs while this field is focused.
             if focused { blurWatcher.start { isFocused = false } }
             else       { blurWatcher.stop() }
         }

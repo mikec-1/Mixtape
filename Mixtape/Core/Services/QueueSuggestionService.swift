@@ -1,10 +1,5 @@
-// QueueSuggestionService.swift
-// Mixtape
-//
-// Tops up the queue before it runs dry (no repeat, nearly exhausted) with songs
-// similar to the current track — a mix of local-library matches and Deezer artist
-// radio. Local picks share the track's genre/artist and radio comes from the seed
-// artist, so nothing jumps scenes (rap → classical). Appended like normal tracks.
+// Tops up the queue with similar songs once the playlist runs out: library
+// matches (same artist/genre) and Deezer artist radio, never jumping scenes.
 
 import Foundation
 import Combine
@@ -14,8 +9,7 @@ public final class QueueSuggestionService: ObservableObject {
 
     // MARK: - Tuning
 
-    /// Keep at least this many upcoming tracks queued ahead of the current one.
-    /// A recommended run should feel like a station, not like three bonus songs.
+    /// Upcoming tracks to keep queued once recommendations take over.
     private let targetAhead = 30
     /// Replenish once upcoming drops to this few.
     private let lowWatermark = 10
@@ -52,15 +46,12 @@ public final class QueueSuggestionService: ObservableObject {
             .sink { [weak self] _ in self?.scheduleReplenishIfNeeded() }
             .store(in: &cancellables)
 
-        // Smart shuffle mixes songs in when shuffle comes on. Taking them back
-        // out is the queue's own job (`setShuffle`), so this only listens for
-        // the switch-on.
+        // Only listens for switch-on; `setShuffle` removes the picks on switch-off.
         queue.$shuffleEnabled
             .removeDuplicates()
             .sink { [weak self] on in
                 guard on else { return }
-                // Next tick: `setShuffle` publishes before it reshuffles, and
-                // rows mixed in first would be scattered by that shuffle.
+                // Next tick, so `setShuffle`'s reshuffle doesn't scatter them.
                 Task { self?.mixInSmartPicks() }
             }
             .store(in: &cancellables)
@@ -71,27 +62,15 @@ public final class QueueSuggestionService: ObservableObject {
     private func scheduleReplenishIfNeeded() {
         guard shouldReplenish else { return }
         Task {
-            // Let transient state settle — e.g. Discover installs its online
-            // context handler just after engine.play(), so a same-tick check
-            // could mistake an online track for a local-queue session.
+            // Let state settle; Discover installs its context handler just after `engine.play()`.
             try? await Task.sleep(for: .milliseconds(400))
             guard shouldReplenish else { return }
             await replenish()
         }
     }
 
-    /// True when we should top the queue up with recommendations.
-    ///
-    /// The rule is the one every other player uses: recommendations start where
-    /// the list the user chose *ends*. So this waits for the context lane to run
-    /// out entirely rather than firing at a low-water mark — a "Next up:
-    /// recommended songs" heading appearing while five songs of the playlist are
-    /// still queued is the app talking over the user.
-    ///
-    /// Shuffle doesn't suppress it: a shuffled playlist still reaches its end,
-    /// and the answer there is the same as the unshuffled one — keep the music
-    /// going with songs like it. Repeat does suppress it, because repeat is
-    /// already an answer to "what plays after the last song".
+    /// Top up once the context lane is empty, not at a low-water mark. Shuffle
+    /// doesn't suppress it; repeat does.
     private var shouldReplenish: Bool {
         guard Self.autoplayEnabled else { return false }
         guard !isReplenishing else { return false }
@@ -105,8 +84,7 @@ public final class QueueSuggestionService: ObservableObject {
 
     private var pendingDepth: Int { queue.remainingRecommendationCount }
 
-    /// Settings ▸ Playback ▸ Smart Shuffle. Off by default: it changes what a
-    /// shuffle of the user's own playlist contains, so it is opt-in.
+    /// Settings > Playback > Smart Shuffle. Opt-in.
     public static var smartShuffleEnabled: Bool {
         UserDefaults.standard.bool(forKey: "playback.smartShuffle")
     }
@@ -116,14 +94,10 @@ public final class QueueSuggestionService: ObservableObject {
 
     // MARK: - Smart shuffle
 
-    /// Mix library songs that aren't in this list into the shuffled run.
-    ///
-    /// Library picks only: they are genre-coherent with what is playing, they
-    /// carry their artwork, and they play with no resolve step — a row that has
-    /// to be fetched from the internet mid-playlist is not what "shuffle" should
-    /// hand you.
-    /// ponytail: Deezer picks would need the coordinator's device id and artwork
-    /// prefetch made public; add them if the library turns out too thin to draw from.
+    /// Mixes library songs not in this list into the shuffle. Library only, since
+    /// they play without resolving.
+    /// ponytail: Deezer picks need the coordinator's device id and artwork prefetch
+    /// made public; add if the library is too thin.
     private func mixInSmartPicks() {
         guard Self.smartShuffleEnabled, queue.shuffleEnabled, !engine.hasOnlineContext else { return }
         guard let seed = queue.currentTrack else { return }
@@ -135,8 +109,7 @@ public final class QueueSuggestionService: ObservableObject {
         queue.interleaveSmart(picks, every: smartEvery)
     }
 
-    /// Settings ▸ Playback ▸ Autoplay. On unless the user turned it off, which is
-    /// the same default every other player ships.
+    /// Settings > Playback > Autoplay. On by default.
     public static var autoplayEnabled: Bool {
         UserDefaults.standard.object(forKey: "playback.autoplay") as? Bool ?? true
     }
@@ -154,14 +127,10 @@ public final class QueueSuggestionService: ObservableObject {
         // Keys already present so we never queue a duplicate.
         var seen = Set(queue.queue.map(Self.key))
 
-        // Online Discover session: navigation flows through the coordinator's
-        // context (each track downloaded on demand), not the local queue. Extend
-        // it with Deezer "artist radio" picks similar to the current track —
-        // local-library tracks don't fit the online navigation model.
+        // Online session: extend the coordinator's context with Deezer radio picks.
         if engine.hasOnlineContext {
             let picks = Array(await deezerSuggestions(for: seed, excluding: seen).prefix(need))
-            // The search took time, and repeat may have been switched on
-            // while it ran.
+            // Repeat may have been turned on during the search.
             guard queue.repeatMode == .off else { return }
             coordinator?.appendOnlineSuggestions(picks)
             return
@@ -170,9 +139,7 @@ public final class QueueSuggestionService: ObservableObject {
         var localPool  = localSuggestions(for: seed, excluding: seen)
         var deezerPool = await deezerSuggestions(for: seed, excluding: seen)
 
-        // Pick `need` suggestions as a random local/Deezer mix, then append
-        // each side in one go — a per-song append republishes the queue per
-        // song, which is what made a fill look like the queue reshuffling.
+        // Random local/Deezer mix, appended per side in one go so the queue doesn't churn.
         var onlinePicks: [OnlineTrack] = []
         var localPicks:  [Track]       = []
         var added = 0
@@ -185,9 +152,7 @@ public final class QueueSuggestionService: ObservableObject {
             } else {
                 let track = localPool.removeFirst()
                 guard seen.insert(Self.key(track)).inserted else { continue }
-                // The recommendation lane: nobody asked for this one, it is the
-                // top-up, and it sorts below both the user's own queued songs
-                // and whatever is left of the list they were playing.
+                // Recommendation lane: below manual and context rows.
                 localPicks.append(track)
             }
             added += 1
@@ -197,20 +162,14 @@ public final class QueueSuggestionService: ObservableObject {
         guard queue.repeatMode == .off else { return }
         if !localPicks.isEmpty { queue.append(contentsOf: localPicks, lane: .recommendation) }
 
-        // One append, not one per download. Each pick used to be downloaded
-        // first and appended as it landed, so the queue rewrote itself a dozen
-        // times over the following minute — the songs sitting after the current
-        // one kept changing under the user. A queued row needs no file (it is
-        // resolved when the queue reaches it), so they all land at once and stay
-        // put.
+        // One append. Rows resolve when reached, so there's no need to download first.
         guard let coordinator, !onlinePicks.isEmpty else { return }
         await coordinator.addToQueue(onlinePicks, lane: .recommendation)
     }
 
     // MARK: - Local suggestions
 
-    /// Library tracks similar to `seed`, genre-coherent: same genre first, then
-    /// same artist, shuffled within each tier. Never random across genres.
+    /// Library tracks like `seed`: same artist, then same genre, shuffled per tier.
     private func localSuggestions(for seed: Track, excluding seen: Set<String>) -> [Track] {
         let pool = library.tracks.filter { t in
             t.id != seed.id && !seen.contains(Self.key(t)) && SuggestionFeedback.allows(t)
@@ -224,9 +183,7 @@ public final class QueueSuggestionService: ObservableObject {
         } ?? []
         let sameArtist = pool.filter { $0.artistName.lowercased() == seedArtist }
 
-        // Same artist is the strongest similarity signal, then same genre.
-        // If the seed has no genre and no same-artist tracks, suggest nothing
-        // locally rather than risk an incoherent cross-genre pick.
+        // No genre and no same-artist tracks: suggest nothing rather than jump genres.
         var ordered: [Track] = []
         var added = Set<Track.ID>()
         for t in sameArtist.shuffled() + sameGenre.shuffled() where added.insert(t.id).inserted {
@@ -245,12 +202,8 @@ public final class QueueSuggestionService: ObservableObject {
 
     // MARK: - Dedup keys
 
-    // `identityTitle`, so a saved Discover song compares under the spelling the
-    // catalogue uses: the library row prints the feature credit, the suggestion
-    // coming back off the radio endpoint doesn't, and keying on the stored title
-    // made those two look like different songs — so a song already in the queue
-    // could be suggested straight back into it. An imported row has no key to
-    // check the bare spelling against, so it still compares as stored.
+    // `identityTitle` so a library row with a feature credit matches the bare
+    // catalogue title and isn't suggested twice.
     private static func key(_ t: Track) -> String { key(forTitle: t.identityTitle, artist: t.artistName) }
     private static func key(forTitle title: String, artist: String) -> String {
         "\(title.lowercased())|\(artist.lowercased())"

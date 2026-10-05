@@ -1,18 +1,6 @@
-// MacSearchResultsView.swift
-// Mixtape — Mac/Content
-//
-// Unified search results shown whenever the toolbar search field is active.
-// MacContentRouter swaps to this view instead of the per-section views so
-// the user sees Songs, Albums, Artists and Playlists all at once.
-//
-// Layout deliberately mirrors Discover's results page — a "Top result" hero
-// beside a short songs column, then More songs, then horizontal album cards and
-// artist circles. Searching the library and searching online used to look like
-// two unrelated apps; now the only difference is where the rows came from.
-//
-// The Discover components themselves are private to OnlineDiscoverView and typed
-// on OnlineTrack/OnlineAlbum/OnlineArtist, so this file restates the same visual
-// structure over the local models rather than importing it.
+// Library search results: a top result beside a short songs column, then albums, artists and
+// people, mirroring Discover's layout. Discover's components are private and typed on online
+// models, so the structure is restated over local models.
 
 #if os(macOS)
 import SwiftUI
@@ -31,9 +19,7 @@ struct MacSearchResultsView: View {
     @State private var focusedIndex: Int? = nil
     @FocusState private var listFocused: Bool
 
-    /// People are the one part of this page that isn't already in memory. It gets
-    /// its own object so a slow directory lookup can't hold up the songs, and it
-    /// arrives underneath them when it arrives.
+    /// Its own object so a slow directory lookup doesn't hold up the songs.
     @StateObject private var people = PeopleSearch()
 
     // MARK: - Filtered results
@@ -62,14 +48,10 @@ struct MacSearchResultsView: View {
             + matchingArtists.count + matchingPlaylists.count
     }
 
-    /// One songs list. Discover no longer splits its songs across two headings
-    /// with an album shelf between them, and neither does this page — the split
-    /// only ever existed to fill the height of the card that used to stand
-    /// beside the first four rows.
+    /// One songs list, as on Discover.
     private var songs: [Track] { Array(matchingTracks.prefix(50)) }
 
-    /// The single best answer, picked the way Spotify does: an exactly-named
-    /// artist wins, then an exact album, then whatever the first song is.
+    /// Like Spotify: an exactly-named artist, then an exact album, then the first song.
     private var topResult: LocalTopResult? {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
         if let artist = matchingArtists.first(where: { $0.name.lowercased() == q })
@@ -91,22 +73,15 @@ struct MacSearchResultsView: View {
 
     // MARK: - Body
 
-    /// Library hits plus whatever the directory came back with. People are found
-    /// over the network, so a query that matches only a username still has to
-    /// count as a result rather than reading "No results" for a third of a second.
+    /// Includes people, so a username-only match isn't briefly "No results".
     private var combinedCount: Int { totalCount + people.results.count }
 
-    /// Bumped whenever the download manager publishes.
-    ///
-    /// This view reads download state (`status(for:)` and friends) straight off
-    /// the manager inside `body`, which is not observation — nothing here holds
-    /// the manager, so nothing here hears it change. `AppDependencies` used to
-    /// rebroadcast every service's publishes, which covered this by invalidating
-    /// all 81 views that hold `deps` on every status transition. The views that
-    /// actually draw download state say so themselves now.
+    /// Bumped when the download manager publishes, since `body` reads its state without observing it.
     @State private var downloadTick = 0
 
     var body: some View {
+        // Read so the bump below redraws; an unread @State never does.
+        let _ = downloadTick
         bodyContent
             .onReceive(deps.downloadManager.didChangeThrottled) { _ in
                 downloadTick &+= 1
@@ -132,8 +107,7 @@ struct MacSearchResultsView: View {
         }
         // A new query invalidates the old row position.
         .onChange(of: query) { _, _ in focusedIndex = nil }
-        // ↓ from the search field hands keyboard control to the list without
-        // the user having to reach for the mouse or Tab through the toolbar.
+        // ↓ from the search field moves keyboard focus into the list.
         .onChange(of: appState.resultsFocusToken) { _, _ in
             guard !matchingTracks.isEmpty else { return }
             focusedIndex = 0
@@ -206,10 +180,8 @@ struct MacSearchResultsView: View {
                 .padding(.vertical, 24)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .background(Color.mixBackground)
-            // Arrow keys walk the songs list; Return plays the focused row.
-            // The container is focusable rather than each row so a single
-            // keypress moves selection instead of hopping focus rings.
+            .background(MixPageBackground())
+            // Arrows walk the songs, Return plays. The container is focusable, not each row.
             .focusable()
             .focused($listFocused)
             .focusEffectDisabled()
@@ -226,9 +198,7 @@ struct MacSearchResultsView: View {
 
     // MARK: - People
 
-    /// Last on the page on purpose. Searching here means searching your music
-    /// nine times out of ten, so people sit below it — present when you want
-    /// them, never in the way when you don't.
+    /// Last: most searches are for music.
     @ViewBuilder
     private var peopleSection: some View {
         if !people.results.isEmpty {
@@ -258,10 +228,7 @@ struct MacSearchResultsView: View {
 
     // MARK: - Top row
 
-    /// The answer, as one full-width strip — the same shape Discover's results
-    /// page leads with, for the same reasons (see `TopResultBanner`). Library
-    /// search and online search are two halves of one search box, and they had
-    /// started to look like two applications.
+    /// The top result as one full-width strip, like Discover's `TopResultBanner`.
     @ViewBuilder
     private var topRow: some View {
         if let top = topResult {
@@ -291,7 +258,7 @@ struct MacSearchResultsView: View {
     // MARK: - Actions
 
     private func play(_ track: Track) {
-        Task { await engine.play(track: track, in: matchingTracks, source: .named("Search results")) }
+        Task { await engine.play(track: track, in: [track], source: .named("Search results")) }
     }
 
     private func open(_ top: LocalTopResult) {
@@ -353,7 +320,7 @@ struct MacSearchResultsView: View {
             .padding(.top, 4)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.mixBackground)
+        .background(MixPageBackground())
     }
 }
 
@@ -441,9 +408,8 @@ private struct LocalTopResultCard: View {
 
 // MARK: - Song row
 
-/// Discover's row treatment over a local `Track`: single click on the artwork
-/// plays, single click on the title/artist navigates, double click anywhere
-/// plays. Focus (arrow keys) paints the same fill as hover.
+/// Discover's row treatment over a local `Track`: artwork click plays, title/artist click
+/// navigates, double click plays. Focus paints the hover fill.
 private struct LocalSongRow: View {
     let track:     Track
     let isCurrent: Bool

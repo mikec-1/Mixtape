@@ -1,22 +1,5 @@
-// MixtapeProfilePage.swift
-// Mixtape — SharedUI/Discover
-//
-// Mixtape's own profile: the page behind the app's name in a mix byline.
-//
-// A mix says it belongs to Mixtape, and a name that claims ownership should have
-// somewhere to go — the same way tapping a friend's name on a shared playlist
-// opens theirs. What's behind this one is everything Mixtape has made for you:
-// this week's mixes, and the older ones you kept.
-//
-// Deliberately NOT a `ProfilePageView` with a special case bolted on. That page
-// is about a person — stats they've chosen to share, playlists they've chosen to
-// publish, a follow-nothing header that still reads as social. Mixtape has no
-// listening history, publishes nothing, and its "playlists" are rebuilt weekly
-// from *your* taste, so nearly every row on that page would be either blank or a
-// small lie.
-//
-// Shared by both platforms, like MixDetailPage: the layout is identical and only
-// "where does a tap go" differs, which is what the closures are for.
+// Mixtape's own profile: this week's mixes and the older ones you kept. Not a `ProfilePageView` special
+// case, since Mixtape has no history or published playlists. Shared by both platforms.
 
 import SwiftUI
 
@@ -26,25 +9,19 @@ struct MixtapeProfilePage: View {
     let onOpenMix: (PersonalMix) -> Void
     /// Play one from its card, without opening it.
     let onPlayMix: (PersonalMix) -> Void
-    /// Open a mix already saved into the library. Nil hides the saved section's
-    /// tap target rather than offering a press that does nothing — the library
-    /// isn't reachable from every stack this page can appear in.
+    /// Open a saved mix. Nil hides the tap target, since the library isn't reachable from every stack.
     var onOpenSavedMix: ((Playlist) -> Void)? = nil
     /// The mix whose first stream is being resolved, so its card can spin.
     var resolvingID: String? = nil
 
     @EnvironmentObject private var deps: AppDependencies
 
-    /// The same store the Discover landing draws from, so this page shows
-    /// exactly the mixes that are on Home right now — no second fetch, and no
-    /// chance of the two disagreeing about what this week's mixes are.
+    /// Same store as the Discover landing, so this shows exactly what's on Home.
     @ObservedObject private var store = DiscoverSessionStore.shared
 
     private var mixes: [PersonalMix] { store.personal.mixes }
 
-    /// Mixes that were saved into the library. Older weeks live here and nowhere
-    /// else — once a week rolls over, the only copy of that mix is the snapshot
-    /// the user chose to keep.
+    /// Mixes saved into the library. Once a week rolls over this is the only copy.
     private var savedMixes: [Playlist] {
         deps.libraryService.playlists
             .filter { $0.origin == .mix && !$0.isDeleted }
@@ -68,7 +45,7 @@ struct MixtapeProfilePage: View {
             .padding(.bottom, 40)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(Color.mixBackground)
+        .background(MixPageBackground())
     }
 
     // MARK: - Header
@@ -98,20 +75,12 @@ struct MixtapeProfilePage: View {
         }
     }
 
-    /// No drop shadow, unlike the covers around it: the waveform is knocked out
-    /// of the mark rather than drawn on it, so a shadow behind the circle shows
-    /// through the very gaps that make it legible.
+    /// No shadow: the waveform is knocked out of the mark, so a shadow would show through.
     private var mark: some View {
         MixtapeMark(size: 120)
     }
 
-    /// The count, then the one thing worth knowing about how this page behaves.
-    ///
-    /// Deliberately nothing about saves. How many of Mixtape's playlists you
-    /// happen to be holding says nothing about Mixtape, and read as a profile
-    /// stat it claimed to mean the opposite of what it did — how popular the
-    /// playlists were. That number belongs on a playlist, not on a profile; see
-    /// `PlaylistSaveCount`.
+    /// Mix count and how the page works. No save count: that belongs on a playlist, see `PlaylistSaveCount`.
     private var statLine: String {
         var parts: [String] = []
         if !mixes.isEmpty { parts.append(pluralised(mixes.count, "mix", plural: "mixes")) }
@@ -130,10 +99,7 @@ struct MixtapeProfilePage: View {
 
     @ViewBuilder
     private var mixGrid: some View {
-        // Wrapped on both platforms here, unlike the Home shelf. This page is
-        // *about* the mixes, so burying half of them in a carousel would be the
-        // one thing it exists not to do — and on a phone the grid falls to a
-        // single column on its own.
+        // Wrapped on both platforms, unlike Home: this page is about the mixes. A phone falls to one column.
         LazyVGrid(columns: [GridItem(.adaptive(minimum: MixMosaicCard.side,
                                                maximum: MixMosaicCard.side),
                                      spacing: 18)],
@@ -227,8 +193,7 @@ struct MixtapeProfilePage: View {
 
 // MARK: - Saved mix thumbnail
 
-/// The cover of a saved mix, which is a library playlist like any other — its
-/// own artwork when the save wrote one, and the app's mark when it didn't.
+/// A saved mix's cover: its own artwork, or the app mark.
 private struct PlaylistCoverThumbnail: View {
 
     let playlist: Playlist

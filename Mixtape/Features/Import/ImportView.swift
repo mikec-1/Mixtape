@@ -1,8 +1,4 @@
-// ImportView.swift
-// Mixtape — Features/Import
-//
-// Sheet presented when the user taps the import button in the library toolbar.
-// Uses SwiftUI's .fileImporter() to open the system file picker for audio files.
+// Import sheet from the library toolbar, using the system file picker.
 
 import SwiftUI
 import UniformTypeIdentifiers
@@ -29,14 +25,11 @@ public struct ImportView: View {
     }
 
     #if os(iOS)
-    // Receives the IOSAppState injected by MainTabView; used to enqueue
-    // enrichment candidates for review after import completes.
+    // Used to queue enrichment candidates for review after import.
     @EnvironmentObject private var iosAppState: IOSAppState
     #endif
 
-    /// Only so the link sheet can be handed it explicitly. This view takes its
-    /// own services by hand, but a nested sheet is a new presentation and it's
-    /// cheaper to pass the container than to reason about what it inherits.
+    /// Passed explicitly into the nested link sheet.
     @EnvironmentObject private var deps: AppDependencies
 
     // MARK: - State
@@ -50,7 +43,7 @@ public struct ImportView: View {
     @State private var resultMessage     = ""
     @State private var showSpotifyImport = false
 
-    /// Which link sheet is up, if any — see `LinkImportView.Service`.
+    /// The open link sheet, if any. See `LinkImportView.Service`.
     @State private var linkService: LinkImportView.Service?
 
     @Environment(\.dismiss) private var dismiss
@@ -82,6 +75,9 @@ public struct ImportView: View {
         .sheet(item: $linkService) { service in
             LinkImportView(service: service)
                 .environmentObject(deps)
+                #if os(iOS)
+                .environmentObject(iosAppState)
+                #endif
         }
         .sheet(isPresented: $showSpotifyImport) {
             SpotifyImportView(spotifyClient: spotifyClient,
@@ -90,17 +86,24 @@ public struct ImportView: View {
                               followService: deps.spotifyFollowService,
                               ledger: deps.spotifyImportLedger)
         }
+        #if os(iOS)
+        // A sheet can't open over this one from the tab view, so the review shows here while it's up.
+        .onAppear { iosAppState.importSheetOpen = true }
+        .onDisappear { iosAppState.importSheetOpen = false }
+        .sheet(item: Binding(
+            get: { linkService == nil && !showSpotifyImport ? iosAppState.pendingReview : nil },
+            set: { _ in iosAppState.dequeueReview() }
+        )) { item in
+            IOSMetadataReviewSheet(item: item)
+                .environmentObject(deps)
+                .environmentObject(iosAppState)
+        }
+        #endif
     }
 
     // MARK: - Sub-Views
 
-    /// Four ways in, as rows.
-    ///
-    /// This was a 120pt circle over a centred heading over four stacked pill
-    /// buttons, each capped at 240pt and floating in the middle of the sheet.
-    /// Four equally-sized pills give no sense of which one you want and leave
-    /// no room to say what any of them do; rows do both, and they don't need
-    /// the sheet to be mostly empty in order to look composed.
+    /// The import routes, as option rows.
     private var routes: some View {
         VStack(alignment: .leading, spacing: 8) {
             if isImporting {
@@ -113,9 +116,7 @@ public struct ImportView: View {
                     showFilePicker = true
                 }
 
-                // Each service is named, rather than one "Add from a Link":
-                // the combined entry gave no sign YouTube was supported, and
-                // this screen is where anyone would look.
+                // One row per service so YouTube support is visible.
                 MixSheetOptionRow(icon: "link",
                                   title: "Import Spotify Link",
                                   detail: "One song, from a track link.") {
@@ -134,13 +135,8 @@ public struct ImportView: View {
                     showSpotifyImport = true
                 }
 
-                // Below the single-playlist row on purpose: this is the bigger
-                // commitment, and someone who came here for one playlist
-                // shouldn't have to step over a whole-library migration to
-                // reach it.
-                // Opens Settings rather than stacking another sheet on this
-                // one: Spotify is a connection now, and the picker lives with
-                // the account it reads from.
+                // Below the single-playlist row since it's the bigger commitment. Opens Settings,
+                // where the Spotify connection lives.
                 MixSheetOptionRow(icon: "square.stack.3d.down.right",
                                   title: "Import Spotify Library",
                                   detail: "Pick from your playlists, Liked Songs and saved albums.") {
@@ -166,7 +162,7 @@ public struct ImportView: View {
     private func handlePickerResult(_ result: Result<[URL], Error>) {
         switch result {
         case .failure:
-            return   // user cancelled — no-op
+            return  // T user cancelled
         case .success(let urls):
             guard !urls.isEmpty else { return }
             Task {
@@ -185,7 +181,7 @@ public struct ImportView: View {
                         #if os(iOS)
                         iosAppState.enqueueReview(review)
                         #endif
-                        _ = review // unused on macOS (primary import is via MacImportButton)
+                        _ = review  // T unused on macOS (MacImportButton does the import)
                     case .duplicate: duplicateCount += 1
                     case .failed:    failedCount    += 1
                     }
@@ -201,7 +197,12 @@ public struct ImportView: View {
                 // Auto-dismiss the banner after 3 seconds, then close sheet if all succeeded
                 try? await Task.sleep(for: .seconds(3))
                 withMixAnimation { showResultBanner = false }
+                #if os(iOS)
+                // Stay up while the review is showing over it.
+                if failedCount == 0 && iosAppState.pendingReview == nil { dismiss() }
+                #else
                 if failedCount == 0 { dismiss() }
+                #endif
             }
         }
     }

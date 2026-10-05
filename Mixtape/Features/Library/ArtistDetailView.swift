@@ -1,6 +1,3 @@
-// ArtistDetailView.swift
-// Mixtape — Features/Library/Detail
-
 import SwiftUI
 import Combine
 
@@ -10,11 +7,9 @@ public struct ArtistDetailView: View {
 
     @EnvironmentObject private var deps:   AppDependencies
     @EnvironmentObject private var engine: PlaybackEngine
-    /// Observed directly: `engine.queue` doesn't republish through the engine,
-    /// so the shuffle button lagged behind the state it shows.
+    /// Observed directly: `engine.queue` doesn't republish through the engine.
     @EnvironmentObject private var queueService: QueueService
-    /// A header's shuffle button is this list's own setting, not the queue's
-    /// live mode — see `ShufflePreferences`.
+    /// The header shuffle is this list's setting. See `ShufflePreferences`.
     @ObservedObject private var shufflePrefs = ShufflePreferences.shared
 
     private var tracks: [Track] {
@@ -26,19 +21,15 @@ public struct ArtistDetailView: View {
         return deps.libraryService.albums.filter { ids.contains($0.id) }
     }
 
-    /// Bumped whenever the download manager publishes.
-    ///
-    /// This view reads download state (`status(for:)` and friends) straight off
-    /// the manager inside `body`, which is not observation — nothing here holds
-    /// the manager, so nothing here hears it change. `AppDependencies` used to
-    /// rebroadcast every service's publishes, which covered this by invalidating
-    /// all 81 views that hold `deps` on every status transition. The views that
-    /// actually draw download state say so themselves now.
+    /// Bumped when the download manager publishes, since `body` reads its state
+    /// without observing it.
     @State private var downloadTick = 0
     /// How much *you* played this artist. Loaded in `.task`: it reads play history.
     @State private var standing: ArtistStanding?
 
     public var body: some View {
+        // Read so the bump below redraws; an unread @State never does.
+        let _ = downloadTick
         bodyContent
             .onReceive(deps.downloadManager.didChangeThrottled) { _ in
                 downloadTick &+= 1
@@ -56,13 +47,11 @@ public struct ArtistDetailView: View {
             }
             .padding(.bottom, 24)
         }
-        // On the container, not the hero: it stays put while the content scrolls
-        // under it, and it feeds the window titlebar tint on macOS.
+        // On the container so it stays put while scrolling, and tints the titlebar.
         .artworkWash(source: artist.displayArtwork)
-        .background(Color.mixBackground.ignoresSafeArea())
+        .background(MixPageBackground())
         .miniPlayerSafeArea()
-        // The tracks section leads with this artist's most-played songs, so the
-        // top of it is the likeliest next tap.
+        // The top tracks lead the list, so warm those.
         .task(id: artist.id) {
             deps.onlineCoordinator.prefetchResolvable(tracks)
             standing = deps.statsService.artistStanding(for: artist.name)
@@ -84,9 +73,7 @@ public struct ArtistDetailView: View {
             metadata: metadataLine,
             coverIsCircular: true
         ) { size in
-            // No "Refresh Profile Photo" here any more — the backfill in
-            // LibraryService replaces album-cover stand-ins on its own, so the
-            // manual re-fetch was only ever a way to redo work already done.
+            // No manual photo refresh: LibraryService's backfill replaces stand-ins itself.
             ArtworkThumbnail(
                 data: artist.artworkData, artworkRef: .artist(artist.id),
                 size: size,
@@ -115,14 +102,12 @@ public struct ArtistDetailView: View {
             ) {
                 ShareHeroButton(.artist(artist))
 
-                // The overflow the album and playlist pages already had. This
-                // was the only detail page you couldn't queue or download from.
+                // Same overflow menu as the album and playlist pages.
                 Menu { ArtistActionsMenu(name: artist.name, showsShare: false) } label: {
                     HeroCircleLabel(systemImage: "ellipsis")
                 }
                 #if os(macOS)
-                // Left alone a Menu draws itself as a bordered pop-up button
-                // with a chevron — the wrong shape next to a circle.
+                // Otherwise a Menu draws as a bordered pop-up with a chevron.
                 .menuStyle(.button)
                 .buttonStyle(.plain).mixHandCursor()
                 .menuIndicator(.hidden)
@@ -132,10 +117,8 @@ public struct ArtistDetailView: View {
         }
     }
 
-    /// True when the engine is currently playing one of this artist's tracks.
-    /// See `PlaylistDetailView.isPlayingThisPlaylist`: asked of the queue's
-    /// source, because this artist's songs also sit in the playlists and albums
-    /// the user actually pressed play on.
+    /// Playing one of this artist's songs, asked of the queue's source. See
+    /// `PlaylistDetailView.isPlayingThisPlaylist`.
     private var isPlayingThisArtist: Bool {
         engine.state.isPlaying && queueService.source == .named(artist.name)
     }
@@ -218,7 +201,7 @@ public struct ArtistDetailView: View {
                 .onTapGesture {
                     Task { await engine.play(track: track, in: tracks, source: .named(artist.name)) }
                 }
-                // No "Go to Artist" — this is that artist's page.
+                // No "Go to Artist" on the artist's own page.
                 .contextMenu {
                     LibrarySongMenu(targets: [track], onPlay: {
                         Task { await engine.play(track: track, in: tracks, source: .named(artist.name)) }
@@ -262,10 +245,7 @@ public struct ArtistDetailView: View {
 }
 
 // MARK: - Preview
-//
-// Guarded because `previewArtists` is itself `#if DEBUG` — without this the
-// canvas works all day and only Archive (a Release build) fails, on a line
-// nothing ships.
+// Guarded because `previewArtists` is DEBUG-only; Release would fail to build.
 
 #if DEBUG
 #Preview {

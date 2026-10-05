@@ -1,18 +1,6 @@
-// UnavailableTracks.swift
-// Mixtape — Core/Services/Online
-//
-// The songs nothing on the internet has.
-//
-// A queued song that has to be found online is normally found. A few never are
-// — a bootleg, a regional block, a spelling no upload uses — and until now the
-// only way to learn that was to wait for the queue to reach it and watch
-// playback die on a song that was never coming. The queue already fetches ahead
-// of itself, so the answer is usually known minutes early: this is where that
-// answer is kept, so a row can wear a warning before anyone waits on it.
-//
-// In memory, deliberately. "Not found" is a fact about a search on a particular
-// evening, not about the song, and a mark persisted across launches would
-// outlive the upload appearing.
+// Songs no online source has. The queue resolves ahead, so we usually know
+// early and can badge the row before playback reaches it.
+// In memory only: "not found" is about tonight's search, not the song.
 
 import Foundation
 import Combine
@@ -22,21 +10,14 @@ public final class UnavailableTracks: ObservableObject {
 
     public static let shared = UnavailableTracks()
 
-    /// Keyed by title|artist, not by Track.id: the same song reaches this from a
-    /// library row, a queue mirror and a Deezer suggestion, each with its own id.
+    /// Keyed by title|artist, not Track.id, since the same song arrives with different ids.
     @Published public private(set) var keys: Set<String> = []
 
-    /// Songs a probe or a play has confirmed *are* out there. Kept so the
-    /// scanner doesn't ask about the same song once per queue change: without
-    /// it, "not decided yet" and "fine" look identical.
+    /// Songs confirmed findable, so the scanner doesn't re-ask on every queue change.
     @Published public private(set) var verified: Set<String> = []
 
-    /// The songs the queue has just dropped. One list, read by both the card
-    /// above the player and the notice at the bottom of the queue: they were
-    /// separate properties with separate lifetimes, and a skip that showed up in
-    /// one and not the other was the result. Short on purpose — this is a "that
-    /// happened" list, not a log — and each entry clears itself, so a skip that
-    /// nobody dismissed doesn't sit there for the rest of the evening.
+    /// Songs the queue just dropped. One short-lived list read by both the player
+    /// card and the queue notice; entries clear themselves.
     @Published public private(set) var recentSkips: [Announcement] = []
 
     private init() {}
@@ -57,8 +38,7 @@ public final class UnavailableTracks: ObservableObject {
         "\(title.lowercased())|\(artist.lowercased())"
     }
 
-    /// `identityTitle` — the bare title the catalogue spells it with, so a
-    /// library row printing "(feat. …)" matches the search that failed.
+    /// Uses `identityTitle` so a "(feat. ...)" row matches the failed search.
     public func contains(_ track: Track) -> Bool {
         keys.contains(Self.key(title: track.identityTitle, artist: track.artistName))
     }
@@ -67,8 +47,7 @@ public final class UnavailableTracks: ObservableObject {
         keys.contains(Self.key(title: title, artist: artist))
     }
 
-    /// A song that just dropped. Carries its own id so two skips of the same
-    /// song stack as two notices rather than collapsing into one.
+    /// Own id so two skips of the same song show as two notices.
     public struct Announcement: Equatable, Identifiable {
         public let id = UUID()
         public let title:  String
@@ -77,12 +56,8 @@ public final class UnavailableTracks: ObservableObject {
         public static func == (a: Self, b: Self) -> Bool { a.id == b.id }
     }
 
-    /// Record a song as not findable, and — when playback actually wanted it —
-    /// say so on screen.
-    ///
-    /// Both halves in one call: every caller that learns a song cannot be found
-    /// wants its queue row badged, and splitting the two is how one of them ends
-    /// up missing on some path.
+    /// Marks a song unfindable and, with `announce`, shows a notice. One call so no
+    /// path does only half.
     public func mark(title: String, artist: String, announce: Bool = false) {
         let key = Self.key(title: title, artist: artist)
         keys.insert(key)

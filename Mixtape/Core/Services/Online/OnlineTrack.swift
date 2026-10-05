@@ -1,8 +1,5 @@
-// OnlineTrack.swift
-// Mixtape
-//
-// A song found via online search but not yet in the library — just enough to
-// show a result card and build the yt-dlp query.
+// A song from online search, not yet in the library. Enough to show a result
+// card and build the yt-dlp query.
 
 import Foundation
 import CryptoKit
@@ -15,12 +12,11 @@ public struct OnlineTrack: Identifiable, Hashable, Sendable, Codable {
     public let albumTitle: String
     public let duration: TimeInterval
     public let artworkURL: URL?
-    /// Deezer track id, when known — used to fetch featured artists.
+    /// Deezer track id, used to fetch featured artists.
     public let sourceID: Int?
     public let isExplicit: Bool
-    /// Everyone Deezer credits on the track — main artist first, guests after.
-    /// Display only (see `displayArtistName`), empty when the source listing
-    /// doesn't carry contributors.
+    /// Everyone Deezer credits, main artist first. Display only; empty when the
+    /// listing doesn't carry contributors.
     public let contributors: [String]
 
     nonisolated public init(
@@ -46,10 +42,8 @@ public struct OnlineTrack: Identifiable, Hashable, Sendable, Codable {
 
     // MARK: - Codable
 
-    /// `id` is derived from the title and artist, never stored: writing it out
-    /// and reading it back would let a decoded track disagree with the one the
-    /// same metadata builds live, which is the one thing an id used for dedup
-    /// and for `stableTrackID` must never do.
+    /// `id` is derived from title and artist, never stored, so a decoded track
+    /// always has the same id as one built live.
     private enum CodingKeys: String, CodingKey {
         case title, artistName, albumTitle, duration, artworkURL, sourceID, isExplicit, contributors
     }
@@ -61,43 +55,24 @@ public struct OnlineTrack: Identifiable, Hashable, Sendable, Codable {
             artistName: try box.decode(String.self, forKey: .artistName),
             albumTitle: try box.decode(String.self, forKey: .albumTitle),
             duration:   try box.decodeIfPresent(TimeInterval.self, forKey: .duration) ?? 0,
-            artworkURL: try box.decodeIfPresent(URL.self, forKey: .artworkURL),
+            // Lenient: web rows can carry "" for no artwork.
+            artworkURL: (try? box.decodeIfPresent(String.self, forKey: .artworkURL)).flatMap(URL.init(string:)),
             sourceID:   try box.decodeIfPresent(Int.self, forKey: .sourceID),
             isExplicit: try box.decodeIfPresent(Bool.self, forKey: .isExplicit) ?? false,
             contributors: try box.decodeIfPresent([String].self, forKey: .contributors) ?? []
         )
     }
 
-    /// Every artist to *print* for this song, one entry per name: the credited
-    /// act, plus every guest.
-    ///
-    /// Deezer credits one artist per track and keeps the guests in
-    /// `contributors` — the track detail for "Ran To Atlanta" is a bare title
-    /// and a three-name contributor list, so there is nothing to read out of
-    /// the title. Library rows have only the title to go on, which is why that
-    /// stays as the fallback. Either way a Discover row now says what the
-    /// library says instead of a bare "Drake".
-    ///
-    /// Display only, and it has to stay that way: `id` is "title|artist" and
-    /// `stableTrackID` hashes it, so widening the stored credit would give the
-    /// song a different identity — a second library row, split play counts, and
-    /// a cache miss on a file already downloaded.
+    /// Every artist to print: the credited act plus guests. From `contributors`,
+    /// falling back to the title for library rows. Display only: `id` hashes
+    /// title|artist, so widening the stored credit would change the song's identity.
     public var displayArtists: [String] {
         if contributors.count > 1 { return contributors }
         return ImportService.displayArtists(title: title, artistName: artistName)
     }
 
-    /// What the song is *called*, guests included.
-    ///
-    /// Deezer files the guests in `contributors` and leaves them out of the
-    /// title — "Ran To Atlanta", where the song is published everywhere else as
-    /// "Ran To Atlanta (feat. Future & Molly Santana)". Printing the bare title
-    /// isn't a neutral choice: it silently renames the record.
-    ///
-    /// So the credit goes back on, and the reconstructed title is what gets
-    /// stored on the library row too. `id` stays built from the bare title, so
-    /// identity — and with it `stableTrackID`, the cache key and every playlist
-    /// that already points at this song — is untouched by any of this.
+    /// The title with guests, e.g. "Ran To Atlanta (feat. Future & Molly Santana)".
+    /// Deezer leaves them out. This is what gets stored; `id` stays on the bare title.
     public var displayTitle: String {
         // A title that already names its guests is left exactly as it is.
         guard ImportService.featuredArtists(inTitle: title).isEmpty else { return title }
@@ -107,8 +82,7 @@ public struct OnlineTrack: Identifiable, Hashable, Sendable, Codable {
         return "\(title) (feat. \(ImportService.joinNames(guests)))"
     }
 
-    /// The same credit as one comma-separated string, for the places that can't
-    /// lay out a name per link (menus, accessibility labels, subtitles).
+    /// The credit as one comma-separated string, for menus and labels.
     public var displayArtistName: String {
         displayArtists.joined(separator: ", ")
     }
@@ -124,24 +98,17 @@ public struct OnlineTrack: Identifiable, Hashable, Sendable, Codable {
         return String(scrubbed).prefix(80).description
     }
 
-    /// Deterministic Track.id so repeat plays of the same song aggregate in stats
-    /// instead of each looking like a brand-new track.
+    /// Deterministic Track.id so repeat plays aggregate in stats.
     public var stableTrackID: UUID { Self.stableID(for: id) }
 
-    /// SHA-256 the key and fold the first 16 bytes into a UUID. Same key → same UUID.
-    /// The identity key for a title and artist. One definition, because the
-    /// whole class of bug this file has seen is two places spelling it apart.
+    /// The identity key for a title and artist. One definition so callers can't
+    /// spell it differently.
     public nonisolated static func key(title: String, artistName: String) -> String {
         "\(title.lowercased())|\(artistName.lowercased())"
     }
 
-    /// Every key a stored row *might* have been minted under, most-likely last.
-    ///
-    /// Two, not one, because the stored title and the identity can legitimately
-    /// disagree: `asTrack` writes `displayTitle` — the title with its feature
-    /// credit printed back on — into the row, while the key stays on the source's
-    /// bare title. A row saved before that change has the bare title stored and
-    /// matches the first candidate; a row saved after it matches the second.
+    /// Every key a stored row might have been minted under, most likely last.
+    /// Older rows store the bare title; newer ones store displayTitle.
     public nonisolated static func candidateKeys(title: String, artistName: String) -> [String] {
         var keys = [key(title: title, artistName: artistName)]
         let bare = ImportService.bareTitle(title)
@@ -149,12 +116,7 @@ public struct OnlineTrack: Identifiable, Hashable, Sendable, Codable {
         return keys
     }
 
-    /// The key this row was actually minted under, proven by the hash, or nil.
-    ///
-    /// The proof is the point: `stableID` is a SHA-256, so a candidate that
-    /// lands on the row's own id cannot have done so by coincidence. Callers use
-    /// this instead of recomputing a single key and hoping, which is what made a
-    /// feature-credited song read as "shared from another library".
+    /// The key this row was minted under, proven by matching its SHA-256 id, or nil.
     public nonisolated static func identityKey(title: String, artistName: String, matching id: UUID) -> String? {
         candidateKeys(title: title, artistName: artistName).first { stableID(for: $0) == id }
     }
@@ -171,16 +133,14 @@ public struct OnlineTrack: Identifiable, Hashable, Sendable, Codable {
     }
 
     /// A provisional Track for display. Pass `localPath` when a cached file exists.
-    ///
-    /// The row is always `.online`: a cached file behind it is a convenience the
-    /// cache may reclaim at any time, not a change in what the song *is*.
+    /// Always `.online`; the cache can reclaim the file at any time.
     public func asTrack(artworkData: Data? = nil, localPath: String = "", deviceID: String) -> Track {
         var provenance = FileProvenance.onlinePlaceholder(sourceRef: id)
         provenance.fileHash  = id      // legacy readers still look for the key here
         provenance.localPath = localPath
         return Track(
             id: stableTrackID,
-            // The full title, not the source's bare one — see `displayTitle`.
+            // The full title (see displayTitle).
             title: displayTitle,
             artistName: artistName,
             albumTitle: albumTitle,

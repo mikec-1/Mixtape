@@ -1,10 +1,4 @@
-// MacPlaylistsView.swift
-// Mixtape — Mac/Content
-//
-// Playlists list for the macOS app.
-// Toolbar "+" creates a new playlist via an alert.
-// Clicking a row navigates to PlaylistDetailView.
-// Right-click → Delete or Rename.
+// Playlists list for macOS. Click to open; right-click to rename or delete.
 
 #if os(macOS)
 import SwiftUI
@@ -15,8 +9,7 @@ struct MacPlaylistsView: View {
     @EnvironmentObject private var engine:   PlaybackEngine
     @EnvironmentObject private var appState: MacAppState
     @EnvironmentObject private var deps:     AppDependencies
-    /// Directly: `deps.visibleSmartPlaylists` reads a nested ObservableObject,
-    /// which doesn't republish through `deps`.
+    /// Observed directly: `deps.visibleSmartPlaylists` reads a nested ObservableObject that doesn't republish.
     @EnvironmentObject private var smartService: SmartPlaylistService
 
     /// The unfiltered Library also lists saved albums and smart playlists.
@@ -39,12 +32,6 @@ struct MacPlaylistsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Outside the empty/non-empty branch below on purpose. A brand-new
-            // account is exactly the one most likely to have been invited to
-            // something, and putting the card inside `playlistList` would hide it
-            // from precisely that person behind the empty-library illustration.
-            PlaylistInviteInbox(horizontalPadding: 12)
-
             Group {
                 if items.isEmpty {
                     MacEmptyLibraryView(context: .playlists)
@@ -84,21 +71,15 @@ struct MacPlaylistsView: View {
 
     // MARK: - Ordering
 
-    /// Everything drawn below, already in `appState.playlistSortOrder` — the
-    /// same order and the same shared function
-    /// (`LibrarySortOrder.sorted(_:)`) the sidebar uses, so this overview can
-    /// never show a different order than the sidebar for the same choice.
-    /// Sorting and arranging both live in the sidebar now — see
-    /// `MacSidebarView` — this page is just a plain read of the result.
+    /// Sorted by `appState.playlistSortOrder` with the same `LibrarySortOrder.sorted(_:)` as the sidebar,
+    /// which owns sorting and arranging.
     private var sortedPlaylists: [Playlist] {
         appState.playlistSortOrder.sorted(library.playlists)
     }
 
     // MARK: - List
 
-    // A plain scrolling stack rather than a `List`: `List` insisted on its own
-    // selection/inset chrome, and a single click had to fight the row selection
-    // before it could navigate. Rows own their hover state and open on one click.
+    // A plain stack, not a `List`: List's selection chrome fought single-click navigation.
     private var items: [LibraryItem] {
         let all = appState.playlistSortOrder.mixed(showPlaylists ? library.playlists : [], albums: albums,
                                                    smart: showSmart ? deps.visibleSmartPlaylists : [])
@@ -127,7 +108,7 @@ struct MacPlaylistsView: View {
             .padding(.vertical, 8)
         }
         .scrollContentBackground(.hidden)
-        .background(Color.mixBackground)
+        .background(MixPageBackground())
         .onDisappear { appState.clearDeleteSelection() }
     }
 
@@ -159,10 +140,7 @@ struct MacPlaylistsView: View {
         PlaylistRowItem(
             playlist: playlist,
             isSelected: appState.selectedPlaylistIDs.contains(playlist.id),
-            // ⌘ and ⇧ pick rows; a plain click still opens the
-            // playlist, because that is what a single click has
-            // always done here and a list you could only enter
-            // after deselecting would be worse for the common case.
+            // ⌘/⇧ select rows; a plain click still opens the playlist.
             onSelect: { modifiers in
                 appState.selectPlaylist(playlist.id,
                                         in: deps.libraryService.playlists.map(\.id),
@@ -175,11 +153,7 @@ struct MacPlaylistsView: View {
             }
         )
         .environmentObject(deps.downloadManager)
-        // Drag a playlist onto the sidebar to move it there in the
-        // order — the same gesture as dragging songs onto a sidebar
-        // playlist, which is why the payload carries a prefix: those
-        // rows are a drop target both for tracks and for playlists.
-        // Reordering itself happens in the sidebar now, not here.
+        // Drag onto the sidebar to add it there. The prefix tells it apart from a track drop.
         .onDrag {
             appState.isDraggingTracks = false
             return NSItemProvider(
@@ -195,14 +169,11 @@ struct MacPlaylistsView: View {
 
 struct PlaylistRowItem: View {
     let playlist: Playlist
-    /// The first word of the grey line — "Smart Playlist" for the Smart tab.
+    /// First word of the grey line, e.g. "Smart Playlist".
     var kind = "Playlist"
-    /// Set for an album row, which is dressed as a playlist but has no
-    /// playlist behind it for `PlaylistArtwork` to find a cover on.
+    /// Album rows dressed as playlists, with no playlist for `PlaylistArtwork` to find a cover on.
     var album: Album? = nil
-    /// Whether this row is part of the current multi-selection — the picked
-    /// look, distinct from hover, so a selection stays visible once the pointer
-    /// moves off it.
+    /// In the current multi-selection; drawn distinct from hover.
     var isSelected: Bool = false
     /// A modified click: ⌘ toggles this row, ⇧ extends from the anchor.
     var onSelect: (NSEvent.ModifierFlags) -> Void = { _ in }
@@ -213,8 +184,7 @@ struct PlaylistRowItem: View {
     @ObservedObject private var meta = PlaylistMetadataService.shared
     @EnvironmentObject private var engine:  PlaybackEngine
     @EnvironmentObject private var library: LibraryService
-    /// Injected by the parent so the offline badge updates the moment a
-    /// download finishes — `deps` alone doesn't republish DownloadManager.
+    /// Injected so the offline badge updates when a download finishes; `deps` doesn't republish it.
     @EnvironmentObject private var downloads: DownloadManager
 
     @State private var isHovered = false
@@ -223,9 +193,7 @@ struct PlaylistRowItem: View {
         engine.queue.sourcePlaylistID == playlist.id && engine.queue.currentTrack != nil
     }
 
-    /// True when every song in the playlist is on disk. Reading
-    /// `downloads.downloadedTrackIDs` (not just calling `isPlaylistOffline`)
-    /// keeps the badge live as downloads land.
+    /// Every song is on disk. Reads `downloadedTrackIDs` so the badge stays live.
     private var isFullyDownloaded: Bool {
         downloads.isFullyDownloaded(playlist.trackIDs)
     }
@@ -254,10 +222,8 @@ struct PlaylistRowItem: View {
                     }
                 }
                 HStack(spacing: 5) {
-                    // The green arrow is the "this playlist is fully offline"
-                    // signal, matching the highlighted download button inside
-                    // the playlist itself.
-                    DownloadStateBadge(ids: playlist.trackIDs, downloads: downloads)
+                    // Green arrow: fully offline, matching the playlist's own download button.
+                    DownloadStateBadge(ids: playlist.trackIDs, downloads: downloads, showsProgress: downloads.isPlaylistOffline(playlist.id))
                     Text(subtitle)
                         .font(.system(size: 12))
                         .foregroundStyle(Color.mixTextSecondary)
@@ -281,14 +247,8 @@ struct PlaylistRowItem: View {
         )
         .contentShape(Rectangle())
         .mixTapAction { onOpen() }          // one click enters the playlist
-        // ⌘- and ⇧-clicks come from AppKit instead.
-        //
-        // SwiftUI drops a plain tap while a modifier key is held, so those
-        // clicks reached nothing at all — and declaring `TapGesture()
-        // .modifiers(…)` alongside it didn't deliver them either. The catcher
-        // makes itself invisible to hit testing for everything except a
-        // modified left click, so hover, plain clicks, dragging a playlist to
-        // the sidebar and the right-click menu all still belong to SwiftUI.
+        // ⌘- and ⇧-clicks come from AppKit: SwiftUI drops a plain tap while a modifier is held.
+        // The catcher only hit-tests modified left clicks, so everything else stays SwiftUI's.
         .overlay(ModifiedClickCatcher(onClick: onSelect, onRightClick: onContextClick))
         .onHover { hovering in
             isHovered = hovering
@@ -309,12 +269,9 @@ struct PlaylistRowItem: View {
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(iconBackground)
                 .frame(width: 48, height: 48)
-            // The same cover every other playlist surface draws, composed off
-            // the render path — and the one a smart playlist can wear too,
-            // since it isn't a library row `coverData` could look up.
+            // The shared playlist cover, which smart playlists can use too.
             if let album {
-                // The first song's cover, as the album page does: an album
-                // saved from Discover has no picture on the album row itself.
+                // The first song's cover: Discover albums have no artwork on the album row.
                 MacArtworkView(data: album.artworkData,
                                artworkRef: album.trackIDs.first.map { .track($0) } ?? .album(album.id),
                                size: 48, cornerRadius: 6)
@@ -322,7 +279,7 @@ struct PlaylistRowItem: View {
                 PlaylistArtwork(playlist: playlist, size: 48, cornerRadius: 6)
             }
 
-            // Hover play — fires playback without opening the playlist.
+            // Hover play, without opening the playlist.
             if isHovered, !playlist.trackIDs.isEmpty {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(Color.black.opacity(0.45))

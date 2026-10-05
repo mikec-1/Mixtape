@@ -1,6 +1,3 @@
-// Favorite.swift
-// Mixtape — Core Domain Models
-
 import Foundation
 
 public struct Favorite: Identifiable, Codable, Hashable, Sendable {

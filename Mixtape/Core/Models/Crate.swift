@@ -47,6 +47,15 @@ public enum CrateEntry: Identifiable {
 
     public var id: String { item.identity }
 
+    public var title: String {
+        switch self {
+        case .playlist(let p): return p.name
+        case .album(let a):    return a.title
+        case .artist(let a):   return a.name
+        case .online(let i):   return i.key
+        }
+    }
+
     public var item: CrateItem {
         switch self {
         case .playlist(let p): return .playlist(p.id)

@@ -26,7 +26,7 @@ public struct ListeningHistoryView: View {
             content
         }
         .onAppear { if plays.isEmpty { loadMore() } }
-        .confirmationDialog("Clear listening history?",
+        .mixConfirmationDialog("Clear listening history?",
                             isPresented: $showClearConfirm, titleVisibility: .visible) {
             Button("Clear History", role: .destructive) { clear() }
             Button("Cancel", role: .cancel) {}

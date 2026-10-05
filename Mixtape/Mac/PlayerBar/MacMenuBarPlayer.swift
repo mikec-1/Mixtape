@@ -2,9 +2,7 @@
 import SwiftUI
 import AppKit
 
-/// The menu bar mini-player: the whole player bar, folded into a popover for
-/// when the window is buried — plus a few things the app itself doesn't do.
-/// Switched off in Settings ▸ General.
+/// Menu bar mini-player: the player bar in a popover. Toggle in Settings > General.
 struct MacMenuBarPlayer: View {
     static let visibleKey = "mac.menuBarPlayer"
     /// The song's title beside the icon in the menu bar itself.
@@ -204,8 +202,7 @@ struct MacMenuBarPlayer: View {
     }
 }
 
-/// The line being sung right now, and the next one, dimmed. Its own view so
-/// the clock's five ticks a second only redraw these two lines.
+/// Current and next line, own view so clock ticks only redraw these.
 private struct MenuBarLyricLine: View {
     let track: Track
     @ObservedObject var clock: PlaybackClock
@@ -229,7 +226,7 @@ private struct MenuBarLyricLine: View {
     }
 }
 
-/// What sits in the menu bar: the Mixtape mark, and — if asked for — the song.
+/// The Mixtape mark, plus the song if enabled.
 struct MacMenuBarLabel: View {
     @ObservedObject var queue: QueueService
     @AppStorage(MacMenuBarPlayer.titleKey) private var showsTitle = false

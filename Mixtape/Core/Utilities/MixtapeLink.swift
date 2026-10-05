@@ -1,13 +1,7 @@
-// MixtapeLink.swift
-// Mixtape — Core/Utilities
-//
-// The links every Share hands out. They open the web player at mixtaped.tech,
-// which renders a preview card for anyone, signed in or not (mixtape-web
-// src/pages/{track,album,artist,playlist}).
-//
-// Library songs never had a Deezer id, so their links carry names instead and
-// the site resolves them — which is why no link here needs a request to build.
-// Playlists are the exception: see `PlaylistSharingService.linkShareID`.
+// Share links. They open the web player at mixtaped.tech, which renders a
+// preview for anyone (mixtape-web src/pages/{track,album,artist,playlist}).
+// Library songs use names instead of Deezer ids and the site resolves them.
+// Playlists: see `PlaylistSharingService.linkShareID`.
 
 import Foundation
 
@@ -54,8 +48,13 @@ public enum MixtapeLink {
         path("playlist", sharedID.uuidString.lowercased())
     }
 
-    /// A page on the site. `focus` is a row's `data-key` on /account, which the
-    /// page scrolls to and highlights — it survives the sign-in redirect.
+    /// One monthly recap, by its random share token. Only opens for others once its owner shows it on their profile.
+    public static func recap(shareID: String) -> URL { path("recap", shareID) }
+
+    /// A community post, by its 12-character share code.
+    public static func post(_ code: String) -> URL { path("post", code) }
+
+    /// A site page. `focus` is a `data-key` on /account to scroll to and highlight.
     public static func web(_ page: String, focus: String? = nil) -> URL {
         URL(string: "\(base)/\(page)" + (focus.map { "?focus=\($0)" } ?? ""))!
     }
@@ -66,8 +65,7 @@ public enum MixtapeLink {
         URL(string: "\(base)/\(kind)/\(id)")!
     }
 
-    /// Unreserved characters only: `URLComponents` leaves `+` bare, and the
-    /// site's URLSearchParams reads a bare `+` as a space ("Mumford + Sons").
+    /// Unreserved only: URLSearchParams reads a bare `+` as a space.
     private static let unreserved = CharacterSet(
         charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 

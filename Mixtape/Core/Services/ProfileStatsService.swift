@@ -1,9 +1,5 @@
-// ProfileStatsService.swift
-// Mixtape
-//
-// Publishes the user's listening stats to the public `profile_stats` table and
-// reads back any user's stats + shared playlists. An opt-out flag mirrors to the
-// `shared` column; when off we still push shared=false so RLS hides the row.
+// Publishes listening stats to `profile_stats` and reads back any user's stats
+// and shared playlists. When opted out we still push shared=false so RLS hides the row.
 
 import Foundation
 import Supabase
@@ -46,41 +42,34 @@ public struct PublicProfileStats: Codable, Sendable {
     public var hasData: Bool { totalPlays > 0 }
 }
 
-/// One track inside a public playlist. A visitor owns none of these songs, so the
-/// profile can only ever show the snapshot the owner published — this is a
-/// display-only mirror of `shared_playlists.tracks`, not a playable track.
+/// A song in a public playlist. Display-only snapshot of `shared_playlists.tracks`.
 public struct PublicPlaylistTrack: Codable, Identifiable, Sendable, Hashable {
     public let id: UUID
     public let title: String
     public let artist: String
     public let album: String
     public let duration: TimeInterval
+    public var sourceKey: String? = nil
+    public var edit: SongEdit? = nil
 }
 
 public struct PublicPlaylistSummary: Codable, Identifiable, Sendable, Hashable {
     /// The `shared_playlists` row id.
     public let id: UUID
-    /// The owner's local playlist id — how the owner's own device matches a
-    /// published row back to the playlist in their library.
+    /// The owner's local playlist id, used to match the row back on their device.
     public let playlistID: UUID
     public let name: String
     public let description: String?
     public let trackCount: Int
-    /// Published snapshot, so tapping a public playlist shows songs rather than
-    /// a dead end. Empty for rows published before the snapshot column existed.
+    /// Published snapshot. Empty for rows from before the column existed.
     public var tracks: [PublicPlaylistTrack] = []
-    /// Object path in the public `playlist-covers` bucket. Nil for a playlist
-    /// with no cover, and for rows published before covers were published at all.
+    /// Path in the public `playlist-covers` bucket. Nil when there's no cover.
     public var artworkPath: String? = nil
-    /// Whose playlist this is. Stamped by `fetchPublicPlaylists` rather than
-    /// selected, because the RPC is already called with the owner as its argument
-    /// — returning it as a column would mean changing a function signature (and
-    /// so a migration) to carry a value the caller had in hand the whole time.
-    ///
-    /// Needed because a published song's cover lives at a path derived from the
-    /// owner and the track; without this the snapshot says what the songs are but
-    /// not where to find their pictures.
+    /// Stamped by `fetchPublicPlaylists` (the RPC already takes the owner). Needed
+    /// to build per-song cover paths.
     public var ownerID: UUID? = nil
+    /// Set by `fetchPublicSummary`. Not a column, so not in CodingKeys.
+    public var isDub = false
 
     /// The owner's real cover, the same image they see. Everything else the
     /// client can show is a guess.
@@ -88,8 +77,7 @@ public struct PublicPlaylistSummary: Codable, Identifiable, Sendable, Hashable {
         artworkPath.flatMap { PlaylistSharingService.coverURL(path: $0) }
     }
 
-    /// The owner's cover for one song in this playlist, published alongside the
-    /// playlist itself. Nil when we don't know whose playlist this is.
+    /// The owner's published cover for one song. Nil when the owner is unknown.
     public func trackArtworkURL(_ trackID: UUID) -> URL? {
         ownerID.flatMap { PlaylistSharingService.trackCoverURL(ownerID: $0, trackID: trackID) }
     }
@@ -105,8 +93,7 @@ public struct PublicPlaylistSummary: Codable, Identifiable, Sendable, Hashable {
     }
 }
 
-/// The owner's view of one of their published rows: which local playlist it
-/// mirrors, and whether it's currently on their profile.
+/// Which local playlist a published row mirrors, and whether it's on the profile.
 public struct PlaylistVisibility: Codable, Sendable, Hashable {
     public let id: UUID
     public let playlistID: UUID
@@ -124,8 +111,7 @@ public struct PlaylistVisibility: Codable, Sendable, Hashable {
 @MainActor
 public final class ProfileStatsService {
 
-    // Deferred for the same reason as the other Supabase services: building
-    // the client costs ~1.3 s, and it must not land on the launch path.
+    // Deferred: building the client is slow and must stay off the launch path.
     private let clientProvider: () -> SupabaseClient
     private lazy var client: SupabaseClient = clientProvider()
     private let stats: ListeningStatsService
@@ -145,8 +131,7 @@ public final class ProfileStatsService {
 
     // MARK: Publish (own stats)
 
-    /// Computes the all-time snapshot and upserts it to `profile_stats`.
-    /// Best-effort — failures are logged, never thrown into the UI.
+    /// Computes the all-time snapshot and upserts it. Best-effort, only logs failures.
     public func publishMyStats(userID: UUID) async {
         let shared = isSharingEnabled
         let s = stats.compute(period: .allTime)
@@ -190,24 +175,19 @@ public final class ProfileStatsService {
         return rows.first
     }
 
-    /// The playlists `userID` has chosen to show on their profile. Goes through a
-    /// SECURITY DEFINER RPC because shared_playlists is member-only readable —
-    /// a visitor is not a member, and shouldn't become one just by looking.
+    /// Playlists `userID` shows on their profile, via a SECURITY DEFINER RPC since
+    /// shared_playlists is member-only readable.
     public func fetchPublicPlaylists(for userID: UUID) async throws -> [PublicPlaylistSummary] {
         let rows: [PublicPlaylistSummary] = try await client
             .rpc("get_user_public_playlists", params: ["target": userID])
             .execute()
             .value
-        // Every row belongs to the user we just asked about, so the owner is known
-        // here and nowhere downstream. See `PublicPlaylistSummary.ownerID`.
         return rows.map { var row = $0; row.ownerID = userID; return row }
     }
 
     // MARK: Visibility (own playlists)
 
-    /// Every published row the signed-in user owns, keyed by the LOCAL playlist id
-    /// so a library view can ask "is this one public?" without a second lookup.
-    /// Reads the table directly — the owner policy already allows it.
+    /// The signed-in user's published rows, keyed by local playlist id.
     public func fetchMyPlaylistVisibility(userID: UUID) async throws -> [UUID: PlaylistVisibility] {
         let rows: [PlaylistVisibility] = try await client
             .from("shared_playlists")
@@ -217,8 +197,7 @@ public final class ProfileStatsService {
             .execute()
             .value
 
-        // A playlist shared more than once would collide; the newest row wins,
-        // which matches what the profile query orders by.
+        // Duplicates: newest wins, matching the profile query's order.
         return Dictionary(rows.map { ($0.playlistID, $0) }, uniquingKeysWith: { _, b in b })
     }
 }

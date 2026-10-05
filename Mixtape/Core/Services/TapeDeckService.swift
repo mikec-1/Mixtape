@@ -24,7 +24,7 @@ public final class TapeDeckService: ObservableObject {
     private let engine: PlaybackEngine
     private let coordinator: OnlinePlaybackCoordinator
     private let library: LibraryService
-    private let toast: (String) -> Void
+    private let toast: (Toast) -> Void
     private let addToPlaylist: ([UUID], UUID) -> Void
     private var isSwitching = false
 
@@ -32,7 +32,7 @@ public final class TapeDeckService: ObservableObject {
     private struct Stored: Codable { var decks: [Deck]; var activeID: Int }
 
     init(engine: PlaybackEngine, coordinator: OnlinePlaybackCoordinator, library: LibraryService,
-         toast: @escaping (String) -> Void, addToPlaylist: @escaping ([UUID], UUID) -> Void) {
+         toast: @escaping (Toast) -> Void, addToPlaylist: @escaping ([UUID], UUID) -> Void) {
         self.engine        = engine
         self.coordinator   = coordinator
         self.library       = library
@@ -56,7 +56,7 @@ public final class TapeDeckService: ObservableObject {
               let current = decks.firstIndex(where: { $0.id == activeID }) else { return }
         // Mirroring another device: that queue isn't ours to park.
         guard engine.remoteTransport == nil else {
-            toast("Switch decks on the device that's playing")
+            toast(.failed("Switch decks on the device that's playing"))
             return
         }
         isSwitching = true

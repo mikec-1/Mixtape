@@ -1,9 +1,4 @@
-// MockAuthService.swift
-// Mixtape — Core Services
-//
-// In-memory auth service for tests and previews — any email + password
-// (min 8 chars) succeeds, no network calls.
-// Session is persisted to UserDefaults so the user stays logged in across launches.
+// In-memory auth for tests and previews. Any email and 8+ char password works.
 
 import Foundation
 import Combine
@@ -37,8 +32,7 @@ public final class MockAuthService: ObservableObject, AuthServiceProtocol {
 
     // MARK: - In-Memory Credentials
 
-    /// Last password used to sign in / sign up. Lets changePassword() validate
-    /// the supplied current password in the mock.
+    /// For checking the current password in changePassword().
     private var storedPassword: String?
 
     // MARK: - Init
@@ -148,8 +142,7 @@ public final class MockAuthService: ObservableObject, AuthServiceProtocol {
 
     // MARK: - Profile Picture
 
-    /// Mock: writes the image to a temp file and returns a `file://` URL so the
-    /// avatar actually renders in previews without a network round-trip.
+    /// Returns a file:// URL so previews render the avatar.
     public func uploadAvatar(_ data: Data, fileExtension: String) async throws -> URL {
         try await Task.sleep(for: .milliseconds(300))
         let ext = fileExtension.isEmpty ? "jpg" : fileExtension

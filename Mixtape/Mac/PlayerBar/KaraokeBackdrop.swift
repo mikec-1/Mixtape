@@ -1,20 +1,7 @@
-// KaraokeBackdrop.swift
-// Mixtape — Mac/PlayerBar
-//
-// The full-window background of karaoke mode: the album's colours, with a
-// handful of blooms of them drifting across so the screen is never quite still.
-//
-// It is painted by the root rather than by the lyrics view because the player
-// bar and top bar fade out in karaoke, and a background that stopped where the
-// lyrics stopped left black bands where those bars had been.
-//
-// Flat layers and nothing else: no `.blur`, no blend modes, no image.
-// A blur wide enough to matter on a full-screen view is a per-frame filter over
-// the whole window and it stalled the main thread hard enough to stop the
-// audio; a scaled-up thumbnail costs nothing but looks like a scaled-up
-// thumbnail; `plusLighter` forces the whole stack through an offscreen pass on
-// every frame of the drift. What's left is gradients moving on transforms,
-// which is the one version of this that is free.
+// Karaoke's full-window background: cover colours with drifting blooms.
+// Painted by the root so it covers where the bars were before they faded.
+// Flat gradient layers only: blur, blend modes and images cost a per-frame
+// offscreen pass here.
 
 #if os(macOS)
 import SwiftUI
@@ -23,9 +10,7 @@ struct KaraokeBackdrop: View {
 
     @EnvironmentObject private var queueService: QueueService
 
-    /// Up to five colours off the cover, saturated up. More than the two the
-    /// gradient used to have: a cover's second and third buckets are usually
-    /// neighbours of the first, so a two-stop wash reads as one flat colour.
+    /// Up to five cover colours, saturated. Two stops read as one flat colour.
     @State private var palette: [Color] = []
     @State private var breathing = false
     @State private var drift = false
@@ -36,8 +21,7 @@ struct KaraokeBackdrop: View {
                         : [palette[0], palette.count > 1 ? palette[1] : palette[0]]
     }
 
-    /// Colour for bloom `i`, wrapping round the palette so a one-colour cover
-    /// still gets light and dark blooms rather than three identical discs.
+    /// Wraps round the palette so a one-colour cover still varies.
     private func bloomColor(_ i: Int, lift: Double) -> Color {
         let source = palette.isEmpty ? Color(white: 0.3) : palette[i % palette.count]
         return Self.vivid(source, brightness: lift)
@@ -61,8 +45,7 @@ struct KaraokeBackdrop: View {
                     .offset(x: swirl ? side * 0.30 : -side * 0.10,
                             y: swirl ? side * 0.28 : -side * 0.30)
 
-                // A dark bloom rather than a full-screen scrim: it keeps the
-                // corners deep for the type without draining the whole wash.
+                // Dark bloom instead of a scrim: keeps corners deep for the text.
                 bloom(bloomColor(3, lift: 0.30), side: side * 1.1, opacity: 0.7)
                     .offset(x: drift ? side * 0.22 : -side * 0.22,
                             y: breathing ? side * 0.26 : -side * 0.18)
@@ -80,8 +63,7 @@ struct KaraokeBackdrop: View {
             withMixAnimation(.easeInOut(duration: 13).repeatForever(autoreverses: true)) { drift = true }
             withMixAnimation(.easeInOut(duration: 17).repeatForever(autoreverses: true)) { swirl = true }
         }
-        // An explicit zero-duration transaction: a `repeatForever` left attached
-        // to a view being torn down keeps animating it.
+        // Zero-duration transaction, or `repeatForever` keeps running on a torn-down view.
         .onDisappear {
             withAnimation(.linear(duration: 0)) { breathing = false; drift = false; swirl = false }
         }
@@ -95,8 +77,7 @@ struct KaraokeBackdrop: View {
             .opacity(opacity)
     }
 
-    /// Pushes a cover colour to a brightness the wash can use, saturating it on
-    /// the way: covers are mastered dark and a straight sample of one is mud.
+    /// Brightens and saturates a cover colour; raw samples are muddy.
     private static func vivid(_ color: Color, brightness factor: Double) -> Color {
         guard let rgb = NSColor(color).usingColorSpace(.deviceRGB) else { return color }
         var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
@@ -106,10 +87,7 @@ struct KaraokeBackdrop: View {
                      brightness: min(0.95, max(0.05, Double(b) * factor)))
     }
 
-    /// The wash as the bottom of the window sees it, for chrome that has to sit
-    /// on the backdrop and can't be transparent (the player bar has the lyrics
-    /// scrolling underneath it). Same palette, same saturation push — so the bar
-    /// reads as part of the gradient instead of a slab laid over it.
+    /// The wash at the bottom of the window, for opaque chrome like the player bar.
     static func chromeTint(for artwork: Data?) -> Color {
         let palette = ArtworkColors.dominantColors(from: artwork, count: 5)
         guard let first = palette.first else { return Color(white: 0.12) }

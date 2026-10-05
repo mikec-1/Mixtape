@@ -1,8 +1,4 @@
-// SyncMetadata.swift
-// Mixtape — Core Domain Models
-//
-// Embedded in every syncable entity.
-// Tracks the record's relationship with the Supabase backend.
+// Sync state embedded in every syncable entity.
 
 import Foundation
 
@@ -12,14 +8,13 @@ import Foundation
 public enum SyncStatus: String, Codable, Hashable, CaseIterable {
     /// Created locally; no sync account exists or sync not yet attempted.
     case localOnly
-    /// Queued for upload — local changes exist that haven't reached the server yet.
+    /// Local changes waiting to upload.
     case pending
     /// Local record matches the server's last-known state.
     case synced
     /// Local record has been modified since last sync; upload needed.
     case modified
-    /// Server record changed AND local record also changed since last sync.
-    /// Requires conflict resolution before next sync.
+    /// Changed on both sides since the last sync.
     case conflict
     /// Soft-deleted locally; server deletion pending confirmation.
     case deleted
@@ -27,13 +22,11 @@ public enum SyncStatus: String, Codable, Hashable, CaseIterable {
 
 // MARK: - Sync Metadata
 
-/// Embedded in every entity that participates in cloud sync.
-/// Updated by `SyncService` — do not mutate directly from the UI.
+/// Written by SyncService only.
 public struct SyncMetadata: Codable, Hashable {
 
     // MARK: Server identity
-    /// The server-side UUID assigned by Supabase on first successful upload.
-    /// `nil` until the record has been synced at least once.
+    /// Server id, nil until first upload.
     public var serverID: String?
 
     // MARK: Status
@@ -48,8 +41,7 @@ public struct SyncMetadata: Codable, Hashable {
     public var lastSyncedAt: Date?
 
     // MARK: Device identity
-    /// Stable per-device identifier so the server can attribute changes.
-    /// Stored in UserDefaults on first launch (no auth required).
+    /// Per-device id, stored in UserDefaults.
     public var deviceID: String
 
     // MARK: Initialisers
@@ -111,31 +103,23 @@ public struct SyncMetadata: Codable, Hashable {
 
 // MARK: - File Provenance
 
-/// Additional sync metadata for entities backed by an audio file.
-/// Enables content-addressed deduplication and lazy remote download.
+/// File metadata for audio-backed entities.
 public nonisolated struct FileProvenance: Codable, Hashable, Sendable {
-    /// SHA-256 hex digest of the raw audio file bytes.
-    /// Used for deduplication: if the server already has this hash, no upload is needed.
+    /// SHA-256 of the file, used to skip duplicate uploads.
     public var fileHash: String
     /// File size in bytes.
     public var fileSize: Int64
-    /// Path of the local file. Historically Documents-relative; imports now live
-    /// in Application Support, so resolve it through `AudioPaths`, never by
-    /// appending to a directory yourself.
+    /// Resolve through AudioPaths, not by appending to a directory.
     public var localPath: String
-    /// Supabase Storage object key (e.g. `audio/<userID>/<hash>.m4a`).
-    /// `nil` until the file has been uploaded.
+    /// Storage key, nil until uploaded.
     public var remoteKey: String?
     /// Whether the file has been successfully uploaded to Supabase Storage.
     public var uploaded: Bool
     /// When this device last downloaded the file from Supabase Storage.
     public var downloadedAt: Date?
-    /// Where the audio comes from, and therefore how it gets onto disk.
-    /// Stored rather than inferred — see `TrackOrigin`.
+    /// Stored, see TrackOrigin.
     public var origin: TrackOrigin
-    /// Resolver key for `.online` rows: the provider's video id once we've
-    /// picked one, otherwise the `"title|artist"` search key. This is the whole
-    /// content of an online placeholder — the row has no bytes, only this.
+    /// Resolver key for online rows: the video id once picked, else "title|artist".
     public var sourceRef: String?
 
     /// Convenience init for freshly imported files (not yet uploaded).
@@ -150,8 +134,7 @@ public nonisolated struct FileProvenance: Codable, Hashable, Sendable {
         self.sourceRef    = nil
     }
 
-    /// A Discover song saved to the library: metadata and a way to fetch it,
-    /// nothing else. No path, no size, no upload.
+    /// A saved Discover song: metadata and a source ref only.
     public static func onlinePlaceholder(sourceRef: String) -> FileProvenance {
         FileProvenance(
             fileHash:     "",
@@ -165,12 +148,19 @@ public nonisolated struct FileProvenance: Codable, Hashable, Sendable {
         )
     }
 
-    /// A file in a watched folder, played where it lies.
-    ///
-    /// The path is absolute and points outside every Mixtape directory, which is
-    /// deliberate: `AudioPaths.resolve` handles absolute paths, so playback works
-    /// without a copy. `uploaded` is false and stays false — nothing ever offers
-    /// these bytes to Supabase.
+    /// An edit with no file on this device yet; rendered from its recipe when played.
+    public static let editPlaceholder = FileProvenance(
+        fileHash:     "",
+        fileSize:     0,
+        localPath:    "",
+        remoteKey:    nil,
+        uploaded:     false,
+        downloadedAt: nil,
+        origin:       .edit,
+        sourceRef:    nil
+    )
+
+    /// A watched-folder file, played in place. Absolute path, never uploaded.
     public nonisolated static func localFile(path: String, fileSize: Int64) -> FileProvenance {
         FileProvenance(
             fileHash:     "",
@@ -207,13 +197,8 @@ public nonisolated struct FileProvenance: Codable, Hashable, Sendable {
 
     // MARK: Legacy inference
 
-    /// What a row written before `origin` existed must have been.
-    ///
-    /// Only the persistence layer should call this, and only when the stored
-    /// origin is absent. It reproduces the old heuristics exactly — an
-    /// `OnlineCache` path or a `"title|artist"` hash meant Discover, empty
-    /// everything meant an unresolvable shared row — so a store written by an
-    /// older build reads back the way it always did.
+    /// Guesses the origin for rows written before it was stored.
+    /// Persistence layer only.
     public static func inferOrigin(
         localPath: String,
         fileHash: String,

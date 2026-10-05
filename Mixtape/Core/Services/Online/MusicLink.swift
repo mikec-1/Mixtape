@@ -1,17 +1,6 @@
-// MusicLink.swift
-// Mixtape — Core/Services/Online
-//
-// Turns a pasted string into "which song does this point at".
-//
-// Pure and platform-free, and deliberately generous about what it accepts: a
-// link arrives by whatever route the user shared it, so it can carry an `?si=`
-// tracking suffix, a `&list=` playlist, an `intl-de` locale segment, or a
-// sentence wrapped around it ("this one 🔥 https://…"). None of that changes
-// which song is meant, so none of it is a reason to refuse.
-//
-// What it will *not* do is guess. An id has to be the right shape — 11 URL-safe
-// characters for YouTube, 22 base-62 for Spotify — because the alternative is
-// resolving a plausible-looking mistake into someone else's song.
+// Parses a pasted string into a song link. Tolerates tracking params, locale
+// segments and surrounding text. Ids must be the right shape (11 chars for
+// YouTube, 22 base-62 for Spotify) rather than guessed.
 
 import Foundation
 
@@ -32,19 +21,10 @@ public nonisolated enum MusicLink: Equatable, Sendable {
         return nil
     }
 
-    /// True when `raw` contains something worth trying. Used to enable the
-    /// button without doing the parse twice.
+    /// Cheap check for enabling the button.
     public static func looksLikeLink(_ raw: String) -> Bool { parse(raw) != nil }
 
-    /// The Spotify id in `raw`, in any of its forms — for callers that already
-    /// know they have a track link and just want the id.
-    ///
-    /// "Any form" includes a bare id, which `parse` deliberately refuses: on a
-    /// pasted string a naked 22-character word is far more likely to be junk
-    /// than a track, but a caller that has already been handed an id is not
-    /// guessing. Leaving that out was a real bug — `LinkImportService` parses
-    /// the link, then passes the extracted id to `SpotifyClient.fetchTrack`,
-    /// which re-parsed it and got nil back, so *every* Spotify link failed.
+    /// The Spotify id in any form, including a bare id, which parse refuses.
     public static func spotifyTrackID(fromAnyForm raw: String) -> String? {
         if case .spotifyTrack(let id)? = parse(raw) { return id }
         return base62ID(raw.trimmingCharacters(in: .whitespacesAndNewlines), length: 22)
@@ -52,10 +32,7 @@ public nonisolated enum MusicLink: Equatable, Sendable {
 
     // MARK: - Tokenising
 
-    /// The parts of `raw` that could be a link, longest-shot last: the whole
-    /// trimmed string first (the overwhelmingly common paste), then each
-    /// whitespace-separated word, so a link buried in a shared message still
-    /// resolves.
+    /// The whole string first, then each word.
     private static func tokens(in raw: String) -> [String] {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
@@ -68,22 +45,20 @@ public nonisolated enum MusicLink: Equatable, Sendable {
     // MARK: - Spotify
 
     private static func spotifyTrackID(_ token: String) -> String? {
-        // spotify:track:<id> — the URI form, copied by the desktop app.
+        // URI form.
         if let range = token.range(of: "track:") {
             return base62ID(String(token[range.upperBound...]), length: 22)
         }
         guard let url = url(from: token),
               let host = url.host?.lowercased(),
               host == "spotify.com" || host.hasSuffix(".spotify.com") else { return nil }
-        // /track/<id>, but also /intl-de/track/<id> and /embed/track/<id> — so
-        // find the segment *after* "track" rather than assuming a position.
+        // Find the segment after "track", since locale and embed paths shift it.
         let parts = url.path.split(separator: "/").map(String.init)
         guard let index = parts.firstIndex(of: "track"), index + 1 < parts.count else { return nil }
         return base62ID(parts[index + 1], length: 22)
     }
 
-    /// Spotify ids are exactly 22 base-62 characters. Anything shorter is a
-    /// truncated paste and anything longer has query junk still attached.
+    /// Exactly 22 base-62 chars.
     private static func base62ID(_ raw: String, length: Int) -> String? {
         let id = raw.prefix { $0.isASCII && ($0.isLetter || $0.isNumber) }
         return id.count == length ? String(id) : nil
@@ -100,12 +75,11 @@ public nonisolated enum MusicLink: Equatable, Sendable {
         guard isShort || isLong else { return nil }
 
         let parts = URLComponents(url: url, resolvingAgainstBaseURL: false)
-        // youtu.be/<id> — the whole path is the id.
+        // youtu.be: the path is the id.
         if isShort {
             return videoID(url.path.split(separator: "/").first.map(String.init) ?? "")
         }
-        // The watch page carries it in ?v=; everything else (shorts, embeds,
-        // live, the old /v/) puts it in the path directly after the kind.
+        // ?v= on watch pages, otherwise the path segment after the kind.
         if let v = parts?.queryItems?.first(where: { $0.name == "v" })?.value,
            let id = videoID(v) {
             return id
@@ -127,10 +101,7 @@ public nonisolated enum MusicLink: Equatable, Sendable {
 
     // MARK: - Shared
 
-    /// `URL(string:)` accepts almost anything, including bare words, so this
-    /// also insists on a scheme — a token has to look like a link before it can
-    /// be one. Schemeless `open.spotify.com/track/…` still gets a chance,
-    /// because that's what a browser address bar hands you.
+    /// Requires a scheme, except schemeless open.spotify.com.
     private static func url(from token: String) -> URL? {
         let cleaned = token.trimmingCharacters(in: CharacterSet(charactersIn: "<>\"'“”‘’(),."))
         if let url = URL(string: cleaned), url.scheme != nil, url.host != nil { return url }

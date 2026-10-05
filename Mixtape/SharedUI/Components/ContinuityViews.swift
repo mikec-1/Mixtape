@@ -1,9 +1,5 @@
-// ContinuityViews.swift
-// Mixtape — SharedUI/Components
-//
-// The device picker and "Playing on" line for continuity playback. Each view
-// observes `ContinuityService` itself — `deps` doesn't rebroadcast it — so the
-// bars hosting them redraw for a device change and nothing else does.
+// Continuity device picker and "Playing on" line. Each observes
+// `ContinuityService` itself since `deps` doesn't rebroadcast it.
 
 import SwiftUI
 
@@ -50,15 +46,12 @@ struct PlayingOnText: View {
     }
 }
 
-/// The accent band the player bars wear while another device has the music —
-/// Spotify's green strip. Full width, one line, always legible: the name used
-/// to be a truncated caption competing with the artist line inside the bar.
+/// Accent strip on the player bars while another device is playing.
 struct RemoteDeviceStrip: View {
     let device: ContinuityService.Device
     var alignment: Alignment = .trailing
     var hPadding: CGFloat = 14
-    /// Tapping the strip is the second way into the picker, so the name is a
-    /// control and not just a label.
+    /// Tapping opens the picker.
     var onTap: (() -> Void)? = nil
 
     var body: some View {
@@ -81,17 +74,11 @@ struct RemoteDeviceStrip: View {
 
 // MARK: - Picker
 
-/// Every open device, the one playing first. Picking one moves playback there.
-///
-/// Spotify Connect's shape, and its spacing: the device in charge is a card at
-/// the top with what it is playing, everything else is a plain list underneath,
-/// and the output route and audio quality get their own sections rather than
-/// being crammed into a footnote. Rows are tall and sections are far apart on
-/// purpose — the whole sheet is four decisions, not a dense table.
+/// Every open device, current one first; picking one moves playback there.
+/// Spotify Connect layout: current device card, other devices, output, quality.
 struct DevicePickerList: View {
     @ObservedObject var continuity: ContinuityService
-    /// The Settings → Downloads quality, changeable from here. Observed
-    /// directly: `deps` deliberately doesn't republish the download manager.
+    /// Observed directly: `deps` doesn't republish the download manager.
     @ObservedObject var downloads: DownloadManager
     var onPick: () -> Void = {}
 
@@ -113,8 +100,7 @@ struct DevicePickerList: View {
             } else {
                 section("Select Another Device") {
                     ForEach(others) { device in
-                        // No song line here: picking a device plays what is
-                        // playing now, so what it *was* doing is noise.
+                        // No song line: picking a device plays what's playing now.
                         DeviceRow(device: device, kind: kind(device)) {
                             continuity.play(on: device.id == continuity.me.id ? nil : device)
                             onPick()
@@ -124,11 +110,10 @@ struct DevicePickerList: View {
             }
 
             VStack(alignment: .leading, spacing: 2) {
-                Divider().overlay(Color.mixSeparator).padding(.bottom, 4)
-                JamRow(onPick: onPick)
-                #if os(iOS)
-                RouteButton()
-                #endif
+                Divider().overlay(Color.mixSeparator).padding(.bottom, 8)
+                JamTiles(onPick: onPick)
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, 6)
                 QualityRow(downloads: downloads)
             }
 
@@ -138,14 +123,11 @@ struct DevicePickerList: View {
                 .padding(.horizontal, 8)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        // The popover takes key the moment it opens and AppKit draws its focus
-        // ring around whichever row got focus — the purple rectangle around the
-        // current device. Same treatment as the Mac search results.
+        // Hides the focus ring AppKit draws when the popover takes key.
         .focusEffectDisabled()
     }
 
-    /// The device's own name is in the row title, so this line carries what the
-    /// title can't: what kind of machine it is, and what it plays at.
+    /// Device type and quality; the name is in the title.
     private func kind(_ device: ContinuityService.Device) -> String {
         guard device.id != continuity.me.id else {
             return "This \(device.kindName) · \(downloads.downloadQuality.title)"
@@ -170,8 +152,7 @@ struct DevicePickerList: View {
 
 // MARK: - Rows
 
-/// The device in charge: a tinted card, because "where is the music" is the one
-/// question this picker exists to answer and a row in a list doesn't say it.
+/// Tinted card for the device currently playing.
 private struct CurrentDeviceCard: View {
     let device: ContinuityService.Device
     let kind: String
@@ -210,9 +191,7 @@ private struct CurrentDeviceCard: View {
                 .accessibilityHidden(true)
         }
         .padding(14)
-        // Explicit, not inferred from the Spacer: as a content-sized card it
-        // sat a few points in from the leading edge the rows use, which is the
-        // lopsided gap around it.
+        // Explicit so it lines up with the rows' leading edge.
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.mixPrimary.opacity(0.12),
                     in: RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -267,9 +246,9 @@ private struct DeviceRow: View {
     }
 }
 
-/// Start a Jam, or open the one this device is in. Reads `deps` so the
-/// picker's call sites stay as they are.
-private struct JamRow: View {
+/// Start or open the Jam, the system output picker on iOS, and Jams nearby.
+/// Reads `deps` so the picker's call sites stay as they are.
+private struct JamTiles: View {
     @EnvironmentObject private var deps: AppDependencies
     let onPick: () -> Void
 
@@ -280,33 +259,30 @@ private struct JamRow: View {
         let onPick: () -> Void
 
         var body: some View {
-            Button {
-                onPick()
-                jam.present()
-            } label: {
-                PickerTile(icon: "person.2.wave.2", title: title, subtitle: subtitle)
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 10) {
+                    JamTile(icon: "person.2.wave.2", title: title, active: jam.session != nil) {
+                        onPick()
+                        jam.present()
+                    }
+                    #if os(iOS)
+                    RouteButton()
+                    #endif
+                }
+                NearbyJams(jam: jam, onPick: onPick)
             }
-            .buttonStyle(.plain).mixHandCursor()
+            .onAppear { jam.nearby.startBrowsing() }
+            .onDisappear { jam.nearby.stopBrowsing() }
         }
 
         private var title: String {
             guard let s = jam.session else { return "Start a Jam" }
             return s.isHost ? "Your Jam" : "\(s.hostName)\u{2019}s Jam"
         }
-
-        private var subtitle: String {
-            guard let s = jam.session else { return "Listen together with friends" }
-            let n = Set(jam.members.map(\.userID)).count
-            return "Code \(s.code) · \(n) \(n == 1 ? "person" : "people")"
-        }
     }
 }
 
-/// Audio quality, changeable in place. It used to be a read-only footnote —
-/// but the one thing anyone wants after reading "Low" is to change it, and
-/// Settings → Downloads is three taps away from here. Same shape as a Settings
-/// picker row: a real `Picker`, not a `Menu` wrapping the row (macOS flattens a
-/// custom menu label and the row lost its tile, subtitle and value).
+/// Editable quality. A real `Picker`, not a `Menu`, which macOS flattens.
 private struct QualityRow: View {
     @ObservedObject var downloads: DownloadManager
 
@@ -331,8 +307,7 @@ private struct QualityRow: View {
     }
 }
 
-/// The shared look of the two non-device rows: same height and tile as a
-/// `DeviceRow`, so the sheet reads as one list rather than three widgets.
+/// Same height and tile as `DeviceRow`.
 private struct PickerTile<Trailing: View>: View {
     let icon: String
     let title: String
@@ -355,8 +330,7 @@ private struct PickerTile<Trailing: View>: View {
                     Text(subtitle)
                         .font(.mixSubtext)
                         .foregroundStyle(Color.mixTextSecondary)
-                        // Wraps rather than truncates: the quality lines are
-                        // sentences, and "AAC 96 kbps — ab…" says nothing.
+                        // Wraps instead of truncating.
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -371,7 +345,7 @@ private struct PickerTile<Trailing: View>: View {
 }
 
 extension PickerTile where Trailing == Chevron {
-    /// A row that is itself the control — a chevron, no value.
+    /// Chevron, no value.
     init(icon: String, title: String, subtitle: String? = nil) {
         self.init(icon: icon, title: title, subtitle: subtitle) { Chevron() }
     }
@@ -392,16 +366,13 @@ struct Chevron: View {
 import AVKit
 import Combine
 
-/// Bluetooth, AirPlay and wired output — the system's picker, wearing a row.
-/// `AVRoutePickerView` is the only way to raise it, so it is laid invisibly
-/// over the row rather than being driven by a tap handler.
+/// System output picker. `AVRoutePickerView` is laid invisibly over the row
+/// since it's the only way to raise it.
 private struct RouteButton: View {
     @State private var output = AVAudioSession.sharedInstance().currentRoute.outputs.first
 
     var body: some View {
-        PickerTile(icon: "airplayaudio",
-                   title: "Bluetooth & AirPlay",
-                   subtitle: output?.portName)
+        JamTileLabel(icon: "airplayaudio", title: output?.portName ?? "Bluetooth & AirPlay")
             .overlay { RoutePicker(label: "Bluetooth and AirPlay") }
             .onReceive(NotificationCenter.default
                 .publisher(for: AVAudioSession.routeChangeNotification)
@@ -428,24 +399,18 @@ struct RoutePicker: UIViewRepresentable {
     }
 }
 
-/// The devices control for iOS, and the player bars' output indicator.
-///
-/// Spotify's rule: with nothing but the built-in speaker the control is just
-/// the devices glyph; the moment a remote device or an external output takes
-/// the sound, the glyph is replaced by that thing's name in the accent colour.
-/// Either way a tap opens the picker — the system route sheet is a row inside
-/// it, not this button's job.
+/// Devices button. Just the glyph on the built-in speaker, otherwise the active
+/// output's name in accent. Tap opens the picker.
 struct DevicesButton: View {
     @ObservedObject var continuity: ContinuityService
     @ObservedObject var downloads: DownloadManager
     var size: CGFloat = 18
-    /// Off in the mini player, where the accent strip already names the remote
-    /// device and there is no room for a second label.
+    /// Off in the mini player, where the strip already names the device.
     var showsName: Bool = false
     @State private var showPicker = false
     @State private var output = AVAudioSession.sharedInstance().currentRoute.outputs.first
 
-    /// Built-in speaker/receiver isn't "an output" to anyone — it's just the phone.
+    /// The built-in speaker/receiver doesn't count.
     private var external: AVAudioSessionPortDescription? {
         guard let output, output.portType != .builtInSpeaker,
               output.portType != .builtInReceiver else { return nil }
@@ -492,9 +457,7 @@ struct DevicesButton: View {
             output = AVAudioSession.sharedInstance().currentRoute.outputs.first
         }
         .sheet(isPresented: $showPicker) {
-            // The app's own sheet chrome rather than a hand-rolled one: title,
-            // drag indicator and close control where every other sheet keeps
-            // them. `.medium` so the sections have room to breathe.
+            // Standard sheet chrome. `.medium` detent.
             MixSheet(title: "Devices",
                      subtitle: "Play on any device signed in to this account.",
                      size: .medium) {

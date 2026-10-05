@@ -1,9 +1,5 @@
-// ListeningStatsView.swift
-// Mixtape — Features/Stats
-//
-// "Year in Mixtape" — a read-only listening dashboard over the play history:
-// headline counts, top tracks & artists and a listening-by-hour chart.
-// Period-switchable (30 days / this year / all time).
+// "Year in Mixtape": a read-only dashboard over play history. Counts, top tracks and
+// artists, and listening by hour, for 30 days / this year / all time.
 
 import SwiftUI
 import Charts
@@ -44,9 +40,7 @@ public struct ListeningStatsView: View {
         stats = deps.statsService.compute(period: period)
     }
 
-    /// No `ScrollView` and no margins of its own — the sheet owns both, which
-    /// is what lets the header and footer hairlines know when they're actually
-    /// separating something.
+    /// No ScrollView or margins: the sheet owns both.
     @ViewBuilder
     private var content: some View {
         VStack(alignment: .leading, spacing: 24) {
@@ -95,9 +89,7 @@ public struct ListeningStatsView: View {
         let hoursLabel: String = minutes >= 60
             ? "\(minutes / 60)h \(minutes % 60)m"
             : "\(minutes)m"
-        // Three columns rather than the two this had as a 2×2: with the streak
-        // card gone the fourth slot is empty, and a half-width card sitting
-        // alone under a full row reads as something that failed to load.
+        // Three columns so there's no lone card on a second row.
         return LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 12) {
             statCard(value: "\(stats.totalPlays)", label: "Plays", icon: MixtapeIcons.play)
             statCard(value: hoursLabel, label: "Listened", icon: "hourglass")
@@ -203,6 +195,7 @@ public struct ListeningStatsView: View {
                     context.fill(Path(roundedRect: rect, cornerRadius: min(2, side / 4)), with: .color(fill))
                 }
             }
+            .gpuRendered()
             .aspectRatio(CGFloat(columns) / 7, contentMode: .fit)
             .frame(maxHeight: 7 * 16 + 6 * 2)
             .frame(maxWidth: .infinity, alignment: .leading)

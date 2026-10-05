@@ -1,17 +1,6 @@
-// SpotifyConnectionView.swift
-// Mixtape — Features/Settings
-//
-// Spotify as a *connection*, next to Last.fm, rather than a menu item filed
-// under "add music".
-//
-// Importing a Spotify library isn't one action, it's an account you link once
-// and then draw from: the token lives in the keychain, it grants read access to
-// somebody's playlists, and until now nothing in the app said whose account it
-// was or offered a way to unlink it. That's a connection, and connections have a
-// home. The import itself opens in place — the picker fills the settings pane
-// instead of a window floating over the app, because a listing of forty
-// playlists deserves the width and because a sheet over a sheet on iOS was
-// always one layer too many.
+// Spotify as a connection, next to Last.fm: an account you link once and import from.
+// Shows whose account it is and how to unlink. The picker opens in the settings pane,
+// not a window or a sheet over a sheet.
 
 import SwiftUI
 
@@ -21,15 +10,11 @@ import SwiftUI
 private struct ProfileLoadKey: Equatable {
     let isAuthorized: Bool
     let hasProfile: Bool
-    /// So the load is tried again the moment Spotify starts answering; without
-    /// it a card that failed under a rate limit stayed failed until the pane
-    /// was left and reopened.
+    /// Retries the load when Spotify stops throttling.
     let throttled: Bool
 }
 
-/// The Spotify block inside the Connections pane. `openLibrary` hands control
-/// back to the pane, which swaps in `SpotifyLibraryPage` where its own content
-/// was — the "in the window, not over it" part.
+/// The Spotify block in Connections. `openLibrary` asks the pane to swap in `SpotifyLibraryPage`.
 struct SpotifyConnectionGroup: View {
 
     @EnvironmentObject private var deps: AppDependencies
@@ -41,6 +26,8 @@ struct SpotifyConnectionGroup: View {
     @State private var connectError: String?
     @State private var showLinkImport = false
     @State private var confirmDisconnect = false
+    @State private var historyBusy = false
+    @State private var historyError: String?
     @ObservedObject private var throttle = SpotifyThrottle.shared
 
     var body: some View {
@@ -52,10 +39,7 @@ struct SpotifyConnectionGroup: View {
                 SpotifyAccountRow(profile: auth.profile,
                                   throttled: throttle.isThrottled)
 
-                // First row in the card, above everything it stops working.
-                // While this stands, importing and syncing fail — and the
-                // failure is silent enough that people conclude Mixtape is
-                // broken rather than that Spotify is busy.
+                // First row: while throttled, import and sync fail quietly.
                 if let sentence = throttle.sentence {
                     SettingsErrorRow(message: sentence)
                 }
@@ -89,6 +73,17 @@ struct SpotifyConnectionGroup: View {
 
                 SpotifyLikesPushRow(auth: auth, onOpen: openLikesPush)
 
+                SettingsToggleRow(id: "connections.spotifyHistory",
+                                  title: "Add Spotify Listening to Recaps",
+                                  subtitle: "Checks what you've played on Spotify every half hour, even while Mixtape is closed.",
+                                  icon: "clock.arrow.circlepath",
+                                  isOn: Binding(get: { auth.historySync }, set: setHistorySync),
+                                  isEnabled: !historyBusy)
+
+                if let historyError {
+                    SettingsErrorRow(message: historyError)
+                }
+
                 SettingsButtonRow(id: "connections.spotifyDisconnect",
                                   title: "Disconnect",
                                   icon: "xmark.circle",
@@ -115,11 +110,7 @@ struct SpotifyConnectionGroup: View {
                 }
             }
         }
-        // Keyed on whether there *is* a profile, not just on being connected.
-        // Re-consenting clears the cached account — a new grant can belong to a
-        // different one — and with the id keyed on `isAuthorized` alone, which
-        // never changed, nothing asked for the new one: the card sat on
-        // "Reading your account…" until the pane was left and reopened.
+        // Keyed on having a profile too: re-consenting clears the cached account and has to refetch it.
         .task(id: ProfileLoadKey(isAuthorized: auth.isAuthorized,
                                  hasProfile: auth.profile != nil,
                                  throttled: throttle.isThrottled)) {
@@ -141,6 +132,22 @@ struct SpotifyConnectionGroup: View {
         }
     }
 
+    private func setHistorySync(_ on: Bool) {
+        historyError = nil
+        historyBusy = true
+        Task {
+            do {
+                try await auth.setHistorySync(on)
+            } catch SpotifyAuthError.cancelled {
+            } catch let error as SpotifyAuthError {
+                historyError = error.errorDescription
+            } catch {
+                historyError = "Couldn't save that. Please try again."
+            }
+            historyBusy = false
+        }
+    }
+
     private func connect() {
         connectError = nil
         isConnecting = true
@@ -158,9 +165,7 @@ struct SpotifyConnectionGroup: View {
     }
 }
 
-/// Who the connection belongs to: avatar, name, and the details Spotify gives
-/// us about the account. Deliberately the first row in the card — a linked
-/// account should say whose it is before it says what it can do.
+/// Who the connection belongs to: avatar, name and account details. First row in the card.
 private struct SpotifyAccountRow: View {
 
     let profile: SpotifyProfile?
@@ -183,9 +188,7 @@ private struct SpotifyAccountRow: View {
                         .foregroundStyle(Color.mixTextTertiary)
                         .lineLimit(1)
                 } else {
-                    // The name is still on its way. Saying "Connected" twice
-                    // would be worse than saying nothing — and when it is never
-                    // coming, "Reading your account…" is a spinner that lies.
+                    // No second "Connected"; if the name isn't coming, don't show a spinner either.
                     Text(throttled
                          ? "Spotify is rate-limiting, can't read your account"
                          : "Reading your account\u{2026}")
@@ -214,9 +217,7 @@ private struct SpotifyAccountRow: View {
         .frame(minHeight: SettingsMetrics.rowMinHeight)
     }
 
-    /// "@username · 1,240 followers", dropping whichever halves Spotify didn't
-    /// send. The id is worth showing on its own: display names aren't unique
-    /// and someone with two accounts can only tell them apart by it.
+    /// "@username · 1,240 followers", dropping missing halves. The id tells two accounts apart.
     private var detail: String? {
         guard let profile else { return nil }
         var parts: [String] = []
@@ -255,16 +256,12 @@ private struct SpotifyAccountRow: View {
             )
     }
 
-    /// Spotify's own green. Hard-coded rather than taken from the palette
-    /// because it identifies the service, not the app — the same reason the
-    /// Last.fm row doesn't get to be orange.
+    /// Spotify's brand green, not the app palette.
     static let spotifyGreen = Color(red: 0.11, green: 0.73, blue: 0.33)
 }
 
 // MARK: - Library page
-//
-// The picker, filling the settings pane. Same model and same rows as the sheet
-// in Features/Import — only the frame around them differs.
+// The picker, in the settings pane. Same model and rows as the sheet in Features/Import.
 
 struct SpotifyLibraryPage: View {
 
@@ -273,8 +270,7 @@ struct SpotifyLibraryPage: View {
     let onBack: () -> Void
 
     @State private var confirmLeaveDuringImport = false
-    /// Whether the pending confirmation came from the back button (leave the
-    /// page too) or from Stop (stay, and show the result).
+    /// Whether the pending confirmation came from Back (leave too) or Stop (stay).
     @State private var leaveAfterStopping = false
 
     init(spotifyClient: SpotifyClient,
@@ -314,12 +310,10 @@ struct SpotifyLibraryPage: View {
             await model.loadIfNeeded()
         }
         .onDisappear {
-            // Leaving the page stops the run, for the same reason closing the
-            // sheet does: nothing should go on writing to a library with no
-            // way on screen to stop it.
+            // Leaving stops the run, like closing the sheet.
             model.cancelMigration()
         }
-        .confirmationDialog(
+        .mixConfirmationDialog(
             "Stop importing?",
             isPresented: $confirmLeaveDuringImport,
             titleVisibility: .visible
@@ -334,12 +328,7 @@ struct SpotifyLibraryPage: View {
         }
     }
 
-    /// Says what stopping actually does now: undoes the run.
-    ///
-    /// Half an import is not a useful thing to be left holding — 600 songs out
-    /// of 2,200 is 600 songs you have to find and delete by hand — so stopping
-    /// takes back what it added, and the warning has to say so before the fact
-    /// rather than after.
+    /// Stopping undoes the run, so the warning says so up front.
     private var leaveDuringImportMessage: String {
         guard let progress = model.progress, progress.overallCompleted > 0 else {
             return "Nothing has been imported yet. You can start again any time."
@@ -355,9 +344,7 @@ struct SpotifyLibraryPage: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 10) {
             Button {
-                // Mid-run, going back is a destructive act wearing the chrome of
-                // a navigation control — the same reason stopping downloads
-                // asks first.
+                // Mid-run, Back is destructive, so ask first.
                 if model.phase == .migrating {
                     leaveAfterStopping = true
                     confirmLeaveDuringImport = true
@@ -375,12 +362,7 @@ struct SpotifyLibraryPage: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain).mixHandCursor()
-            // Not disabled during a run any more. It was, and a greyed-out
-            // "< Connections" sitting next to a subtitle promising you can keep
-            // using the app read as the window having locked up — which is
-            // exactly the impression this whole page is trying not to give.
-            // Leaving already stops the import (`onDisappear`), so the button
-            // has a defined meaning; it just says so now.
+            // Enabled during a run: leaving stops the import (`onDisappear`), and the help says so.
             .help(model.phase == .migrating
                   ? "Go back \u{2014} asks before stopping and undoing the import"
                   : "Back to Connections")
@@ -393,11 +375,7 @@ struct SpotifyLibraryPage: View {
                     Text(subtitle)
                         .font(.mixSubtext)
                         .foregroundStyle(Color.mixTextSecondary)
-                        // Bounded on purpose. An unbounded `fixedSize` here
-                        // measured against the narrow settings column and locked
-                        // in a minimum height taller than the window, which
-                        // pushed everything below off screen and set AppKit
-                        // re-running Update Constraints until it gave up.
+                        // Bounded: an unbounded `fixedSize` in the narrow settings column balloons the window height.
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -446,16 +424,10 @@ struct SpotifyLibraryPage: View {
         }
     }
 
-    /// One button, same rule as the sheet: connect, then import, then done.
-    /// It sits in the header beside the title rather than in a bottom bar, so
-    /// it stays put while the listing scrolls and is visible the moment the
-    /// page opens.
+    /// One button beside the title: connect, then import, then done.
     private var actions: some View {
         HStack(spacing: 10) {
-            // Secondary, never in place of Import: the banner above asks for a
-            // reconnect, and until now the page explained the problem and
-            // offered no way to act on it — but an old connection still lists
-            // playlists, and importing those has to stay one click away.
+            // Reconnect is offered beside Import, not instead: an old grant still lists playlists.
             if auth.isAuthorized, auth.needsReauthorization, model.phase != .migrating {
                 Button("Reconnect") { model.connect() }
                     .buttonStyle(.plain).mixHandCursor()
@@ -466,9 +438,7 @@ struct SpotifyLibraryPage: View {
 
             primaryButton
         }
-        // Horizontal only: the row must keep its intrinsic width when the
-        // settings column is measured narrow, but must never be free to grow
-        // taller than one line.
+        // Horizontal only, so the row can't grow taller than one line.
         .fixedSize(horizontal: true, vertical: false)
     }
 

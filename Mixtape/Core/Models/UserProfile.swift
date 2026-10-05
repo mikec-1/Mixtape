@@ -1,8 +1,4 @@
-// UserProfile.swift
-// Mixtape
-//
-// The world-readable `profiles` row — handle, avatar, etc. Unlike AppUser (the
-// signed-in user, with private fields like email), this is what other people see.
+// The public profiles row. AppUser is the private signed-in user.
 
 import Foundation
 
@@ -12,7 +8,7 @@ public struct UserProfile: Identifiable, Codable, Hashable, Sendable {
     public let id: UUID
     /// Unique, lowercased handle.
     public var username: String
-    /// Free-form name, not unique. Nil when never set — use `name` to show it.
+    /// Nil when never set. Use `name` for display.
     public var displayName: String?
     /// Public URL of the user's avatar (nil if they haven't set one).
     public var avatarURL: URL?

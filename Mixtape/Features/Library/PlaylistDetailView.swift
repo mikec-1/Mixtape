@@ -1,28 +1,20 @@
-// PlaylistDetailView.swift
-// Mixtape — Features/Library/Detail
-
 import SwiftUI
 import Combine
 
 public struct PlaylistDetailView: View {
 
     let playlist: Playlist
-    /// A smart playlist dressed as this one by `SmartPlaylistDetailView`: not a
-    /// library row, so nothing here that writes to or publishes the stored
-    /// playlist applies — downloads, profile, sharing, and delete goes to the
-    /// smart playlist service instead.
+    /// A smart playlist shown by `SmartPlaylistDetailView`. Not a library row, so
+    /// downloads, profile and sharing don't apply, and delete goes to the smart playlist service.
     var isSmart = false
 
     @EnvironmentObject private var deps:   AppDependencies
     @EnvironmentObject private var engine: PlaybackEngine
-    /// Directly, not through `deps` — a nested ObservableObject doesn't
-    /// republish, and the + button has to flip the moment it is pressed.
+    /// Observed directly so the + button flips the moment it's pressed.
     @EnvironmentObject private var smartService: SmartPlaylistService
-    /// Observed directly: `engine.queue` doesn't republish through the engine,
-    /// so the shuffle button lagged behind the state it shows.
+    /// Observed directly: `engine.queue` doesn't republish through the engine.
     @EnvironmentObject private var queueService: QueueService
-    /// A header's shuffle button is this list's own setting, not the queue's
-    /// live mode — see `ShufflePreferences`.
+    /// The header shuffle is this list's setting. See `ShufflePreferences`.
     @ObservedObject private var shufflePrefs = ShufflePreferences.shared
 
     @Environment(\.dismiss) private var dismiss
@@ -34,10 +26,8 @@ public struct PlaylistDetailView: View {
     @State private var showRemoveDownloadsConfirm = false
     /// Stopping a Liked Songs sync asks what to do with the songs it imported.
     @State private var showStopLikedSongs = false
-    /// How many songs the Liked Songs link put in Favourites, counted when the
-    /// dialog is asked for rather than on every redraw. SwiftUI evaluates a
-    /// `confirmationDialog`'s actions and message whether or not it is showing,
-    /// and that count is a scan of every favourite against every imported id.
+    /// Songs the Liked Songs link added to Favourites. Counted when the dialog is
+    /// asked for, since dialog content is evaluated on every redraw.
     @State private var likedContributions = 0
     /// Why a manual "Sync Now" didn't work, for the alert that says so.
     @State private var syncError: String?
@@ -47,13 +37,9 @@ public struct PlaylistDetailView: View {
     @State private var showEditSheet     = false
     // Delete
     @State private var showDeleteConfirm = false
-    /// The "and 47 songs" number, counted on the press. It walks every playlist
-    /// in the library looking for songs nothing else holds, and the dialog's
-    /// message is rebuilt on every body pass whether or not it is showing.
+    /// Songs only this playlist holds, counted on the press for the same reason.
     @State private var songsLostWithPlaylist = 0
-    /// The songs awaiting a "really delete?" answer. Non-empty is what presents
-    /// the prompt, so the dialog can name the row it was opened on — or count
-    /// the selection it was opened over.
+    /// Songs awaiting delete confirmation. Non-empty presents the prompt.
     @State private var tracksPendingDeletion: [Track] = []
     // Add to Playlist sheet
     @State private var tracksForAddToPlaylist: [Track] = []
@@ -62,63 +48,41 @@ public struct PlaylistDetailView: View {
     @State private var showDubSheet = false
     @State private var showLinerNotes = false
     @State private var showSpotifyExport = false
-    /// Whether this playlist appears on the owner's public profile. Separate from
-    /// collaborative sharing on purpose: handing a friend a join code and putting
-    /// a playlist on your profile are two different intentions, and until now the
-    /// first silently did the second as well.
+    /// Whether this playlist shows on the owner's public profile. Separate from collaborative sharing.
     @State private var isPublic = false
     @State private var isTogglingPublic = false
     @State private var publicError: String?
-    /// Guards the cover repair, which is a long run of network calls and should
-    /// not be started twice from two taps on the menu.
+    /// Stops the cover repair being started twice.
     @State private var isRefetchingCovers = false
-    /// DownloadManager's changes don't propagate through `deps`, so the offline
-    /// badges and the header's download button would show stale state until
-    /// something else redrew the view. Bumping this on its change notification
-    /// keeps them live.
+    /// Bumped on DownloadManager changes, which don't propagate through `deps`.
     @State private var downloadTick = 0
-    /// Width of the track list, measured so the table can drop columns it can't
-    /// fit rather than squeezing them into an unreadable smudge.
+    /// Measured so the table can drop columns that don't fit.
     @State private var listWidth: CGFloat = 0
-    /// Whose playlist this is, for the header. Empty for the ordinary case — a
-    /// playlist you made yourself and nobody else has touched — where the answer
-    /// is "yours" and saying so is noise.
+    /// Whose playlist this is. Empty for your own unshared playlist.
     @State private var byline: [BylineMember] = []
-    /// The profiles behind the byline names, keyed by member id, so a tapped
-    /// name can open a page without a second round trip. Only names with an
-    /// entry here are pressable — see `bylineTapHandler`.
+    /// Profiles behind byline names, so a tapped name opens without another fetch.
+    /// Only names with an entry are tappable.
     @State private var bylineProfiles: [UUID: UserProfile] = [:]
-    /// How many people are holding this playlist, or nil when there's no such
-    /// number to show — see `loadSaveCount`.
+    /// How many people hold this playlist, nil when there's nothing to show. See `loadSaveCount`.
     @State private var saveCount: Int?
     /// The signed-in user's profile, for the "Made for" name on a mix.
     @State private var me: UserProfile?
     #if os(iOS)
-    /// iOS has no content column to route a profile into, so it opens as a sheet
-    /// — the same treatment `ProfileMenuButton` gives your own.
+    /// iOS has no content column for a profile, so it opens as a sheet.
     @State private var profileSheet: UserProfile?
     #endif
-    /// What the header's search field is holding. Empty — the ordinary case —
-    /// shows the playlist whole.
     @State private var trackQuery = ""
-    /// The order the list is drawn in. Seeded from — and written back to —
-    /// `PlaylistTrackSortService`, so a playlist you sorted by Date Added is
-    /// still sorted that way tomorrow, and on your other device. On macOS the
-    /// table's column headers write back into this too, so the menu and the
-    /// column arrow are the same fact stated twice.
+    /// Display order, synced through `PlaylistTrackSortService`. On macOS the
+    /// table's column headers write here too.
     @State private var trackSort = TrackSort()
-    /// Observed so a sort adopted from the account (sign-in on another device)
-    /// lands on a page that is already open. The equality guards on both sides
-    /// stop this and `setSort` chasing each other.
+    /// Observed so a sort changed on another device lands on an open page.
+    /// Equality guards stop this and `setSort` looping.
     @ObservedObject private var trackSorts = PlaylistTrackSortService.shared
 
-    /// The resolved / filtered / sorted rows, computed once per real change.
-    /// See `TrackListMemo`.
+    /// Resolved/filtered/sorted rows, recomputed only on real changes. See `TrackListMemo`.
     @State private var memo = TrackListMemo()
     /// Set when the server says a saved playlist's original is no longer public.
-    /// Only ever set from a real answer, never from a failed request: telling
-    /// someone their friend unpublished a playlist because the wifi dropped is
-    /// worse than saying nothing.
+    /// Never set from a failed request.
     @State private var sourceUnavailable = false
     /// The side being renamed, and the name being typed.
     @State private var renamingSide: SideGroup?
@@ -128,19 +92,11 @@ public struct PlaylistDetailView: View {
 
     // MARK: - Editability
 
-    /// A mix, or someone else's playlist you saved. It's genuinely in the library
-    /// — it plays, it downloads, it's searchable — but its contents aren't yours
-    /// to change, so every control that would change them is taken out rather
-    /// than left to fail silently against the guards in `LibraryService`.
+    /// A mix or a saved playlist: in the library, but not yours to edit, so editing controls are hidden.
     private var isReadOnly: Bool { !livePlaylist.isEditable }
 
-    /// "Made for mike", on a mix. Nothing on anything else: a playlist someone
-    /// published wasn't made for you, and saying so would be a small lie in
-    /// somebody else's byline.
-    ///
-    /// Paints from `currentUser` in the first frame and upgrades to the fetched
-    /// profile when it lands — which is also the moment the name becomes
-    /// pressable, since that's when there is a page behind it.
+    /// "Made for <name>" on a mix, nil otherwise. Uses `currentUser` until the
+    /// profile loads, which also makes the name tappable.
     private var madeForMember: BylineMember? {
         guard livePlaylist.origin == .mix else { return nil }
         if let me {
@@ -150,12 +106,7 @@ public struct PlaylistDetailView: View {
         return BylineMember(id: user.id, name: user.displayName, avatarURL: user.avatarURL)
     }
 
-    /// Routes a tapped name in the byline.
-    ///
-    /// Nil — leaving every name as plain text — whenever there is nothing here
-    /// worth opening, so the header never offers a press that goes nowhere. A
-    /// single unresolved name inside an otherwise live byline does nothing,
-    /// which is the one case this can't express any better.
+    /// Handles taps on byline names. Nil when there's nothing to open, so names render as plain text.
     private var bylineTapHandler: ((BylineMember) -> Void)? {
         let openable = byline.contains { $0.isApp || bylineProfiles[$0.id] != nil }
             || madeForMember.map { bylineProfiles[$0.id] != nil } == true
@@ -169,9 +120,7 @@ public struct PlaylistDetailView: View {
         }
     }
 
-    /// Mixtape's profile lives in Discover on both platforms — that's where
-    /// mixes are made and where the page already renders — so this is a section
-    /// change plus a push rather than a second copy of the page over here.
+    /// Mixtape's profile lives in Discover on both platforms, so this switches section and pushes.
     private func openMixtapeProfile() {
         #if os(macOS)
         appState.showMixtapeProfile()
@@ -188,30 +137,21 @@ public struct PlaylistDetailView: View {
         #endif
     }
 
-    /// Always fetches the freshest version of this playlist from the live library,
-    /// falling back to the captured `let playlist` only if the library hasn't loaded yet.
+    /// The live library copy, falling back to `playlist` if the library hasn't loaded.
     private var livePlaylist: Playlist {
         deps.libraryService.playlist(id: playlist.id) ?? playlist
     }
 
-    /// Brings `memo` up to date, cheaply, and hands it back.
-    ///
-    /// Every derived list on this page goes through here rather than
-    /// recomputing, so a body evaluation triggered by something unrelated —
-    /// a hover, a sheet, the player bar — costs one `Key` comparison instead
-    /// of resolving, filtering and sorting a few thousand rows.
+    /// Brings `memo` up to date. Unrelated redraws cost one key comparison
+    /// instead of a full resolve, filter and sort.
     private var lists: TrackListMemo {
-        // `trackRevision`, not `revision`: see its doc comment. This page calls
-        // `refreshPlaylists()` on every play, and keying on the shared revision
-        // put a full re-resolve of the playlist in front of every press.
+        // `trackRevision`, not `revision`: every play calls `refreshPlaylists()`, which bumps the shared one.
         memo.update(revision:   deps.libraryService.trackRevision,
                     ids:        livePlaylist.trackIDs,
                     query:      trackQuery,
                     sort:       trackSort,
-                    // `track(id:)`, never the display accessor: a playlist
-                    // opened offline showed as empty, which reads as lost data.
-                    // Undownloaded rows are drawn grey instead — see
-                    // `offlineUnavailable(_:)`.
+                    // `track(id:)`, not the display accessor, so an offline playlist isn't empty.
+                    // Undownloaded rows are greyed instead.
                     resolve:    { deps.libraryService.track(id: $0) },
                     isPlayable: { $0.canResolveAudio })
         return memo
@@ -219,42 +159,17 @@ public struct PlaylistDetailView: View {
 
     private var tracks: [Track] { lists.tracks }
 
-    /// The rows actually on screen: the playlist, filtered by whatever is in the
-    /// header's search field and in whatever order the header's menu asks for.
-    ///
-    /// Everything that reasons about the playlist as a thing — its song count,
-    /// its total time, whether it's fully downloaded — deliberately keeps
-    /// reading `tracks`. A filter is a view of the playlist, not an edit to it.
+    /// Rows on screen: filtered by the search field and sorted. Counts, duration
+    /// and download state read `tracks` instead.
     private var visibleTracks: [Track] { lists.visible }
 
-    /// Everything on screen that can be *attempted*.
-    ///
-    /// A shared playlist lists songs the other collaborators own, and this
-    /// device holds those as metadata-only placeholders. They belong in the
-    /// list — that's the point of showing the playlist as everyone else sees
-    /// it — but a row with nothing to play would stop playback dead partway
-    /// through and look like a bug in the player.
-    ///
-    /// "Nothing to play" is a much smaller set than it used to be: a
-    /// placeholder that knows its own title is resolved online on the way to
-    /// playing it (see `AudioLocator.locate`), so it is a real song here, not
-    /// a hole. Only a row that can't even name itself is left out.
-    ///
-    /// Built from the visible rows, so Play plays what you are looking at: sort
-    /// by title and it starts at the top of the list you can see, filter to one
-    /// artist and it plays that artist. A Play button that ignored both would be
-    /// the only control on the page that did.
+    /// Visible rows that can be played, so Play follows the sort and filter.
+    /// Placeholders with a title resolve online (see `AudioLocator.locate`); only
+    /// rows that can't name themselves are dropped.
     private var playableTracks: [Track] { lists.playable }
 
-    /// The picture this page wears, and what it takes its colour from.
-    ///
-    /// `coverData(for:)` is the same rule the sidebar and every list use — the
-    /// user's own cover, else the first song's, else the 2×2 once four
-    /// different ones exist — so the hero can't disagree with the row you
-    /// clicked to get here.
-    ///
-    /// Nil for All Songs and Favourites: their hero is a glyph, and the wash
-    /// comes from `washFallback` instead.
+    /// The hero cover and wash source, same rule as `coverData(for:)`. Nil for
+    /// All Songs and Favourites, which use a glyph and `washFallback`.
     private var displayCover: Data? {
         guard !isSmart else { return nil }
         // Until `loadCover` runs, read the stored cover directly so it's there on the first frame.
@@ -266,52 +181,34 @@ public struct PlaylistDetailView: View {
         "\(livePlaylist.id)|\(livePlaylist.displayArtwork?.count ?? 0)|\(tracks.count)|\(livePlaylist.coverKind.rawValue)"
     }
 
-    /// The rule this page is drawing, when it is a smart playlist. Read live so
-    /// the + button reflects the current membership.
+    /// This page's smart rule, read live so the + button tracks membership.
     private var smartRule: SmartPlaylist? {
         guard isSmart else { return nil }
         return smartService.playlists.first { $0.id == playlist.id }
     }
 
-    /// Builds the hero cover without composing a mosaic on the render path.
-    ///
-    /// `LibraryService.coverData(for:)` answers the same question, but it draws
-    /// the 2×2 while the view is being laid out — which is the pause between
-    /// tapping a playlist and seeing it. Reading the tiles needs the main actor
-    /// (the `ModelContext` lives there); *drawing* them does not, so only the
-    /// reads happen here and the composition goes to a background task.
+    /// Builds the hero cover. Tile reads need the main actor; the 2x2 composition runs in the background.
     private func loadCover() async {
         defer { coverLoaded = true }
-        // A smart playlist wears its rule's icon on every other surface —
-        // `PlaylistArtwork` has always routed it to `SmartPlaylistCover`. Only
-        // this page composed a 2×2 of its songs instead, which is why the
-        // custom cover vanished on the way in.
+        // Smart playlists use their rule's icon, like everywhere else.
         guard !isSmart else { resolvedCover = nil; return }
         if let own = livePlaylist.displayArtwork {
             resolvedCover = own
             return
         }
-        // "No cover" is a decision, not an absence. `coverRefs` already returns
-        // nothing for `.none`, but every path below it falls through to
-        // `borrowedCover`, which asks the tracks directly and so never heard
-        // about the decision — which is why clearing a cover left the row blank
-        // in the list and still showed the first song's artwork on the page.
+        // "No cover" is a choice, so don't fall through to `borrowedCover`.
         guard livePlaylist.coverKind != PlaylistCoverKind.none else {
             resolvedCover = nil
             return
         }
-        // All Songs and Favourites wear a glyph, and the page takes its colour
-        // from that glyph — see `washFallback` — never from whichever song
-        // happens to be first.
+        // System playlists use a glyph and take the wash from `washFallback`.
         guard !livePlaylist.isSystem else {
             resolvedCover = nil
             return
         }
 
         var tiles: [Data] = []
-        // Enough of each cover to tell it apart without hashing the whole
-        // image — a playlist that is one album must not tile the same picture
-        // four times.
+        // Dedupe by a sample of each image so a one-album playlist doesn't tile the same cover.
         var seen = Set<Int>()
         let refs = isSmart
             ? deps.libraryService.coverRefs(forTrackIDs: livePlaylist.trackIDs)
@@ -349,17 +246,12 @@ public struct PlaylistDetailView: View {
         return livePlaylist.isSystem ? ArtworkColors.brandGradient : []
     }
 
-    /// The first song's cover, skipping songs that don't have one — a playlist
-    /// that opens with an untagged local file shouldn't be a grey page when the
-    /// nine songs under it all have artwork.
+    /// The first song cover that exists, skipping untagged songs.
     private var borrowedCover: Data? {
         tracks.lazy.compactMap(\.displayArtwork).first
     }
 
-    /// iOS keeps the full detail-page ramp — its rows are still the tinted,
-    /// rounded ones the strong wash was drawn for. macOS pulls it back, but only
-    /// part way: a plain table under a flat grey page had none of the playlist's
-    /// colour in it, which is most of what made the old header worth looking at.
+    /// Wash strength. iOS keeps the full ramp; macOS tones it down but keeps some colour.
     #if os(macOS)
     private static let washIntensity: Double = 0.72
     #else
@@ -375,24 +267,17 @@ public struct PlaylistDetailView: View {
     #if os(macOS)
     @EnvironmentObject private var appState: MacAppState
     #else
-    /// Only for switching tabs — "Find in Discover" has to leave the Library
-    /// tab entirely, which a NavigationStack push can't do.
+    /// For switching tabs: "Find in Discover" leaves the Library tab, which a push can't do.
     @EnvironmentObject private var iosAppState: IOSAppState
-    /// "Go to Artist"/"Go to Album" destinations. macOS swaps the content column
-    /// through `MacAppState`; iOS pushes onto the enclosing NavigationStack, so
-    /// the targets have to be held here.
+    /// "Go to Artist/Album" targets. macOS swaps the content column; iOS pushes onto the NavigationStack.
     @State private var navAlbum:  Album?  = nil
     @State private var navOnlineAlbum: OnlineAlbum? = nil
     #endif
 
     public var body: some View {
-        // Counts body passes, not just their cost. `download-summary` still ran
-        // 74 times in one play-start window after the DownloadManager firehose
-        // was throttled to 4 Hz, which means a *different* publisher is now
-        // driving the invalidations — most likely one of the environment
-        // objects this view observes wholesale. The span says how many passes
-        // and how expensive each is; without it the only visible symptom is a
-        // string of unlabelled 100-190 ms hangs, because iOS hangs carry no stack.
+        // Read so the bump below redraws; an unread @State never does.
+        let _ = downloadTick
+        // Counts body passes and their cost. iOS hangs carry no stack, so this shows what's redrawing.
         mixMainActivity("playlist-page/body") {
         VStack(spacing: 0) {
             Group {
@@ -403,21 +288,15 @@ public struct PlaylistDetailView: View {
                 #endif
             }
             #if os(macOS)
-            // Playlist detail is rendered flat on macOS (no NavigationStack), so
-            // the page carries its own back control. It floats over the hero's
-            // top corner instead of sitting in a bar, which would slice a stripe
-            // across the top of the page.
+            // macOS has no NavigationStack here, so the page carries its own back control over the hero.
             .pageBack {
                 if isSmart { appState.selectedSmartPlaylist = nil } else { appState.selectedPlaylist = nil }
             }
             #endif
-            // Pull the latest shared track list when opening a collaborative playlist.
-            // No-op for non-shared playlists.
+            // Pull the latest shared track list. No-op for non-shared playlists.
             .task(id: playlist.id) {
                 if livePlaylist.followsRemoteSource {
-                    // The owner's copy is the truth, so this is the whole update
-                    // path for a saved playlist — and the only thing that can tell
-                    // us it has stopped being public.
+                    // The owner's copy is the truth. This also tells us if it stopped being public.
                     let status = await PlaylistSharingService.shared.refreshSubscription(
                         localPlaylistID: playlist.id,
                         libraryService:  deps.libraryService
@@ -429,15 +308,11 @@ public struct PlaylistDetailView: View {
                         libraryService:   deps.libraryService
                     )
                 }
-                // A followed Spotify playlist checks its source on open, the
-                // same way a saved playlist does. `snapshot_id` makes the
-                // unchanged case one cheap request.
+                // Followed Spotify playlists check their source on open. `snapshot_id` keeps the unchanged case cheap.
                 if deps.spotifyFollowService.isFollowing(playlistID: playlist.id) {
                     await deps.spotifyFollowService.sync(playlistID: playlist.id)
                 }
-                // After the refresh, not before: a playlist just joined has no local
-                // rows at all until `refreshSharedPlaylist` writes them, so prefetching
-                // first would find nothing to warm.
+                // After the refresh: a just-joined playlist has no local rows until then.
                 deps.onlineCoordinator.prefetchResolvable(tracks)
             }
             // The header's reads, alongside the refresh so the byline doesn't wait for it.
@@ -447,9 +322,7 @@ public struct PlaylistDetailView: View {
                 if !isReadOnly { await loadPublicState() }
                 await loadSaveCount()
             }
-            // Only a mix says who it was made for, so only a mix pays for the
-            // lookup. Keyed on the account so switching users doesn't leave the
-            // previous one's name under a mix rebuilt for somebody else.
+            // Only mixes show "made for". Keyed on the account so switching users refreshes it.
             .task(id: deps.authService.currentUser?.id) {
                 guard livePlaylist.origin == .mix,
                       let id = deps.authService.currentUser?.id
@@ -460,11 +333,7 @@ public struct PlaylistDetailView: View {
             .onReceive(deps.downloadManager.didChangeThrottled) { _ in
                 downloadTick &+= 1
             }
-            // A filter belongs to the playlist you set it on — macOS reuses this
-            // view for the next playlist you click in the sidebar — but it
-            // belongs to that playlist for as long as the app is open, not just
-            // for the visit: leaving a playlist and coming back finds the search
-            // you left in it, the same way the sort does.
+            // Search is remembered per playlist for the app session. macOS reuses this view across playlists.
             .onChange(of: playlist.id) { _, id in
                 trackQuery = PlaylistSearchMemory.query(for: id)
                 trackSort  = trackSorts.sort(for: id)
@@ -497,9 +366,7 @@ public struct PlaylistDetailView: View {
                 .miniPlayerSafeArea()
             }
             #endif
-            // What's left up here acts on the *selection* or on the playlist's
-            // standing as an object — never on playback, which all lives in the hero
-            // row beside the cover.
+            // Selection and playlist-level actions. Playback lives in the hero row.
             .toolbar {
                 #if os(iOS)
                 if !playlist.isSystem, !isSmart {
@@ -513,19 +380,12 @@ public struct PlaylistDetailView: View {
                 #endif
             }
         }
-        // The wash sits on the whole screen rather than on the list, so it also
-        // runs behind the back bar — and its top colour is handed to the window
-        // titlebar, so the tint carries on up through the chrome.
-        //
-        // Half strength on macOS. The rows underneath are a plain table now, and
-        // at full detail-page strength the colour stopped being a hint of which
-        // playlist you're in and became the thing you looked at.
+        // The wash covers the whole screen and tints the titlebar. Half strength on macOS.
         .artworkWash(source: washSource, intensity: Self.washIntensity, fallback: washFallback)
         .task(id: coverIdentity) { await loadCover() }
-        .background(Color.mixBackground.ignoresSafeArea())
+        .background(MixPageBackground())
         .miniPlayerSafeArea()
-        // Cover / name / description editor — reached from the cover art in the
-        // header on both platforms, and from the "…" menu on iOS.
+        // Cover/name/description editor: from the header cover, and the "..." menu on iOS.
         .sheet(isPresented: $showEditSheet) {
             PlaylistEditorSheet(editingPlaylist: livePlaylist)
                 .environmentObject(deps)
@@ -542,20 +402,17 @@ public struct PlaylistDetailView: View {
                                     set: { if !$0 { syncError = nil } })) {
             Button("OK", role: .cancel) { syncError = nil }
         } message: {
-            // The rate-limit sentence wins when there is one: it is the whole
-            // explanation, and it is the case people otherwise read as Mixtape
-            // being broken.
+            // The rate-limit message wins, since otherwise it reads as Mixtape being broken.
             Text(throttle.sentence ?? syncError ?? "")
         }
-        // "Syncing…" that never becomes anything else is what a hang looks
-        // like, so after a few seconds it admits to being slow.
+        // After a few seconds "Syncing..." admits it's slow.
         .task(id: isSyncing) {
             syncIsSlow = false
             guard isSyncing else { return }
             try? await Task.sleep(for: .seconds(6))
             if !Task.isCancelled { syncIsSlow = true }
         }
-        .confirmationDialog(
+        .mixConfirmationDialog(
             isFollowing ? "Stop syncing with Spotify's Liked Songs?"
                         : "Remove the songs Spotify put here?",
             isPresented: $showStopLikedSongs,
@@ -570,9 +427,7 @@ public struct PlaylistDetailView: View {
                 Button("Remove the \(likedContributions) Imported Songs",
                        role: .destructive) {
                     deps.spotifyFollowService.unlinkRemovingImports(playlistID: playlist.id)
-                    // The import is gone, so "Imported" must stop standing over
-                    // it in the picker — otherwise the way back is a badge that
-                    // says it already happened.
+                    // The import is gone, so drop its "Imported" badge in the picker.
                     deps.spotifyImportLedger.forget(playlistID: playlist.id)
                 }
             }
@@ -582,7 +437,7 @@ public struct PlaylistDetailView: View {
                  ? "Removes only the \(likedContributions) songs that came from Spotify. Nothing on Spotify changes."
                  : "Nothing here came from Spotify, so nothing will be removed.")
         }
-        .confirmationDialog(
+        .mixConfirmationDialog(
             PlaylistDeletionPrompt.title(name: playlist.name, isReadOnly: isReadOnly && !isSmart),
             isPresented: $showDeleteConfirm,
             titleVisibility: .visible
@@ -597,27 +452,13 @@ public struct PlaylistDetailView: View {
                     dismiss()
                     return
                 }
-                // Take the published row down with it. Deleting only the local
-                // copy is what left published playlists stranded on profiles
-                // with nothing left on the device able to reach them — the page
-                // could offer to restore them, but never to remove them.
-                //
-                // Detached from the dismissal below rather than awaited: the
-                // playlist is already gone locally, and holding the view open on
-                // a network round trip would make a local delete feel like one.
-                // Owners only. A collaborator deleting their copy is leaving the
-                // playlist, not ending it — the row isn't theirs to take down,
-                // and the server would refuse anyway.
+                // Owners also take the published row down, in the background. A collaborator
+                // deleting their copy is just leaving.
                 if let link = PlaylistSharingService.shared.linkedShare(forLocalPlaylist: playlist.id),
                    link.role == PlaylistSharingService.Roles.owner {
                     Task { try? await PlaylistSharingService.shared.deletePublished(sharedPlaylistID: link.sharedPlaylistID) }
                 }
-                // Unsaving also drops the link to the playlist it was following,
-                // so saving it again later starts clean rather than reconciling
-                // into a playlist that isn't there any more.
-                // Deleting a followed playlist should also stop following it,
-                // or the next sync would resurrect a playlist that was just
-                // thrown away.
+                // Stop following, or the next sync would bring it back.
                 if livePlaylist.followsSpotify {
                     deps.spotifyFollowService.unlink(playlistID: playlist.id)
                 }
@@ -627,6 +468,7 @@ public struct PlaylistDetailView: View {
                         libraryService: deps.libraryService
                     )
                 } else {
+                    SupabaseSyncService.allowBulk("delete-playlists")
                     deps.libraryService.deletePlaylist(id: playlist.id)
                 }
                 #if os(macOS)
@@ -641,9 +483,8 @@ public struct PlaylistDetailView: View {
                  : PlaylistDeletionPrompt.message(songCount: songsLostWithPlaylist,
                                                   isReadOnly: isReadOnly))
         }
-        // A saved playlist whose original went private. Deliberately not a
-        // silent removal: the owner may well switch it back on, and the copy is
-        // still here and still plays whatever was already downloaded.
+        // A saved playlist whose original went private. Kept, not removed: the owner
+        // may re-publish, and downloads still play.
         .alert("Playlist is unavailable", isPresented: $sourceUnavailable) {
             Button("Keep", role: .cancel) { sourceUnavailable = false }
             Button("Remove from Library", role: .destructive) {
@@ -673,10 +514,10 @@ public struct PlaylistDetailView: View {
         } message: {
             Text("Leave it empty to show just the letter.")
         }
-        // Removing songs from the library — context menu and swipe both land
-        // here, so there's one prompt rather than one per gesture.
+        // Context menu and swipe share one library-delete prompt.
         .confirmsTrackDeletion($tracksPendingDeletion) { pending in
             for track in pending { engine.stopIfPlaying(trackID: track.id) }
+            SupabaseSyncService.allowBulk("user-remove")
             deps.libraryService.deleteTracks(ids: pending.map(\.id))
             #if os(macOS)
             appState.clearTrackSelection()
@@ -690,28 +531,19 @@ public struct PlaylistDetailView: View {
                 .environmentObject(deps)
         }
         #else
-        // macOS raises the corner panel instead — same list, no window over the
-        // app. Handing it off here rather than at each menu item keeps the
-        // menus' `tracksForAddToPlaylist = …` meaning one thing on both
-        // platforms.
+        // macOS shows the corner panel instead of a sheet.
         .onChange(of: tracksForAddToPlaylist) { _, tracks in
             guard !tracks.isEmpty else { return }
             deps.savedInPanel.show(tracks: tracks, isSavedIn: false, sourcePlaylistID: playlist.id)
             tracksForAddToPlaylist = []
         }
         #endif
-        // Invite collaborators. Opening this publishes the playlist if it has
-        // never been shared, so it's the only entry point that needs the live
-        // track list — the shared row carries a metadata snapshot of it.
         .sheet(isPresented: $showSpotifyExport) {
-            // No `.frame(minWidth:)` here. MixSheet already sizes itself on
-            // macOS, and a min-width wrapper around it sets the sheet window to
-            // *its* number while the chrome inside stays at the size class's —
-            // so the content drew 580pt wide inside a 520pt window and spilled
-            // off both edges. The sheet owns its width; presenters don't.
+            // No `.frame(minWidth:)`: MixSheet sizes itself, and a wrapper makes the window narrower than its content.
             SpotifyExportView(playlistName: playlist.name, tracks: tracks, playlistID: playlist.id)
                 .environmentObject(deps)
         }
+        // Opening this publishes the playlist if it was never shared.
         .sheet(isPresented: $showCollabShare) {
             InviteCollaboratorsSheet(playlist: livePlaylist, tracks: tracks)
                 .environmentObject(deps)
@@ -725,9 +557,7 @@ public struct PlaylistDetailView: View {
                 .environmentObject(deps)
         }
         #if os(iOS)
-        // A name in the byline opens as a sheet rather than a push: this page
-        // can be reached from more than one tab's stack, and a profile is a
-        // detour from the playlist rather than somewhere deeper inside it.
+        // A sheet, not a push: this page lives in several tabs' stacks.
         .sheet(item: $profileSheet) { profile in
             NavigationStack {
                 ProfilePageView(profile: profile)
@@ -747,17 +577,8 @@ public struct PlaylistDetailView: View {
     // MARK: - The page, per platform
 
     #if os(macOS)
-    /// The hero, then the same AppKit table Songs, Albums and Artists use.
-    ///
-    /// It replaced a hand-built SwiftUI list, and the reasons are the reasons a
-    /// list of songs anywhere else in the app is this table: the column dividers
-    /// are draggable and the columns are the ones the rest of the app shows.
-    ///
-    /// The page — not the table — does the scrolling, which is what lets the
-    /// hero slide away as you go down the list instead of holding a third of the
-    /// window for a cover you've already looked at. The table sizes itself to its
-    /// rows and hands the wheel back up (see `fitsContent`); the artist page is
-    /// built the same way.
+    /// The hero plus the shared AppKit track table. The page scrolls, not the
+    /// table, so the hero scrolls away (see `fitsContent`).
     private var macTrackPage: some View {
         ScrollView {
             VStack(spacing: 0) {
@@ -788,24 +609,29 @@ public struct PlaylistDetailView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // Rows selected here shouldn't still be selected — and still deletable
-        // with ⌘⌫ — after the page has been left, the same as Songs.
+        // Clear the selection on leave so ⌘⌫ can't act on it later.
         .onDisappear { appState.clearTrackSelection() }
     }
 
     private func trackTable(_ rows: [Track]) -> some View {
         NativeTrackTable(
-            tracks:              visibleTracks,
+            tracks:              rows,
             currentTrackID:      engine.queue.currentTrack?.id,
             isPlaying:           engine.state.isPlaying,
             selectedIDs:         Binding(
                 get: { appState.selectedTrackIDs },
                 set: { appState.selectedTrackIDs = $0 }
             ),
-            onPlay:              { track, context in playAndMark(track, within: context) },
+            // A double-click passes the whole table, which on a side is one side: play the playlist.
+            onPlay:              { track, context in
+                playAndMark(track, within: context.count == rows.count ? nil : context)
+            },
             onPlayNext:          { engine.queue.insertNext($0) },
             onAddToQueue:        { engine.queue.append($0) },
             onGetInfo:           { appState.showInspector(for: $0) },
+            onEditMetadata:      { appState.enqueueReview(MetadataReviewItem(editing: $0)) },
+            onEditSong:          { appState.editTrack = $0 },
+            onPostSong:          { appState.postTrack = $0 },
             onDragTracksChanged: { appState.isDraggingTracks = $0 },
             onGoToArtist:        { openArtist(named: $0) },
             onGoToAlbum:         { openAlbum(for: $0) },
@@ -813,10 +639,10 @@ public struct PlaylistDetailView: View {
                                  ? { appState.openSongRadio(for: $0) } : nil,
             onOpenArtistLink:    { appState.openDiscoverArtist(named: $0) },
             onOpenAlbumLink:     { appState.openDiscoverAlbum(for: $0) },
-            // Only offered on All Songs, and the table has already asked — it
-            // raises the same prompt as ⌘⌫ before it calls this.
+            // All Songs only. The table has already confirmed.
             onRemove:            { selection in
                 for track in selection { engine.stopIfPlaying(trackID: track.id) }
+                SupabaseSyncService.allowBulk("user-remove")
                 deps.libraryService.deleteTracks(ids: selection.map(\.id))
                 appState.clearTrackSelection()
             },
@@ -825,8 +651,7 @@ public struct PlaylistDetailView: View {
                 deps.addTracks(ids: selection.map(\.id), toPlaylist: playlistID)
             },
             onRemoveFromPlaylist: canRemoveFromPlaylist ? { selection in
-                deps.libraryService.removeTracks(ids: selection.map(\.id),
-                                                 fromPlaylist: playlist.id)
+                deps.removeTracks(ids: selection.map(\.id), fromPlaylist: playlist.id)
                 appState.clearTrackSelection()
             } : nil,
             removeFromPlaylistTitle: { count in
@@ -834,9 +659,7 @@ public struct PlaylistDetailView: View {
                 return count > 1 ? "Remove \(count) Songs from \(place)"
                                  : "Remove from \(place)"
             },
-            // On any other playlist "remove" means remove from this list, and
-            // offering both removals a divider apart is how a song gets deleted
-            // from the library by someone who meant to take it off a playlist.
+            // Elsewhere "remove" means from this playlist; offering both invites deleting from the library by mistake.
             showsRemoveFromLibrary: playlist.isAllSongs,
             excludedPlaylistID:  playlist.id,
             onFindInDiscover:    { findInDiscover($0) },
@@ -854,42 +677,31 @@ public struct PlaylistDetailView: View {
             scale:               appState.uiScale,
             // Scrolled by the page, so the hero above it can leave the screen.
             fitsContent:         true,
-            // The rows arrive already sorted, so the table stops sorting on its
-            // own and its column headers drive the header's menu instead.
+            // Rows arrive sorted; the column headers drive `trackSort`.
             sort:                $trackSort,
-            // One playlist, not the whole library: the rows get the height and
-            // the type size they had before this page moved to the table.
+            // Roomier rows than the library-wide table.
             metrics:             .roomy,
-            // A playlist is an ordered thing; the number is how you refer to a
-            // song in it.
             showsIndex:          true,
             resolvingIDs:        engine.routingTrackIDs
         )
     }
 
-    /// All Songs deletes from the library instead, and a mix or somebody else's
-    /// playlist isn't ours to edit.
+    /// All Songs deletes from the library instead, and read-only playlists can't be edited.
     private var canRemoveFromPlaylist: Bool {
         !playlist.isAllSongs && !isReadOnly
     }
     #else
-    /// iOS keeps the SwiftUI list: `List` is what makes `.swipeActions` fire, and
-    /// there are no draggable column dividers on a touch screen to want.
+    /// iOS keeps the SwiftUI list, which is what makes `.swipeActions` work.
     private var iosTrackList: some View {
         List {
-            // ── Header (artwork + title + action buttons) ─────────────────────
+            // Header (artwork + title + action buttons)
             header
                 .listRowInsets(EdgeInsets())
-                // Clear, not mixBackground: the artwork wash is painted behind
-                // this whole screen so it can run past the header and under the
-                // first rows. An opaque row background would cut it off at the
-                // header's edge.
+                // Clear so the wash behind the screen shows through.
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
 
-            // ── Column header ─────────────────────────────────────────────────
-            // Only once there's something to label, and only at widths where
-            // the extra columns actually appear on the rows below it.
+            // Column header, only when the rows actually show extra columns.
             if !tracks.isEmpty, columns.isTable {
                 TrackListHeader(columns: columns)
                     .listRowInsets(EdgeInsets(top: 0, leading: TrackColumns.rowLeading,
@@ -898,7 +710,7 @@ public struct PlaylistDetailView: View {
                     .listRowSeparator(.hidden)
             }
 
-            // ── Track rows (or empty state) ───────────────────────────────────
+            // Track rows (or empty state)
             if tracks.isEmpty {
                 emptyState
                     .listRowBackground(Color.clear)
@@ -918,12 +730,7 @@ public struct PlaylistDetailView: View {
                     }
                 }
             } else {
-                // Identified by the track, not by its position. With `\.offset`,
-                // reordering or filtering the list renamed every row from the
-                // first change downwards, so SwiftUI rebuilt them all — and the
-                // per-row `@State` (hover, in particular) stayed behind on the
-                // index it was attached to and reappeared on whatever song moved
-                // into that slot.
+                // Keyed by track id, not offset, so a reorder doesn't move per-row state onto other songs.
                 ForEach(Array(visibleTracks.enumerated()), id: \.element.id) { index, track in
                     trackRow(track: track, index: index + 1, isSelected: false)
                 }
@@ -963,8 +770,7 @@ public struct PlaylistDetailView: View {
             eyebrow: eyebrow,
             title: livePlaylist.name,
             subtitle: livePlaylist.description,
-            // The byline carries the counts itself when there is one, so they
-            // aren't printed twice on two lines that disagree about spacing.
+            // The byline carries the counts when there is one.
             metadata: byline.isEmpty ? metadataLine : nil
         ) {
             if !byline.isEmpty {
@@ -980,13 +786,7 @@ public struct PlaylistDetailView: View {
         }
     }
 
-    /// Everything you can do to the playlist, and the two things you can do to
-    /// the *list*.
-    ///
-    /// They're deliberately at the far end from the rest: play, shuffle, keep
-    /// offline and the overflow menu are already a tight cluster on the left,
-    /// and searching and sorting don't act on the playlist at all — they change
-    /// what you're being shown of it.
+    /// Search and sort, kept apart from the playback cluster since they only change what's shown.
     @ViewBuilder
     private var actionRow: some View {
         #if os(macOS)
@@ -995,8 +795,7 @@ public struct PlaylistDetailView: View {
             if !tracks.isEmpty { trackTools }
         }
         #else
-        // No room for a fifth control beside two full-width pills, so on iOS
-        // they take the line underneath, still on the trailing side.
+        // No room beside the pills on iOS, so these go on the next line.
         VStack(spacing: 10) {
             actionButtons
             if !tracks.isEmpty {
@@ -1011,9 +810,6 @@ public struct PlaylistDetailView: View {
         TrackListTools(
             query: $trackQuery,
             sort:  $trackSort,
-            // What "the order it's already in" means depends on the list: All
-            // Songs has no running order of its own, it has whatever the library
-            // hands over.
             listOrderTitle: livePlaylist.isAllSongs ? "Library Order" : "Playlist Order",
             searchPrompt: "Search in \(livePlaylist.name)"
         )
@@ -1033,11 +829,7 @@ public struct PlaylistDetailView: View {
         if let saves = saveCount, saves > 0 {
             line += " · \(saves) save\(saves == 1 ? "" : "s")"
         }
-        // Any linked playlist says so, not only a read-only mirror: a playlist
-        // that pushes to Spotify is just as linked, and the "…" menu was the
-        // only place that admitted it.
-        // Favourites counts too: once Liked Songs is mirrored into it, it is a
-        // linked list like any other and the header should say so.
+        // Any linked playlist says so, including Favourites mirroring Liked Songs.
         if let link = deps.spotifyFollowService.link(forPlaylist: playlist.id) {
             line += " · \(Self.syncLabel(for: link.direction))"
             if let status = syncStatus {
@@ -1049,12 +841,7 @@ public struct PlaylistDetailView: View {
         return line
     }
 
-    /// Which way this playlist's changes travel, in the header.
-    ///
-    /// Three arrangements, three sentences — "Synced with Spotify" for a
-    /// playlist that is genuinely kept the same at both ends, and something
-    /// one-directional for the two that aren't, because a one-way playlist that
-    /// claimed to be "synced" would be lying about half of it.
+    /// Header label for the sync direction. Only two-way links say "Synced".
     private static func syncLabel(for direction: SpotifyFollowService.Link.Direction) -> String {
         switch direction {
         case .both: return "Synced with Spotify"
@@ -1063,14 +850,8 @@ public struct PlaylistDetailView: View {
         }
     }
 
-    /// How many people are holding this playlist.
-    ///
-    /// Three different questions with one answer each. A mix is yours alone, so
-    /// the count is simply whether it's here — asking a server would be asking
-    /// about a playlist only you have. Anything with a shared row (your own
-    /// published playlist, or someone else's you saved) has a real total, which
-    /// only the server can add up. Everything else — a private playlist of your
-    /// own — has nobody to count, and shows nothing rather than "0 saves".
+    /// How many people hold this playlist. A mix is yours alone, a shared row
+    /// gets its total from the server, and a private playlist shows nothing.
     private func loadSaveCount() async {
         if livePlaylist.origin == .mix, !isSmart {
             saveCount = 1
@@ -1098,9 +879,7 @@ public struct PlaylistDetailView: View {
             .frame(width: size, height: size)
         } else {
             ArtworkThumbnail(
-                // The playlist's own custom icon always wins; the first
-                // track's cover is only a fallback. (Reversed, adding a song
-                // silently replaced the user's chosen icon with album art.)
+                // A custom cover always wins over the first track's.
                 data: displayCover,
                 size: size,
                 cornerRadius: 14,
@@ -1111,14 +890,10 @@ public struct PlaylistDetailView: View {
         }
     }
 
-    /// The cover. For user-created playlists it doubles as the edit affordance,
-    /// so the cover can be changed from inside the playlist rather than only
-    /// from the playlists list.
+    /// The cover, which doubles as the edit button on user playlists.
     @ViewBuilder
     private func coverArt(size: CGFloat) -> some View {
-        // Read-only playlists get the picture without the pencil. A mix's mosaic
-        // and a saved playlist's cover both belong to whoever made them, and the
-        // editor behind this button changes the name and description too.
+        // Read-only playlists get the picture without the pencil.
         if livePlaylist.isSystem || isReadOnly {
             coverImage(size: size)
         } else {
@@ -1143,9 +918,7 @@ public struct PlaylistDetailView: View {
         HeroActionBar(
             isPlaying: isPlayingThisPlaylist,
             isShuffling: shufflePrefs.shuffles(shuffleKey),
-            // A playlist of nothing but other people's songs has nothing to
-            // play, and an enabled button that does nothing is worse than a
-            // disabled one that explains itself by being disabled.
+            // Disabled when nothing is playable.
             isEmpty: playableTracks.isEmpty,
             onPlay: {
                 if isPlayingThisPlaylist {
@@ -1153,9 +926,7 @@ public struct PlaylistDetailView: View {
                 } else if isPausedInThisPlaylist {
                     engine.resume()
                 } else {
-                    // This playlist's own stored choice, applied to the queue as
-                    // it starts. Shuffle on means starting anywhere; off means
-                    // starting at the top. The queue honours the mode from there.
+                    // This playlist's stored shuffle choice, applied as playback starts.
                     let shuffles = shufflePrefs.shuffles(shuffleKey)
                     engine.queue.setShuffle(shuffles)
                     guard let first = shuffles
@@ -1165,10 +936,7 @@ public struct PlaylistDetailView: View {
             },
             onShuffle: { shufflePrefs.toggle(shuffleKey) }
         ) {
-            // Downloading sits beside Play rather than up in the toolbar: it acts
-            // on this playlist and nothing else, and it's the one control here
-            // people go looking for. Profile visibility stays in the toolbar —
-            // that one is a property of the playlist, not something you do to it.
+            // Download sits beside Play since it acts on this playlist. Profile visibility stays in the toolbar.
             if isSmart {
                 if let smart = smartRule {
                     Button {
@@ -1193,8 +961,7 @@ public struct PlaylistDetailView: View {
                 HeroCircleLabel(systemImage: "ellipsis")
             }
             #if os(macOS)
-            // Left alone a Menu draws itself as a bordered pop-up button with a
-            // chevron — the wrong shape entirely next to a circle.
+            // Otherwise a Menu draws as a bordered pop-up with a chevron.
             .menuStyle(.button)
             .buttonStyle(.plain).mixHandCursor()
             .menuIndicator(.hidden)
@@ -1204,73 +971,35 @@ public struct PlaylistDetailView: View {
         }
     }
 
-    /// The offline-download toggle, in the hero row on both platforms, wearing
-    /// the same disc as the shuffle and overflow controls beside it.
+    /// The offline-download toggle in the hero row.
     private var downloadButton: some View {
-        // The button's *state* is the user's standing choice, not a tally of
-        // what happens to be on disk — that's what makes it safe for it to also
-        // mean "and download whatever gets added later". A playlist imported
-        // from songs already downloaded therefore arrives switched off, which
-        // is the honest answer: nobody asked for it to be kept.
+        // The state is the user's opt-in, not what's on disk, so it also covers songs added later.
         let isKept     = deps.downloadManager.isPlaylistOffline(playlist.id)
-        // One walk of the track list for all five questions below. Asked here
-        // and handed down rather than re-asked per computed property: each of
-        // those was its own pass over a list that can hold thousands of rows,
-        // on a page that redraws whenever anything about downloads moves.
+        // One walk of the track list for everything below.
         let summary    = downloadSummary
-        // Complete is a fact about the disk, not about the opt-in. A playlist
-        // whose every song is already here — imported, or downloaded one by one,
-        // or kept as part of another playlist — has nothing left to download, so
-        // showing it an empty "download" disc offered work that doesn't exist.
-        // Pressing it while it's already complete still signs up for the
-        // standing choice, which is the only thing left that the press can mean.
-        // A kept playlist with nothing fetchable in it — empty, or nothing but
-        // unresolvable shares — has no outstanding work either. Without this it
-        // fell through to the stalled branch and sat there as an orange "try
-        // again" disc for a download that never had anything to do. Gated on
-        // `isKept` so an empty playlist nobody asked to keep still shows the
-        // plain disc rather than claiming to be fully downloaded.
+        // Complete is about the disk, not the opt-in. A kept playlist with nothing
+        // fetchable counts too, so it doesn't sit on "try again".
         let isComplete = summary.isOffline || (isKept && summary.nothingToDownload)
-        // A ring that isn't moving is the thing this state exists to stop. Kept,
-        // incomplete, and nothing queued, downloading or waiting to retry means
-        // nothing is ever going to finish it on its own — so the button says so
-        // and becomes "try again" rather than quietly sitting at a third.
-        // No connection counts as stalled too. The queue survives going offline
-        // intact, so `hasWorkInFlight` stays true and the ring went on filling
-        // for a playlist that had stopped dead — the tooltip said "paused" while
-        // the button said "downloading".
+        // Kept, incomplete, and nothing in progress (or offline): nothing will
+        // finish it, so the button becomes "try again".
         let isStalled  = isKept && !isComplete
             && (!summary.hasWorkInFlight || !deps.downloadManager.isConnectedForDownload)
         let isFetching = isKept && !isComplete && !isStalled
-        // A download in progress wears a stop square, not an arrow. The ring
-        // already says "downloading"; the glyph inside it is the control, and it
-        // should say what pressing does rather than repeat what the ring says.
-        // Shown unconditionally — it was briefly hover-only, which meant the one
-        // affordance for calling off a 2,000-song download was invisible until
-        // you happened to point at it, and invisible on touch entirely.
+        // Always a stop square while downloading, including on touch.
         let showsStop = isFetching
         return Button {
-            // Pressing a stalled button must not un-keep the playlist: it would
-            // delete the songs that *did* land, which is the one outcome
-            // someone staring at a half-finished download can't afford.
+            // A stalled press retries. Un-keeping would delete what did download.
             if isStalled {
                 deps.downloadManager.resumeDownloads(tracks: tracks)
             } else if isKept {
-                // Every "off" press destroys audio — mid-download it also throws
-                // away the part that finished. Ask first.
+                // Turning it off deletes audio, so confirm first.
                 showRemoveDownloadsConfirm = true
             } else {
-                deps.downloadManager.togglePlaylistOffline(playlist.id)
+                deps.downloadManager.keepPlaylistOffline(playlist.id)
             }
         } label: {
-            // Four looks, one glance: a solid green disc means kept and every
-            // song is here, a filling green ring means kept and still arriving,
-            // an orange ring means kept and stuck, and the plain disc means it
-            // isn't kept.
-            //
-            // The arrow loses its own circle while the ring is up. Two
-            // concentric rings a couple of points apart is one ring too many,
-            // and it's the outer one that's saying something.
+            // Solid green: kept and complete. Green ring: downloading. Orange ring:
+            // stalled. Plain disc: not kept. The arrow drops its circle while a ring shows.
             HeroCircleLabel(systemImage: showsStop ? "stop.fill"
                                         : (isStalled ? "arrow.clockwise" : (isComplete ? "arrow.down.circle.fill"
                                                     : (isFetching ? "arrow.down" : "arrow.down.circle"))),
@@ -1285,7 +1014,7 @@ public struct PlaylistDetailView: View {
         .buttonStyle(.plain).mixHandCursor()
         .animation(.easeInOut(duration: 0.12), value: showsStop)
         .accessibilityAddTraits(isKept ? .isSelected : [])
-        .confirmationDialog(
+        .mixConfirmationDialog(
             isFetching ? "Stop downloading and remove downloads?"
                        : "Remove from Downloads?",
             isPresented: $showRemoveDownloadsConfirm,
@@ -1296,14 +1025,10 @@ public struct PlaylistDetailView: View {
             }
             Button("Cancel", role: .cancel) { }
         } message: {
-            // Says what is lost, not what the button is called. Mid-download the
-            // honest answer includes the part that already landed, because
-            // switching keeping off deletes that too.
+            // Say what's lost, including anything already downloaded.
             Text(removeDownloadsMessage(isFetching: isFetching, summary: summary))
         }
-        // While the button means "try again", the press that normally switches
-        // keeping off has nowhere else to go — without this a playlist that
-        // can't finish could never be un-kept.
+        // While the button means "try again", un-keeping lives here.
         .contextMenu {
             if isStalled {
                 Button("Stop Keeping Offline", role: .destructive) {
@@ -1316,9 +1041,7 @@ public struct PlaylistDetailView: View {
     }
 
     #if os(macOS)
-    /// Exports the selected songs as files. macOS only: it works off the list
-    /// selection, which iOS's list doesn't have — there the same item lives on
-    /// the row's own long-press menu, acting on the row you pressed.
+    /// Exports the selected songs. macOS only; on iOS it's on each row's menu.
     private var saveToDiskToolbarButton: some View {
         Button {
             saveToDisk(tracks.filter { appState.selectedTrackIDs.contains($0.id) })
@@ -1332,8 +1055,7 @@ public struct PlaylistDetailView: View {
     }
     #endif
 
-    /// The profile visibility toggle, in the toolbar on both platforms. The tint
-    /// IS the state — it's lit only while the playlist is actually public.
+    /// Profile visibility toggle, tinted only while public.
     private var profileToolbarButton: some View {
         Button {
             setPublic(!isPublic)
@@ -1349,27 +1071,15 @@ public struct PlaylistDetailView: View {
               : "Show this playlist on your public profile")
     }
 
-    /// Every download fact about the songs on screen, from a single walk.
-    ///
-    /// Asked of the songs this view is showing rather than of the stored
-    /// playlist, so a mix — which isn't in the library's playlist list at all —
-    /// answers the same questions the same way.
-    ///
-    /// Timed, because it is asked from `body` on a page that can hold thousands
-    /// of rows: it replaced five separate whole-list walks, and this span is how
-    /// we'd notice if a sixth ever grew back beside it.
+    /// Every download fact about the visible songs, from one walk. Works for
+    /// mixes too, which aren't in the playlist list.
     private var downloadSummary: DownloadManager.ListDownloadSummary {
         mixMainActivity("playlist-page/download-summary") {
             deps.downloadManager.downloadSummary(tracks: tracks)
         }
     }
 
-    /// What stopping actually costs, in songs.
-    ///
-    /// Nothing downloaded yet is its own sentence rather than "the 0 songs
-    /// already downloaded will be removed" — a zero in a warning about losing
-    /// things is a sentence that talks the user out of an action that costs
-    /// them nothing.
+    /// What stopping costs, in songs. Nothing downloaded gets its own wording.
     private func removeDownloadsMessage(isFetching: Bool,
                                         summary: DownloadManager.ListDownloadSummary) -> String {
         guard isFetching else { return "You won\u{2019}t be able to play this offline." }
@@ -1385,28 +1095,17 @@ public struct PlaylistDetailView: View {
     private func playlistDownloadHelp(_ summary: DownloadManager.ListDownloadSummary) -> String {
         guard deps.downloadManager.isPlaylistOffline(playlist.id) else {
             guard !summary.isOffline else {
-                // Nothing to fetch, and the button is green to say so. The press
-                // is still worth offering: it's what makes the promise cover
-                // songs added later.
+                // Already complete; pressing still covers songs added later.
                 return "Every song here is already on this device — keep it that way for songs added later"
             }
-            // Says what pressing it signs you up for, since that now includes
-            // songs the playlist doesn't have yet.
             return "Keep for offline listening — songs added later download too"
         }
         guard summary.isOffline else {
-            // The number the ring is drawing, for the people the ring is too
-            // small for — and for VoiceOver, which can't see it at all. In
-            // songs, not percent: "3 of 240" is a fact about your library,
-            // where "1%" is a fact about arithmetic.
+            // In songs, not percent, for VoiceOver and small rings.
             let counts = (done: summary.offlineCount, total: summary.downloadableCount)
             let saved  = "\(counts.done) of \(counts.total) songs"
-            // Connectivity first, because losing it does NOT empty the queue —
-            // `processDownloadQueue` just returns and leaves every id sitting
-            // there. Asked in the other order, `hasWorkInFlight` was still true
-            // whenever this mattered, so the paused message was unreachable and
-            // a playlist that had stopped dead went on claiming to be
-            // downloading.
+            // Check connectivity first: going offline leaves the queue intact, so
+            // `hasWorkInFlight` would still be true.
             guard deps.downloadManager.isConnectedForDownload else {
                 return deps.downloadManager.downloadOnWifiOnly && deps.downloadManager.isConnected
                     ? "Paused at \(saved) — waiting for Wi‑Fi"
@@ -1420,8 +1119,6 @@ public struct PlaylistDetailView: View {
                     ? "\(songs) didn\u{2019}t download — click to try again"
                     : "Stopped at \(saved) — click to finish downloading"
             }
-            // The glyph is a stop square now, so the tooltip describes the
-            // control rather than only the progress.
             return "Downloading — \(saved) saved. Click to stop and remove."
         }
         if summary.hasRemovableDownloads { return "Stop keeping offline and remove downloads" }
@@ -1432,20 +1129,13 @@ public struct PlaylistDetailView: View {
         #endif
     }
 
-    /// True when the engine is currently playing a track from this playlist.
-    /// Whether *this* playlist is the one playing.
-    ///
-    /// Asked of the queue's source, not of the track list: "does this playlist
-    /// contain the playing song?" is true of every playlist a popular song sits
-    /// in, so All Songs, Favourites and a two-song playlist all showed a pause
-    /// button at once. The playlist that started playback is the one that gets
-    /// to claim it.
+    /// Whether this playlist started playback, asked of the queue's source.
+    /// Checking membership would light up every playlist containing the song.
     private var isPlayingThisPlaylist: Bool {
         engine.state.isPlaying && queueService.sourcePlaylistID == playlist.id
     }
 
-    /// Paused, and this playlist is what is loaded — so Play resumes rather
-    /// than starting the list again from the top.
+    /// Paused with this playlist loaded, so Play resumes instead of restarting.
     private var isPausedInThisPlaylist: Bool {
         engine.state == .paused && queueService.sourcePlaylistID == playlist.id
     }
@@ -1491,9 +1181,7 @@ public struct PlaylistDetailView: View {
         .frame(maxWidth: .infinity, alignment: .center)
     }
 
-    /// The playlist isn't empty, the search is just too narrow. Says so rather
-    /// than reusing the empty state above, which would read as "this playlist
-    /// has nothing in it" over a playlist that plainly does.
+    /// Search found nothing, as opposed to an empty playlist.
     private var noMatchesState: some View {
         VStack(spacing: 12) {
             Image(systemName: MixtapeIcons.search)
@@ -1512,48 +1200,20 @@ public struct PlaylistDetailView: View {
         .padding(.horizontal, 40)
     }
 
-    // MARK: - The "…" menu
+    // MARK: - The "..." menu
 
-    /// One menu, both platforms — the ellipsis in the iOS navigation bar and the
-    /// one in the macOS toolbar are the same list of actions, because there's no
-    /// reason for a playlist to be able to do different things depending on which
-    /// screen you opened it on.
-    ///
-    /// The bottom section is repair. Those actions exist elsewhere already, buried
-    /// in Settings and scoped to the whole library, which is the wrong shape twice
-    /// over: you notice a playlist full of grey squares while you're looking at
-    /// that playlist, and the fix you want is for the twenty songs in front of you
-    /// rather than a sweep of two thousand. They only appear when there's actually
-    /// something wrong, so the menu doesn't grow a permanent maintenance section.
-    ///
-    /// Share hands out a mixtaped.tech link anyone can open in a browser;
-    /// inviting someone to edit it is a separate item.
-    /// The Spotify sync controls, offered on any linked playlist whichever way
-    /// it was set up.
-    ///
-    /// Imported playlists and sent ones used to be different animals: one could
-    /// be re-synced and unlinked from this menu, the other was a copy that
-    /// started drifting the moment it landed. They are the same thing — a
-    /// library playlist with a Spotify counterpart — so they get the same two
-    /// switches, and which way it started out is just their initial position.
+    /// Spotify sync controls for any linked playlist, however it was set up.
     @ViewBuilder
     private var spotifySyncMenu: some View {
         if let link = deps.spotifyFollowService.link(forPlaylist: playlist.id) {
             let isLiked = link.kind == .likedSongs
 
-            // Buttons with an explicit icon rather than `Toggle`s. A menu
-            // toggle draws its checkmark only when it's on, and only some menus
-            // reserve the space when it's off — so switching one shifted both
-            // labels sideways and left them out of line with every other item
-            // in the menu. An icon that is always there can't do that.
+            // Buttons with icons, not Toggles: a menu toggle only sometimes reserves
+            // checkmark space, which shifts the labels.
             Button {
                 setSyncDirection(pushes: !link.direction.pushes, pulls: link.direction.pulls)
             } label: {
-                // Worded differently for Liked Songs because it *does*
-                // something different: a playlist push replaces Spotify's copy,
-                // while this one only ever adds. Promising "send changes" and
-                // then never removing anything would be a lie in the other
-                // direction.
+                // Liked Songs push only adds, so it's worded differently.
                 Label(isLiked ? "Add New Likes to Spotify" : "Send Changes to Spotify",
                       systemImage: link.direction.pushes ? "checkmark.circle.fill" : "circle")
             }
@@ -1565,16 +1225,10 @@ public struct PlaylistDetailView: View {
                       systemImage: link.direction.pulls ? "checkmark.circle.fill" : "circle")
             }
 
-            // The two directions are a setting; everything below is an action.
-            // Ruled apart so the checkmarks read as a pair of switches rather
-            // than as two more things to press.
             Divider()
 
             Button {
-                // `sync` swallows its errors into `failures` so the timer can
-                // keep going, which meant a manual press had no way to fail:
-                // the menu closed, nothing happened, and nothing said why.
-                // Pressing it is a question, so it gets an answer.
+                // `sync` records errors in `failures` for the timer, so a manual press reads them back.
                 Task {
                     await deps.spotifyFollowService.sync(playlistID: playlist.id,
                                                          force: true)
@@ -1588,8 +1242,7 @@ public struct PlaylistDetailView: View {
             }
             .disabled(isSyncing)
 
-            // Liked Songs isn't a playlist and has no playlist URL; it lives
-            // at the collection route instead.
+            // Liked Songs lives at the collection route, not a playlist URL.
             if let url = URL(string: isLiked
                              ? "https://open.spotify.com/collection/tracks"
                              : "https://open.spotify.com/playlist/\(link.sourceID)") {
@@ -1601,10 +1254,7 @@ public struct PlaylistDetailView: View {
             }
 
             Button {
-                // A playlist unlink leaves a playlist behind, which the user can
-                // then delete in one gesture. Liked Songs has no such playlist —
-                // it poured two thousand songs into Favourites — so stopping has
-                // to offer to undo that too, or the only way back is by hand.
+                // Liked Songs leaves no playlist behind to delete, so offer to remove the songs it added.
                 if isLiked {
                     likedContributions = spotifyContributions
                     showStopLikedSongs = true
@@ -1619,20 +1269,14 @@ public struct PlaylistDetailView: View {
             Divider()
         } else if playlist.isFavourites, deps.spotifyAuth.isAuthorized,
                   !deps.spotifyAuth.needsReauthorization {
-            // The way back. Every control above only exists while the link
-            // does, so losing one took its own repair with it — and Favourites
-            // is the one list the import picker can't rebuild, because
-            // importing Liked Songs again means walking two thousand songs it
-            // already has just to arrive where it started.
+            // The way back to a Liked Songs link. Re-importing would walk every song again.
             Button {
                 linkLikedSongs()
             } label: {
                 Label("Sync with Liked Songs", systemImage: "heart.circle")
             }
 
-            // Unlinking drops the link but not the songs it brought, and every
-            // control that removes them used to live on the link. Stopping the
-            // sync first therefore stranded them here for good.
+            // Unlinking keeps the songs it brought, so offer to remove them here.
             if spotifyContributions > 0 {
                 Button(role: .destructive) {
                     likedContributions = spotifyContributions
@@ -1646,12 +1290,8 @@ public struct PlaylistDetailView: View {
         }
     }
 
-    /// Links Favourites to Spotify's Liked Songs.
-    ///
-    /// No `lastSyncedAt` and no contributed list on purpose: this link has
-    /// never run, so the first sync reads both sides as additions and takes
-    /// nothing away from either — the same safe footing a link gets when its
-    /// direction changes. See `SpotifyFollowService.setDirection`.
+    /// Links Favourites to Spotify's Liked Songs. No `lastSyncedAt`, so the
+    /// first sync only adds on both sides. See `SpotifyFollowService.setDirection`.
     private func linkLikedSongs() {
         deps.spotifyFollowService.link(
             .init(sourceID: SpotifyLibraryItem.likedSongsID,
@@ -1666,21 +1306,11 @@ public struct PlaylistDetailView: View {
         }
     }
 
-    /// Both switches off means there is nothing left to sync, which is what
-    /// unlinking is — so the last one turning off does that rather than leaving
-    /// a link that has been told to do nothing. Nothing is deleted either way:
-    /// both copies stay exactly as they are.
     private var isSyncing: Bool {
         deps.spotifyFollowService.syncing.contains(playlist.id)
     }
 
-    /// What the header says about the link right now.
-    ///
-    /// A check that is running says so, and one that has been running a while
-    /// says *that*, because the two look identical from outside and the second
-    /// is the one people read as broken. A check that failed says so too,
-    /// rather than leaving "updated 5 hours ago" standing as if nothing had
-    /// been tried since.
+    /// Header status for the link: running, slow, failed, or last updated.
     private var syncStatus: String? {
         if isSyncing {
             return syncIsSlow ? "Still trying to sync\u{2026}" : "Syncing\u{2026}"
@@ -1700,12 +1330,12 @@ public struct PlaylistDetailView: View {
         deps.spotifyFollowService.isFollowing(playlistID: playlist.id)
     }
 
-    /// How many of the songs in this playlist right now were put there by the
-    /// Spotify link — the size of the undo the dialog is offering.
+    /// Songs here that the Spotify link added: the size of the undo.
     private var spotifyContributions: Int {
         deps.spotifyFollowService.contributionCount(playlistID: playlist.id)
     }
 
+    /// Both off means unlink. Neither side's copy is deleted.
     private func setSyncDirection(pushes: Bool, pulls: Bool) {
         let service = deps.spotifyFollowService
         switch (pushes, pulls) {
@@ -1716,14 +1346,11 @@ public struct PlaylistDetailView: View {
         }
     }
 
+    /// The "..." menu, the same on both platforms. Repair items at the bottom
+    /// only appear when something is wrong.
     @ViewBuilder
     private var playlistMenu: some View {
-        // Same item, same words, same behaviour as the one on a Discover mix's
-        // page. A playlist you saved and a mix you haven't are the same thing to
-        // the person looking at them, so "Add to Queue" can't be a thing only
-        // one of them can do. Songs without audio behind them are left out for
-        // the same reason Play leaves them out: a queue that stops dead partway
-        // through reads as a broken player.
+        // Same item as on a Discover mix page. Songs without audio are skipped, as with Play.
         Button {
             deps.onlineCoordinator.addToQueue(localTracks: playableTracks)
         } label: {
@@ -1735,11 +1362,7 @@ public struct PlaylistDetailView: View {
 
         spotifySyncMenu
 
-        // Read-only playlists skip the whole first section. Publishing someone
-        // else's playlist to your profile, inviting people to it, or renaming it
-        // are all things only its owner may do — and a mix has no owner to ask.
-        // What's offered instead is the one edit that is legitimately yours to
-        // make: take a copy and do as you like with that.
+        // Read-only playlists only offer a copy. Publishing, inviting and renaming are owner-only.
         if isReadOnly {
             Button {
                 makeEditableCopy()
@@ -1765,9 +1388,7 @@ public struct PlaylistDetailView: View {
             }
             .disabled(isTogglingPublic || deps.authService.currentUser == nil)
 
-            // The one way in. The code and the link used to be copyable straight
-            // from here, which meant two routes to the same thing that could
-            // disagree — this one always shows what's actually being handed out.
+            // Share hands out a mixtaped.tech link. Inviting editors is a separate item.
             Button {
                 showCollabShare = true
             } label: {
@@ -1795,13 +1416,7 @@ public struct PlaylistDetailView: View {
             }
         }
 
-        // Offered on every playlist, including read-only ones: sending a copy
-        // to Spotify takes nothing away from the source and isn't an edit of it.
-        // Hidden only when there is no Spotify account to send it to.
-        // Not offered once the playlist is already linked: "Send to Spotify"
-        // would make a *second* copy over there, next to the one this playlist
-        // is being kept in step with. The link's own section says what is
-        // happening and how to change it.
+        // Hidden without a Spotify account, and once linked, since it would make a second copy.
         if deps.spotifyAuth.isAuthorized, !tracks.isEmpty,
            deps.spotifyFollowService.link(forPlaylist: playlist.id) == nil {
             Divider()
@@ -1814,9 +1429,7 @@ public struct PlaylistDetailView: View {
 
         Divider()
 
-        // Always offered, not just when something is visibly blank. A cover can
-        // be present and wrong — a stale placeholder, art from the wrong record —
-        // and an item that only appears when a square is grey can't fix that.
+        // Always offered: a cover can be present and still wrong.
         Button {
             Task { await refetchCovers() }
         } label: {
@@ -1841,29 +1454,19 @@ public struct PlaylistDetailView: View {
                     : deps.libraryService.songCountRemovedWithPlaylist(id: playlist.id)
                 showDeleteConfirm = true
             } label: {
-                // "Delete" overstates it for something you saved: the original is
-                // untouched, and on a mix there is nothing to delete but your own
-                // copy of it.
+                // "Delete" overstates it for a saved playlist or mix; the original is untouched.
                 Label(isReadOnly && !isSmart ? "Remove from Library" : "Delete Playlist",
                       systemImage: "trash")
             }
         }
     }
 
-    /// Songs the playlist still holds an id for but can't show.
-    ///
-    /// Cheap, and wrong to offer a repair from: an id counts here whether the
-    /// track behind it was buried by mistake, deleted on purpose, or never
-    /// arrived on this device at all. Only the first of those can be put back.
-    /// It earns its keep as the gate in front of `restorableTrackIDs`, which
-    /// asks the store the real question — this is zero almost always, and when
-    /// it is there is nothing to ask about.
+    /// Ids the playlist holds but can't show. A cheap gate in front of `restorableTrackIDs`.
     private var hiddenTrackCount: Int {
         max(0, livePlaylist.trackIDs.count - tracks.count)
     }
 
-    /// The hidden songs a restore would genuinely bring back — the only number
-    /// the menu is allowed to say out loud.
+    /// Hidden songs a restore would actually bring back.
     private var restorableTrackIDs: [UUID] {
         guard hiddenTrackCount > 0 else { return [] }
         let visible = Set(tracks.map(\.id))
@@ -1873,15 +1476,8 @@ public struct PlaylistDetailView: View {
 
     // MARK: - Repair
 
-    /// Re-fetches cover art for every song in this playlist, blank or not.
-    ///
-    /// Your own published covers first, then the catalogue Discover searches.
-    /// Results are written to the track, so this is a repair rather than a fetch
-    /// that has to happen on every launch, and whatever it finds goes up on the
-    /// next sync — other devices get it without running this themselves.
-    ///
-    /// Songs it can't find keep the cover they already had; the only outcome of
-    /// a miss is that nothing changes.
+    /// Re-fetches cover art for every song here: your published covers first,
+    /// then the catalogue. Results are saved and synced; a miss changes nothing.
     private func refetchCovers() async {
         let ids = tracks.map(\.id)
         guard !ids.isEmpty, !isRefetchingCovers else { return }
@@ -1897,26 +1493,19 @@ public struct PlaylistDetailView: View {
             replacingExisting: true
         )
 
-        // Nothing written is the good case as often as the bad one — it usually
-        // means every cover here was already the right one.
-        deps.showToast(updated == 0
-                       ? "Covers are up to date"
-                       : "Updated \(updated) cover\(updated == 1 ? "" : "s")")
+        deps.showToast(.done(updated == 0
+                             ? "Covers are up to date"
+                             : "Updated \(updated) cover\(updated == 1 ? "" : "s")"))
     }
 
-    /// Brings back songs a bad re-sync hid, by undoing deletions the server
-    /// replayed onto rows that are newer than the deletion itself.
-    ///
-    /// Scoped to the songs the menu just counted, so the toast can't contradict
-    /// the button that opened it. The library-wide sweep still exists behind
-    /// Settings, for damage spread across playlists you'd never think to open.
+    /// Restores songs a bad re-sync hid, scoped to what the menu counted. The
+    /// library-wide version is in Settings.
     private func restoreMissingSongs() {
         let restored = deps.libraryService.restoreTracks(ids: restorableTrackIDs)
-        // Zero is now a race rather than a disagreement: a sync in the second
-        // between opening the menu and tapping can prune the id out from under it.
+        // Zero here means a sync pruned the ids between menu and tap.
         deps.showToast(restored == 0
-                       ? "Nothing to restore — those songs were deleted on purpose"
-                       : "Restored \(restored) song\(restored == 1 ? "" : "s")")
+                       ? Toast("Nothing to restore. Those songs were deleted on purpose.")
+                       : .done("Restored \(restored) song\(restored == 1 ? "" : "s")"))
     }
 
     // MARK: - Byline
@@ -1926,29 +1515,15 @@ public struct PlaylistDetailView: View {
         return "\(who) has made this playlist private, so it can't update any more. You can keep it in your library in case it comes back, or remove it."
     }
 
-    /// Works out whose playlist this is, for the line under the title.
-    ///
-    /// Three answers, and only the third costs a request:
-    /// • a mix belongs to Mixtape, and says who it was made for;
-    /// • a saved playlist belongs to the person it was saved from, whose name
-    ///   was stored at save time so the header paints in the first frame;
-    /// • your own playlist has no byline at all until somebody else is on it —
-    ///   "mike" under a playlist in mike's library is an answer to a question
-    ///   nobody asked. Once it's collaborative the names matter, and that's the
-    ///   only case that goes to the network.
-    ///
-    /// Savers never appear here, which is the point of the whole design: saving
-    /// writes nothing to the server, so there is nothing for this to find. Only
-    /// people who were actually invited are in the byline.
+    /// The byline: a mix belongs to Mixtape, a saved playlist to its stored
+    /// owner, and your own lists collaborators once it has any. Savers never appear.
     private func loadByline() async {
         switch livePlaylist.origin {
         case .mix:
             byline = [.mixtape]
             return
         case .subscribed:
-            // The stored name paints first — the header shouldn't wait on the
-            // network to say whose playlist this is. The lookup that follows
-            // only decides whether that name is also a way in.
+            // Paint the stored name first; the lookup only makes it tappable.
             let name = livePlaylist.ownerName ?? "Unknown"
             byline = [BylineMember(name: name)]
             guard livePlaylist.ownerName != nil,
@@ -1960,9 +1535,7 @@ public struct PlaylistDetailView: View {
             bylineProfiles[owner.id] = owner
             return
         case .spotifyMirror:
-            // The mirror says so on the metadata line, where the sync time
-            // belongs next to it. A byline would be claiming Spotify as a
-            // *person* on the playlist, which it isn't.
+            // A Spotify mirror says so on the metadata line instead.
             byline = []
             return
         case .owned:
@@ -1972,9 +1545,7 @@ public struct PlaylistDetailView: View {
         guard let link = PlaylistSharingService.shared.linkedShare(forLocalPlaylist: playlist.id),
               let rows = try? await PlaylistSharingService.shared
                   .collaborators(sharedPlaylistID: link.sharedPlaylistID),
-              // Invited-but-not-yet-joined isn't a collaborator, it's a pending
-              // question. Counting one would put a name on a playlist they may
-              // still say no to.
+              // Only joined members count, not pending invites.
               case let joined = rows.filter({ $0.status == .joined }),
               !joined.isEmpty
         else {
@@ -1984,17 +1555,12 @@ public struct PlaylistDetailView: View {
 
         var members: [BylineMember] = []
 
-        // You first, and by profile rather than by `currentUser.displayName`,
-        // which falls back to the email address when no name is set — everyone
-        // else here is an @username, and one "mike@gmail.com" among them reads
-        // as a different kind of thing entirely.
+        // You first, from your profile, since `displayName` can fall back to the email.
         if let user = deps.authService.currentUser {
             let profile = try? await deps.authService.fetchProfile(id: user.id)
             members.append(BylineMember(id: user.id,
                                         name: profile?.name ?? user.displayName,
                                         avatarURL: profile?.avatarURL ?? user.avatarURL))
-            // Kept so the name can open the page. Nothing is recorded when the
-            // fetch failed, which is exactly when there'd be nothing to open.
             if let profile { bylineProfiles[profile.id] = profile }
         }
 
@@ -2009,22 +1575,14 @@ public struct PlaylistDetailView: View {
         byline = members.count > 1 ? members : []
     }
 
-    /// Turns a read-only playlist into one of your own.
-    ///
-    /// Local and instant — the songs are already here, so this is a new playlist
-    /// pointed at the same rows, not an import. The copy is detached by
-    /// construction: `.owned`, no link, so nothing ever pulls the original's
-    /// changes onto it, which is exactly what makes it editable.
-    /// A second, independent copy of this playlist, opened in place of it.
-    ///
-    /// Deliberately not linked to anything the original is: a duplicate is a
-    /// starting point for a different playlist, and inheriting a Spotify link
-    /// would have two local playlists writing to one remote one.
+    /// Duplicates the playlist without its Spotify link, so two playlists don't write to one remote.
     private func duplicatePlaylist() {
         guard let copy = deps.libraryService.duplicatePlaylist(id: playlist.id) else { return }
-        deps.showToast("Duplicated as \u{201C}\(copy.name)\u{201D}")
+        deps.showToast(Toast.done("Duplicated as \u{201C}\(copy.name)\u{201D}").action("View") { Toast.openPlaylist(copy.id) })
     }
 
+    /// Turns a read-only playlist into your own: a local, unlinked `.owned`
+    /// playlist pointing at the same rows.
     private func makeEditableCopy() {
         let source = livePlaylist
         guard !source.trackIDs.isEmpty else { return }
@@ -2033,14 +1591,13 @@ public struct PlaylistDetailView: View {
                                                       description: source.description,
                                                       artworkData: source.displayArtwork)
         deps.libraryService.setTracks(source.trackIDs, inPlaylist: copy.id)
-        deps.showToast("Copied \u{201C}\(source.name)\u{201D} to your library")
+        deps.showToast(Toast.done("Copied \u{201C}\(source.name)\u{201D} to your library")
+            .action("View") { Toast.openPlaylist(copy.id) })
     }
 
     // MARK: - Profile visibility
 
-    /// Draws the toggle immediately from the local cache, then corrects it from
-    /// the server — another device may have published or hidden this playlist
-    /// since we last looked, and a switch that lies is worse than a slow one.
+    /// Shows the cached public state, then corrects it from the server.
     private func loadPublicState() async {
         isPublic = PlaylistSharingService.shared.isPublicCached(localPlaylistID: playlist.id)
 
@@ -2074,39 +1631,24 @@ public struct PlaylistDetailView: View {
         }
     }
 
-    /// Plays `track`, with the rest of the playlist queued behind it.
-    ///
-    /// `selection` narrows that queue to a chosen set of rows — "Play 12 Songs"
-    /// should play those twelve and stop, not use them as a starting point for
-    /// the whole playlist.
-    /// Offline and not on this device: the row is greyed and a tap says so
-    /// rather than starting a resolve that can only time out.
+    /// Offline and not downloaded: the row is greyed and a tap says so.
     private func offlineUnavailable(_ track: Track) -> Bool {
         deps.libraryService.offlineOnly
             && !deps.downloadManager.downloadedTrackIDs.contains(track.id)
     }
 
+    /// Plays `track` with the playlist queued behind it. `selection` limits the queue to those rows.
     private func playAndMark(_ track: Track, within selection: [Track]? = nil) {
         guard !offlineUnavailable(track) else {
-            deps.showToast("\u{201C}\(track.displayTitle)\u{201D} isn't downloaded — you're offline.")
+            deps.showToast(.failed("\u{201C}\(track.displayTitle)\u{201D} isn't downloaded — you're offline."))
             return
         }
-        // Deliberately no placeholder guard here. A placeholder has no local file
-        // and no remote key, which is exactly the condition the engine already
-        // treats as "resolve this online" — so handing it straight to `play` is
-        // what gives it a chance of producing audio. An earlier version answered
-        // the tap with a toast and a jump to Discover instead, and in doing so
-        // intercepted the one path that could have played the song.
+        // No placeholder guard: the engine resolves placeholders online.
         PlaylistMetadataService.shared.markPlayed(playlistID: playlist.id)
         mixMainActivity("playlist-page/mark-played-refresh") {
             deps.libraryService.refreshPlaylists()
         }
-        // play() resets the source playlist, so mark it after playback starts.
-        // The clicked song is played. Not "the clicked song if it survived the
-        // filter, otherwise whatever happens to be first" — that line is what
-        // made clicking the second row start the first one, silently, with the
-        // playlist's own top song as the substitute. If the row isn't in the
-        // playable list, the answer is a wider context, never a different song.
+        // Play the clicked song. If it isn't in `filtered`, widen the context, never substitute.
         let filtered = selection.map { $0.filter(\.canResolveAudio) } ?? playableTracks
         let context  = filtered.contains { $0.id == track.id }
                      ? filtered
@@ -2214,13 +1756,8 @@ public struct PlaylistDetailView: View {
         }
     }
 
-    /// Opens Discover with this song's title and artist already searched, so a
-    /// placeholder can be turned into the real thing in two taps.
-    ///
-    /// The query is filed with the session store *and* fired directly rather
-    /// than left to the Discover view's `onChange`. On iOS that view may not
-    /// exist yet — a tab never opened this launch has nothing to observe the
-    /// change — and the search would arrive at a view that isn't there.
+    /// Opens Discover searching this song. The search fires directly since on
+    /// iOS the Discover view may not exist yet.
     private func findInDiscover(_ track: Track) {
         let query = [track.title, track.artistName]
             .filter { !$0.isEmpty }
@@ -2228,18 +1765,13 @@ public struct PlaylistDetailView: View {
         guard !query.isEmpty else { return }
 
         let store = DiscoverSessionStore.shared
-        // Land on the results rather than on whatever page Discover was last
-        // drilled into.
         store.path.removeAll()
 
         #if os(macOS)
-        // Order matters: `searchText` writes into whichever corpus the current
-        // selection names, so selecting Discover first is what stops the query
-        // being filed under — and applied to — the library's search box.
+        // Select Discover first, or the query lands in the library's search box.
         appState.selection  = .discover
         appState.searchText = query
-        // The user asked for this search by name, so it lands committed —
-        // writing the text alone would only arm the suggestions panel.
+        // Commit the search. Setting the text alone only shows suggestions.
         appState.showSearchResults()
         #else
         store.iosQuery = query
@@ -2249,14 +1781,10 @@ public struct PlaylistDetailView: View {
         store.search(query, using: deps.itunesClient, immediate: true)
     }
 
-    /// Downloads `track` from Supabase (or uses the playback cache) and exports it
-    /// to the user's chosen folder with proper filename and embedded ID3 metadata.
-    /// On macOS, if no export folder is configured, opens the folder picker first.
+    /// Exports `track` to the export folder with tags. On macOS, asks for a folder if none is set.
     private func saveToDisk(_ track: Track) { saveToDisk([track]) }
 
-    /// The same export for a selection: one folder prompt, then the songs in
-    /// order. A failure part-way is reported and the rest still go — a single
-    /// unreachable song shouldn't cancel the other forty.
+    /// Same for a selection. A failed song is reported and the rest continue.
     private func saveToDisk(_ targets: [Track]) {
         guard !targets.isEmpty else { return }
         Task { @MainActor in
@@ -2270,10 +1798,7 @@ public struct PlaylistDetailView: View {
             }
             #endif
 
-            // Finding the audio — cached, downloaded, imported, on Supabase, or
-            // only resolvable from the internet — is the download manager's job,
-            // and it is the same job here. Said once, before the run: a toast per
-            // song would be a stack of them for a selection.
+            // Fetching is the download manager's job. One toast for the whole run.
             let fetching = targets.filter { !deps.downloadManager.status(for: $0).isAvailableOffline }
             if let first = fetching.first {
                 deps.showToast(fetching.count == 1
@@ -2288,7 +1813,7 @@ public struct PlaylistDetailView: View {
                 } catch {
                     failures += 1
                     if targets.count == 1 {
-                        deps.showToast(error.localizedDescription)
+                        deps.showToast(.failed(error.localizedDescription))
                         return
                     }
                 }
@@ -2296,21 +1821,16 @@ public struct PlaylistDetailView: View {
 
             let saved = targets.count - failures
             if targets.count == 1 {
-                deps.showToast("Saved \"\(targets[0].title)\"")
+                deps.showToast(.done("Saved \"\(targets[0].title)\""))
             } else if failures == 0 {
-                deps.showToast("Saved \(saved) songs")
+                deps.showToast(.done("Saved \(saved) songs"))
             } else {
-                deps.showToast("Saved \(saved) of \(targets.count) songs")
+                deps.showToast(.failed("Saved \(saved) of \(targets.count) songs"))
             }
         }
     }
 
-    /// The shared song menu, told what Play and Remove mean on this page.
-    ///
-    /// A read-only playlist loses exactly one item: everything else acts on the
-    /// song — play it, like it, download it, put it in a playlist of your own —
-    /// and none of that is editing someone else's playlist. Only removing from
-    /// *this* playlist is, so only that disappears.
+    /// The shared song menu. Read-only playlists only lose "Remove from Playlist".
     private func trackContextMenu(for track: Track) -> some View {
         let targets    = menuTargets(for: track)
         let removeFrom = playlist.isAllSongs ? "Library" : (isReadOnly ? nil : "Playlist")
@@ -2320,13 +1840,9 @@ public struct PlaylistDetailView: View {
             onChoosePlaylist: { tracksForAddToPlaylist = $0 },
             removeFrom: removeFrom,
             onRemove: removeFrom == nil ? nil : { rows in
-                // All Songs asks first. This is the same permanent, syncing
-                // delete that ⌘⌫ and the table's right-click menu both
-                // confirm — it shouldn't be the one path where a mis-click
-                // loses the song silently.
+                // All Songs confirms like ⌘⌫, since this deletes everywhere.
                 guard !playlist.isAllSongs else { tracksPendingDeletion = rows; return }
-                deps.libraryService.removeTracks(ids: rows.map(\.id),
-                                                 fromPlaylist: playlist.id)
+                deps.removeTracks(ids: rows.map(\.id), fromPlaylist: playlist.id)
                 #if os(macOS)
                 appState.clearTrackSelection()
                 #endif
@@ -2342,8 +1858,7 @@ public struct PlaylistDetailView: View {
         #if os(macOS)
         appState.openDiscoverArtist(named: name)
         #else
-        // The Discover artist page, the same as macOS and the same as tapping
-        // the name in a row: the local page only holds what you saved.
+        // Artist opens in Discover, same as macOS.
         iosAppState.openOnlineArtist(name: name)
         #endif
     }
@@ -2352,8 +1867,7 @@ public struct PlaylistDetailView: View {
         #if os(macOS)
         appState.openDiscoverAlbum(for: track)
         #else
-        // The whole record from the catalogue, like Spotify — the local album
-        // only holds the songs you happen to have. Offline, that's all there is.
+        // The full album from the catalogue; offline, the local one.
         let local = deps.libraryService.album(title: track.albumTitle, artistName: track.artistName, containing: track.id)
         guard deps.downloadManager.isConnected, !track.albumTitle.isEmpty else { navAlbum = local; return }
         Task {
@@ -2367,13 +1881,8 @@ public struct PlaylistDetailView: View {
     }
 
     // MARK: - Row menus
-    //
-    // Arrow keys, Return, ⌘A and Escape used to be handled here with
-    // `.onMoveCommand`/`.onKeyPress`. The macOS table is an NSTableView now and
-    // does all four itself, so the hand-rolled versions are gone.
 
-    /// iOS has no pointer selection, so a row's menu is always about that row.
-    /// (On macOS the table builds its own menu against the real selection.)
+    /// iOS has no pointer selection, so a row's menu acts on that row.
     private func menuTargets(for track: Track) -> [Track] { [track] }
 
     #if os(iOS)
@@ -2394,8 +1903,7 @@ public struct PlaylistDetailView: View {
             onPlay:            { playAndMark(track) },
             onSelect:          {}
         )
-        // Rows paint their own hover/selection pill, so the list row itself is
-        // transparent and edge-to-edge — see `TrackColumns` for the geometry.
+        // Rows draw their own hover pill. See `TrackColumns`.
         .listRowInsets(TrackColumns.rowInsets)
         .listRowBackground(Color.clear)
         .listRowSeparator(.hidden)
@@ -2408,12 +1916,10 @@ public struct PlaylistDetailView: View {
                 }
             }
         }
-        // ── Swipe left: delete / remove ──────────────────────────
+        // Swipe left: delete / remove
         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
             if playlist.isAllSongs {
-                // Confirms, unlike most swipe-to-delete. Mail's swipe puts the
-                // message in a bin you can open again; this one takes the song
-                // off every device the account is signed into.
+                // Confirms: this deletes from every device.
                 Button(role: .destructive) {
                     tracksPendingDeletion = [track]
                 } label: {
@@ -2421,7 +1927,7 @@ public struct PlaylistDetailView: View {
                 }
             } else if !isReadOnly {
                 Button(role: .destructive) {
-                    deps.libraryService.removeTrack(id: track.id, fromPlaylist: playlist.id)
+                    deps.removeTracks(ids: [track.id], fromPlaylist: playlist.id)
                 } label: {
                     Label(
                         playlist.isFavourites ? "Unlike" : "Remove",
@@ -2429,11 +1935,9 @@ public struct PlaylistDetailView: View {
                     )
                 }
             }
-            // Read-only: no trailing action at all. An empty builder leaves the
-            // row un-swipeable, which is the right answer — a swipe that opens
-            // onto nothing is worse than one that doesn't open.
+            // Read-only: no swipe action.
         }
-        // ── Swipe right: add to playlist ─────────────────────────
+        // Swipe right: add to playlist
         .swipeActions(edge: .leading, allowsFullSwipe: false) {
             Button {
                 tracksForAddToPlaylist = [track]
@@ -2457,15 +1961,8 @@ private struct SideGroup: Identifiable {
 
 // MARK: - Track Table Columns
 
-/// Which columns the playlist table shows, and how wide they are.
-///
-/// The header and every row are laid out from the same values, which is the
-/// only thing keeping them lined up — there's no real table here, just two
-/// HStacks that have agreed on their geometry.
-///
-/// Columns are chosen by measured width rather than by platform: a Mac window
-/// dragged narrow deserves the same treatment as an iPhone, and an iPad in
-/// landscape is wide enough to earn the full table.
+/// Which columns the track list shows, and their widths. Header and rows
+/// share these values to line up. Chosen by width, not platform.
 struct TrackColumns {
 
     var showsAlbum = false
@@ -2473,33 +1970,20 @@ struct TrackColumns {
     /// Zero when the album column is hidden.
     var albumWidth: CGFloat = 0
 
-    /// True once at least one extra column is showing — below this the row is
-    /// the plain artwork/title/heart layout and a header would be labelling
-    /// columns that aren't there.
+    /// True once any extra column is showing.
     var isTable: Bool { showsAlbum || showsDate }
 
     static let date:     CGFloat = 96
     static let heart:    CGFloat = 32
     static let duration: CGFloat = 44
-    /// Artwork (44) plus the gap before the title inside `TrackRowView` — how
-    /// far the header's "Title" has to be pushed to sit over the song titles.
+    /// Artwork (44) plus the gap before the title, so the header's "Title" lines up.
     static let titleInset: CGFloat = 56
 
     // MARK: Row geometry
-    //
-    // Read by both `PlaylistTrackRow` and `TrackListHeader` — the two only line
-    // up because they measure from the same numbers.
-    //
-    // iOS runs tight at the leading edge. A Mac window has chrome to sit inboard
-    // of and a phone doesn't, so every point spent on a gutter there is a point
-    // the song title never gets; the index sits almost on the edge and the row
-    // reads as the full width of the screen. The trailing side keeps more, since
-    // that's where the duration and the heart are.
+    // iOS runs tight at the leading edge to give titles room; the trailing side keeps more.
 
     #if os(iOS)
-    /// Four digits of 12pt monospaced digits (~7.2pt each) plus a hair. A
-    /// playlist runs to whatever length you make it, and at 20pt every
-    /// position past 99 rendered as "1…".
+    /// Room for four digits at 12pt monospaced.
     static let index:      CGFloat = 32
     /// Between the index, the title block and each trailing column.
     static let gutter:     CGFloat = 8
@@ -2507,8 +1991,7 @@ struct TrackColumns {
     static let rowPadding: CGFloat = 6
     static let rowLeading:  CGFloat = 4
     static let rowTrailing: CGFloat = 8
-    /// Air above and below each row. Zero on the Mac: that table is meant to be
-    /// dense, and tight rows are what make a hundred of them readable at once.
+    /// Row padding. Zero on the Mac for a dense table.
     static let rowVertical: CGFloat = 8
     #else
     /// See the iOS note: sized for four digits, not two.
@@ -2535,11 +2018,7 @@ struct TrackColumns {
 
 // MARK: - Column Header
 
-/// The grey `#  Title  Album  Date added  ⏱` strip above the songs.
-///
-/// Internal rather than private to this file because a mix page is a playlist
-/// page — it draws the same header over the same rows, from the same
-/// `TrackColumns`, which is the only reason the two line up.
+/// The column header strip. Internal so mix pages can reuse it over the same rows.
 struct TrackListHeader: View {
 
     let columns: TrackColumns
@@ -2563,8 +2042,7 @@ struct TrackListHeader: View {
                     .frame(width: TrackColumns.date, alignment: .leading)
             }
 
-            // Nothing to label above the heart, but the space still has to be
-            // reserved or every column to its left drifts.
+            // Reserve the heart column so the others don't drift.
             Color.clear
                 .frame(width: TrackColumns.heart, height: 1)
 
@@ -2586,11 +2064,8 @@ struct TrackListHeader: View {
 }
 
 // MARK: - Playlist Track Row
-//
-// The playlist's own row treatment: a leading track number that turns into a
-// play triangle on hover, an inset hover/selection pill, and single-click
-// select (double-click still plays). Rows used to start flush against the
-// window edge with no hover feedback at all.
+// A playlist row: the number turns into a play button on hover, with an inset
+// hover/selection pill. Single-click selects, double-click plays.
 
 struct PlaylistTrackRow: View {
 
@@ -2608,8 +2083,7 @@ struct PlaylistTrackRow: View {
     var isOfflineUnavailable: Bool = false
     let onPlay:   () -> Void
     let onSelect: () -> Void
-    /// Non-nil outside the library: the row saves rather than favourites.
-    /// See `TrackRowView.onSaveToLibrary`.
+    /// Non-nil outside the library: the row saves instead of liking. See `TrackRowView.onSaveToLibrary`.
     var onSaveToLibrary: (() -> Void)? = nil
 
     @State private var isHovered = false
@@ -2618,8 +2092,7 @@ struct PlaylistTrackRow: View {
         HStack(spacing: TrackColumns.gutter) {
             indexColumn
 
-            // In table mode the heart moves out to its own column so it sits
-            // under nothing rather than in the middle of the row.
+            // In table mode the heart gets its own column.
             TrackRowView(
                 track:             track,
                 isCurrent:         isCurrent,
@@ -2691,9 +2164,7 @@ struct PlaylistTrackRow: View {
         return .clear
     }
 
-    /// The narrow gutter that gives the row its Spotify-style position number.
-    /// Right-aligned so double digits grow leftwards and every artwork below
-    /// still starts on the same line.
+    /// The position number, right-aligned so the artwork lines up.
     private var indexColumn: some View {
         Group {
             if isHovered {
@@ -2708,8 +2179,6 @@ struct PlaylistTrackRow: View {
                 Text("\(index)")
                     .font(.system(size: MixFontScale.size(12), weight: .medium).monospacedDigit())
                     .foregroundStyle(Color.mixTextTertiary)
-                    // Belt and braces: the column is sized for four digits, and
-                    // anything past that shrinks rather than becoming "1…".
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
             }
@@ -2717,8 +2186,7 @@ struct PlaylistTrackRow: View {
         .frame(width: TrackColumns.index, alignment: .trailing)
     }
 
-    /// Only shown in table mode — otherwise `TrackRowView` draws the heart in
-    /// its own trailing slot.
+    /// Table mode only; otherwise `TrackRowView` draws the heart.
     private var favouriteButton: some View {
         Button(action: onToggleFavourite) {
             Image(systemName: isFavourited ? "heart.fill" : "heart")
@@ -2729,66 +2197,44 @@ struct PlaylistTrackRow: View {
         }
         .buttonStyle(.plain).mixHandCursor()
         #if os(macOS)
-        // An unfavourited song only offers its heart while the pointer is on
-        // the row, so the column isn't a wall of grey outlines.
+        // Unliked hearts only show on hover.
         .opacity(isFavourited || isHovered ? 1 : 0)
         #endif
     }
 
-    /// "2 days ago", "Last week" — see `AddedDateText`, which the macOS table
-    /// draws from too so the two lists never word the same song differently.
+    /// Shares `AddedDateText` with the macOS table so both word dates the same.
     private var dateAdded: String { AddedDateText.relative(track.dateImported) }
 }
 
 // MARK: - Add to Playlist Sheet
 
-/// Pick playlists for one song.
-///
-/// Modelled on Spotify's sheet, and for the same reasons: you can see at a
-/// glance which playlists the song is *already* in, you can add it to several in
-/// one visit, and the sheet doesn't slam shut on the first tap. The old version
-/// showed no membership at all and dismissed immediately, so adding a song to
-/// three playlists meant opening it three times and guessing each time.
+/// Pick playlists for a song. Shows current membership and stays open for several adds.
 struct AddToPlaylistSheet: View {
 
     /// Why the sheet was opened, which decides what it leads with.
     enum Purpose {
-        /// "File this song somewhere" — opened from a menu.
+        /// Opened from a menu.
         case add
-        /// "Where is this song?" — opened by tapping the check on a song that is
-        /// already saved. Same list, but it has to answer the question that was
-        /// asked, so the library itself appears under "Saved in". Without it the
-        /// sheet said nothing at all about a song that had just been saved: All
-        /// Songs is filtered out of the pickable playlists, so a song in the
-        /// library and no playlist looked exactly like a song saved nowhere.
+        /// Opened from the check on a saved song. Also lists the library under "Saved in".
         case savedIn
     }
 
-    /// The songs being filed. Usually one; a multi-row selection on macOS sends
-    /// the whole lot, and then every row in the sheet is a decision about all of
-    /// them at once.
+    /// The songs being filed. With several, each row applies to all of them.
     let tracks: [Track]
     var purpose: Purpose = .add
-    /// The playlist the sheet was opened from, hidden from the list because
-    /// "add it to the playlist you're already looking at" isn't an offer. Nil
-    /// when opened from the player, where there is no such context — then every
-    /// playlist is fair game, including the one the song already sits in.
+    /// Hidden from the list. Nil from the player, where every playlist is offered.
     var sourcePlaylistID: UUID? = nil
 
-    /// What frame this is wearing. The list is the same either way — only the
-    /// chrome around it, and how much room it has, differ.
+    /// Same list, different chrome.
     enum Chrome {
-        /// A modal sheet. Still what iOS gets, and what the Mac gets in the one
-        /// place there is no window to hang a panel in.
+        /// A modal sheet: iOS, and the Mac where there's no window for a panel.
         case sheet
-        /// A small box in the corner of the window, above the player bar, with
-        /// the app still live behind it. See `SavedInPanel`.
+        /// A corner panel above the player bar. See `SavedInPanel`.
         case panel
     }
 
     var chrome: Chrome = .sheet
-    /// How to close, when there is no sheet to dismiss. Nil means "you are a
-    /// sheet, use the environment".
+    /// Close action when not a sheet. Nil uses the environment's dismiss.
     var onClose: (() -> Void)? = nil
 
     init(track: Track,
@@ -2823,42 +2269,23 @@ struct AddToPlaylistSheet: View {
     /// Which row the pointer is over. Nil on iOS, where there's no pointer.
     @State private var hoveredID: UUID?
 
-    /// Which playlists hold *every* song in `tracks`, as this sheet sees it.
-    ///
-    /// Kept here rather than read off `libraryService.playlists` on each redraw,
-    /// so the checkmark and the section a row sits in come from one value that
-    /// changes on the tap itself. Deriving them separately is what let a row
-    /// move up under "Saved in" still wearing an empty ring: the arrays
-    /// recomputed, the glyph didn't.
+    /// Playlists holding every song, kept as state so the checkmark and section change together on tap.
     @State private var membership: Set<UUID> = []
 
-    /// Playlists holding some but not all of the selection. Only ever populated
-    /// for a multi-song sheet, where "is this song in here" has three answers
-    /// rather than two and a plain ring would be a lie about half of them.
+    /// Playlists holding some of the selection (multi-song only).
     @State private var partialMembership: Set<UUID> = []
 
-    /// Bumped on the row whose mark was just turned off, to fire the reverse of
-    /// the save bounce on it. Keyed by playlist so only that row animates, and a
-    /// counter rather than a flag so unfiling two rows in a row is two bounces.
+    /// Per-row counter that fires the unfile bounce.
     @State private var unfilePops: [UUID: Int] = [:]
 
-    /// Bumped whenever the library publishes. `deps` doesn't republish for
-    /// changes inside `libraryService`, so without this a playlist made from the
-    /// "New playlist" row only appeared when something else happened to redraw
-    /// the sheet.
+    /// Bumped when the library publishes, since `deps` doesn't republish `libraryService` changes.
     @State private var libraryTick = 0
 
-    /// Stands in for the "New playlist" row in `hoveredID`, which is otherwise
-    /// keyed by playlist.
+    /// Stands in for the "New playlist" row in `hoveredID`.
     private static let newRowID = UUID()
 
-    // Every playlist a song can be filed under: user playlists plus Favourites.
-    // All Songs is excluded — it's auto-managed, and "add to All Songs" isn't a
-    // choice anyone gets to make. Mixes and saved playlists are excluded for the
-    // opposite reason: every row here is a toggle, and there's nothing to toggle
-    // on a playlist this user can't edit. It also keeps "Saved in" honest — that
-    // list answers "where did you file this", and a song appearing in someone
-    // else's playlist isn't an answer to that.
+    // Playlists you can file into: your own plus Favourites. Not All Songs
+    // (automatic), mixes or saved playlists (read-only).
     private var candidates: [Playlist] {
         deps.libraryService.playlists.filter {
             $0.id != sourcePlaylistID && !$0.isDeleted && !$0.isAllSongs && $0.isEditable
@@ -2871,23 +2298,19 @@ struct AddToPlaylistSheet: View {
         return candidates.filter { $0.name.localizedCaseInsensitiveContains(trimmed) }
     }
 
-    /// Already contains the song — or all of them.
+    /// Already holds the song, or all of them.
     private var containing: [Playlist] {
         matching.filter { membership.contains($0.id) }
     }
 
-    /// Doesn't yet — most recently updated first, so the playlist someone is
-    /// actively building is the one at the top. A playlist holding part of the
-    /// selection belongs here: there is still something to add to it.
+    /// Doesn't yet, most recently updated first. Partial matches go here.
     private var available: [Playlist] {
         matching
             .filter { !membership.contains($0.id) }
             .sorted { $0.sync.localModifiedAt > $1.sync.localModifiedAt }
     }
 
-    /// What the library currently says, used to seed `membership` when the sheet
-    /// opens. Full membership first, then the playlists holding only part of a
-    /// multi-song selection.
+    /// Membership from the library, used to seed `membership` on open.
     private func storedMembership() -> (full: Set<UUID>, partial: Set<UUID>) {
         var full    = Set<UUID>()
         var partial = Set<UUID>()
@@ -2918,9 +2341,7 @@ struct AddToPlaylistSheet: View {
         }
     }
 
-    /// The corner panel. No footer, no window chrome: the title says what this
-    /// is, the close button is the only control that isn't a playlist, and
-    /// clicking anywhere else in the app closes it too.
+    /// The corner panel: title, close button, list. Clicking elsewhere closes it.
     private var panelBody: some View {
         VStack(spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -2962,9 +2383,7 @@ struct AddToPlaylistSheet: View {
         .shadow(color: .black.opacity(0.34), radius: 22, y: 10)
     }
 
-    /// Inset for everything in the list. The panel is far narrower than the
-    /// sheet, and the sheet's margins inside it would leave the covers crowding
-    /// the names.
+    /// Tighter inset in the narrower panel.
     private var hPad: CGFloat { chrome == .panel ? 14 : 20 }
 
     private func close() {
@@ -2972,14 +2391,7 @@ struct AddToPlaylistSheet: View {
     }
 
     private var sheetBody: some View {
-        // This sheet had already worked out that a nav title inside a Mac sheet
-        // renders as a large heading with a great deal of air above it, and
-        // hand-built a title bar and button row to avoid it. That reasoning is
-        // now the shared chrome's job, so both platforms get the same answer
-        // instead of this one file getting it right alone.
-        //
-        // `scroll: false` — the playlist list owns its own scrolling, and the
-        // search field has to stay put above it.
+        // `scroll: false`: the list scrolls itself and the search field stays put.
         MixSheet(title: sheetTitle,
                  subtitle: subtitle,
                  size: .large,
@@ -2991,15 +2403,11 @@ struct AddToPlaylistSheet: View {
         }
     }
 
-    /// Both platforms' heading. `.savedIn` answers the question that was asked
-    /// by tapping the check; you can still file the song elsewhere from here,
-    /// but that isn't what the sheet is for at that point.
     private var sheetTitle: String {
         purpose == .savedIn ? "Saved In" : "Add to Playlist"
     }
 
-    /// One song names itself; a selection is counted. Listing five titles in a
-    /// subtitle would truncate to something less useful than the number.
+    /// One song names itself; a selection shows a count.
     private var subtitle: String {
         guard let only = tracks.first, tracks.count == 1 else {
             return "\(tracks.count) songs"
@@ -3048,10 +2456,7 @@ struct AddToPlaylistSheet: View {
 
     // MARK: - List
 
-    /// A plain scroller, not a `List`. The list's own row backgrounds, inset
-    /// separators and selection styling were all fighting the palette — every
-    /// row carried a full-width hairline, including under the section headings,
-    /// which is what made this look assembled rather than designed.
+    /// A plain scroller, not a `List`, whose separators and row styling fought the palette.
     private var listBody: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
@@ -3061,10 +2466,7 @@ struct AddToPlaylistSheet: View {
                     .overlay(Color.mixSeparator)
                     .padding(.leading, hPad)
 
-                // One flat ForEach rather than a ForEach per section. With two of
-                // them a playlist that crossed from "Recently updated" to "Saved
-                // in" kept the identity — and the view — it had in the other
-                // loop, so it arrived in its new section still drawn the old way.
+                // One flat ForEach so a playlist moving between sections is redrawn, not reused.
                 ForEach(entries) { entry in
                     switch entry {
                     case .header(let title):
@@ -3090,14 +2492,11 @@ struct AddToPlaylistSheet: View {
         .scrollContentBackground(.hidden)
     }
 
-    /// A heading, a playlist, or the library itself, so all three can live in
-    /// one `ForEach`.
+    /// A heading, playlist, or the library row, so all fit in one `ForEach`.
     private enum Entry: Identifiable {
         case header(String)
         case playlist(Playlist)
-        /// The library row. Not a `.playlist` even though All Songs is one
-        /// underneath: it is named differently, it is never a target to add to,
-        /// and pressing it deletes the song rather than unfiling it.
+        /// The library row: never an add target, and pressing it deletes the song.
         case library(Playlist)
 
         var id: String {
@@ -3109,9 +2508,7 @@ struct AddToPlaylistSheet: View {
         }
     }
 
-    /// All Songs, which every saved track belongs to. Shown only in `.savedIn`,
-    /// and not while a search is running — the field filters playlists, and a
-    /// row that ignores it would read as a result that doesn't match.
+    /// All Songs, shown only in `.savedIn` and not while searching.
     private var libraryRow: Playlist? {
         guard purpose == .savedIn,
               query.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
@@ -3126,8 +2523,7 @@ struct AddToPlaylistSheet: View {
         if library != nil || !containing.isEmpty {
             out.append(.header("Saved in"))
         }
-        // Library first: it's the broadest answer to "where is this", and the
-        // playlists underneath narrow it down.
+        // Library first, as the broadest answer.
         if let library { out.append(.library(library)) }
         out.append(contentsOf: containing.map(Entry.playlist))
         if !available.isEmpty {
@@ -3148,13 +2544,7 @@ struct AddToPlaylistSheet: View {
 
     // MARK: - Rows
 
-    /// A playlist and whether the song is in it. Tapping toggles — and the sheet
-    /// stays open, because the next tap is usually another playlist.
-    ///
-    /// Purpose-built rather than reusing `PlaylistRowView`: that row carries a
-    /// now-playing equaliser and tints its title, both of which are answers to a
-    /// question nobody is asking here. What matters in this sheet is whether the
-    /// song is filed under this playlist.
+    /// A playlist row with its membership mark. Tapping toggles and keeps the sheet open.
     private func row(for playlist: Playlist) -> some View {
         let isIn      = membership.contains(playlist.id)
         let isPartial = !isIn && partialMembership.contains(playlist.id)
@@ -3185,10 +2575,7 @@ struct AddToPlaylistSheet: View {
 
                 Spacer(minLength: 8)
 
-                // A filled mark for in, a thin ring for out, a dash for a
-                // playlist that already holds part of the selection. Light
-                // weight keeps the empty state a hairline outline instead of a
-                // heavy blob.
+                // Filled check for in, ring for out, dash for partial.
                 Image(systemName: isIn ? "checkmark.circle.fill"
                                        : (isPartial ? "minus.circle.fill" : "circle"))
                     .font(.system(size: 19, weight: isIn || isPartial ? .regular : .light))
@@ -3212,17 +2599,7 @@ struct AddToPlaylistSheet: View {
         }
     }
 
-    /// "Your Library" — and, like every other row in this sheet, the way back
-    /// out of it.
-    ///
-    /// This was deliberately inert once, on the grounds that a song leaving the
-    /// library can take a downloaded file with it and that belonged in the
-    /// library rather than in a sheet about playlists. The row read as a
-    /// control anyway: a name with a filled check beside it, in a list where
-    /// every other filled check unfiles the song when pressed. A control that
-    /// does nothing isn't restraint, it's a bug — so it now does the thing it
-    /// looks like it does. The delete is the soft one the rest of the app uses:
-    /// the songs go to Recently Deleted and come back whole.
+    /// "Your Library". Pressing it soft-deletes the songs to Recently Deleted.
     private func libraryRowView(_ playlist: Playlist) -> some View {
         Button {
             removeFromLibrary()
@@ -3261,23 +2638,18 @@ struct AddToPlaylistSheet: View {
         .accessibilityLabel("Saved in your library. Remove.")
     }
 
-    /// Leaves the library entirely — which also means leaving every playlist in
-    /// it, and giving back any downloaded file. The sheet closes afterwards
-    /// because none of what it was showing is true any more: the playlists it
-    /// listed no longer hold the song, and the row that was just pressed no
-    /// longer has anything to describe.
+    /// Removes the songs from the library, then closes since nothing shown is true any more.
     private func removeFromLibrary() {
         unfilePops[Playlist.allSongsID, default: 0] += 1
         Haptics.play(.success)
+        SupabaseSyncService.allowBulk("user-remove")
         deps.libraryService.deleteTracks(ids: tracks.map(\.id))
         deps.showRemovedToast(.library, count: tracks.count)
-        // Long enough for the mark to bounce before the sheet goes; short
-        // enough that it still reads as one gesture.
+        // Let the mark bounce before closing.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.26) { close() }
     }
 
-    /// 44pt tile. Deliberately no tinted fill behind the glyphs — the orange
-    /// wash behind Favourites and "New playlist" was reading as a glow.
+    /// 44pt tile with no tinted fill behind the glyph.
     @ViewBuilder
     private func artwork(for playlist: Playlist) -> some View {
         ZStack {
@@ -3305,8 +2677,7 @@ struct AddToPlaylistSheet: View {
         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
     }
 
-    /// Inline "New playlist" — the whole reason to leave this sheet was usually
-    /// that the right playlist didn't exist yet.
+    /// Inline "New playlist" row.
     @ViewBuilder
     private var newPlaylistRow: some View {
         if isNamingNewPlaylist {
@@ -3330,8 +2701,7 @@ struct AddToPlaylistSheet: View {
             .padding(.vertical, 7)
         } else {
             Button {
-                // A search that found nothing is usually a playlist that doesn't
-                // exist yet, so it seeds the name.
+                // No results usually means the playlist doesn't exist yet, so seed the name.
                 newPlaylistName = matching.isEmpty ? query : ""
                 isNamingNewPlaylist = true
                 newNameFocused = true
@@ -3375,42 +2745,24 @@ struct AddToPlaylistSheet: View {
 
     // MARK: - Actions
 
-    /// Flips `membership` first, then writes it through. The mark and the section
-    /// both read from that set, so they change together on the tap instead of
-    /// waiting on a publisher.
+    /// Flips `membership` first so the mark and section change together, then writes through.
     private func toggle(_ playlist: Playlist) {
         let ids = tracks.map(\.id)
         if membership.contains(playlist.id) {
             membership.remove(playlist.id)
             partialMembership.remove(playlist.id)
-            deps.libraryService.removeTracks(ids: ids, fromPlaylist: playlist.id)
+            deps.removeTracks(ids: ids, fromPlaylist: playlist.id)
             unfilePops[playlist.id, default: 0] += 1
             Haptics.play(.success)
-            // The card, not the wide toast: this is the mirror of the "Added to
-            // \u{2026}" the same gesture shows on the way in, and the two reading
-            // differently made unfiling feel like a warning.
-            deps.showRemovedToast(destination(for: playlist), count: tracks.count)
         } else {
-            // A partial playlist fills up rather than emptying: the row was
-            // showing "some of these are here", and the obvious next wish is
-            // for the rest to join them.
+            // A partial playlist fills up rather than emptying.
             membership.insert(playlist.id)
             partialMembership.remove(playlist.id)
             deps.addTracks(ids: ids, toPlaylist: playlist.id)
         }
     }
 
-    /// The card's own idea of where a playlist is: Favourites and the library
-    /// are system rows and name themselves, everything else is itself.
-    private func destination(for playlist: Playlist) -> SaveDestination {
-        if playlist.isFavourites { return .favourites }
-        if playlist.isAllSongs   { return .library }
-        return .playlist(id: playlist.id, name: playlist.name)
-    }
-
-    /// Empty for one song — "Added to Roadtrip" — and a count for a selection,
-    /// which is the only case where the number tells you anything. Carries its
-    /// own trailing space so the one-song sentence doesn't grow a double one.
+    /// Empty for one song, a count for a selection. Includes its own trailing space.
     private var songPhrase: String {
         tracks.count == 1 ? "" : "\(tracks.count) songs "
     }
@@ -3445,9 +2797,7 @@ struct AddToPlaylistSheet: View {
     }
 }
 
-/// The search term left in each playlist, for as long as the app is running.
-/// Not persisted: a filter is where you got to in a browsing session, and one
-/// restored from three days ago reads as a playlist that has lost its songs.
+/// The search term per playlist, kept for the app session only.
 enum PlaylistSearchMemory {
     private static var queries: [UUID: String] = [:]
 

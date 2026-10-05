@@ -1,8 +1,4 @@
-// OnlineCatalog.swift
-// Mixtape
-//
-// Value types for Discover browse — artists and albums from Deezer search.
-// Songs use OnlineTrack.
+// Discover browse types: Deezer artists and albums. Songs use OnlineTrack.
 
 import Foundation
 
@@ -26,20 +22,13 @@ public struct OnlineAlbum: Identifiable, Hashable, Sendable {
     public let artistName: String
     public let coverURL: URL?
 
-    /// When it came out, where that's known. Only the album *detail* endpoint
-    /// carries it — search and chart listings don't — so this is nil for most
-    /// albums and non-nil exactly where it's needed: deciding whether something
-    /// belongs in "New releases". Optional rather than defaulted to a date, so
-    /// "we don't know" can't masquerade as "released in 1970".
+    /// Only the album detail endpoint has this, so usually nil. Used for New releases.
     public let releaseDate: Date?
 
-    /// "album" | "ep" | "single" | "compile", where the endpoint said. Nil where
-    /// it didn't. Only used to label a release — "Single • Drake" — so an
-    /// unknown one simply goes unlabelled rather than being guessed at.
+    /// "album" | "ep" | "single" | "compile", when known. Label only.
     public let recordType: String?
 
-    /// The label for `recordType`, in the app's capitalisation. Nil when we
-    /// don't know, so callers can leave the line out entirely.
+    /// Nil when unknown so the label can be left out.
     public var recordTypeLabel: String? {
         switch recordType {
         case "album":   return "Album"
@@ -50,9 +39,7 @@ public struct OnlineAlbum: Identifiable, Hashable, Sendable {
         }
     }
 
-    /// How many songs are on it, where the endpoint said so — `/artist/{id}/
-    /// albums` carries it, search and the charts don't. Used to total up an
-    /// artist's catalogue without opening every release.
+    /// From /artist/{id}/albums only. Used to total an artist's catalogue.
     public let trackCount: Int?
 
     public init(id: Int, title: String, artistName: String, coverURL: URL?,
@@ -81,11 +68,8 @@ public struct BrowseGenre: Identifiable, Hashable, Sendable {
     }
 }
 
-/// One row in the search-as-you-type dropdown.
-///
-/// `kind` carries the Deezer id so a tap can open the entity directly instead of
-/// re-running the text search — except `.term`, which is a plain query completion
-/// with nothing behind it and should just re-run the search.
+/// A search-as-you-type row. `kind` carries the Deezer id so a tap opens it
+/// directly. `.term` just re-runs the search.
 public struct SearchSuggestion: Identifiable, Hashable, Sendable, Codable {
     public enum Kind: Hashable, Sendable, Codable {
         case term                     // plain query completion, no entity behind it
@@ -100,25 +84,14 @@ public struct SearchSuggestion: Identifiable, Hashable, Sendable, Codable {
     public let imageURL: URL?
     public let isExplicit: Bool
 
-    /// The same names the subtitle renders, kept structured.
-    ///
-    /// `subtitle` is a display string and nothing else — picking a row has to
-    /// build an `OnlineTrack`/`OnlineAlbum` to play or open, and splitting
-    /// "Song • THIZZY52" back apart on a bullet would break on the first artist
-    /// with one in their name. Nil where the kind has no such name.
+    /// The artist behind the subtitle, kept structured so it isn't parsed back out.
     public let artistName: String?
     public let albumTitle: String?
 
-    /// The song's length, when the row is a track. Optional so recents saved
-    /// before it existed still decode — and carried at all because the
-    /// resolver gates its pick on the catalogue duration: handing it 0 is
-    /// handing it "anything goes".
+    /// Track length. The resolver gates on duration, so 0 would mean anything goes.
     public let duration: TimeInterval?
 
-    /// True when this is something the library already has. Set by
-    /// `SearchSuggestionsStore` after the fetch — the catalogue layer knows
-    /// nothing about the user — and used both to badge the row and to float it
-    /// above the strangers.
+    /// Set by SearchSuggestionsStore. Badges the row and sorts it first.
     public var inLibrary = false
 
     public init(id: String, kind: Kind, title: String, subtitle: String?,
@@ -137,8 +110,8 @@ public struct SearchSuggestion: Identifiable, Hashable, Sendable, Codable {
     }
 }
 
-/// What the Discover tab shows before any search — charts, artists, new releases
-/// and genres from Deezer's free endpoints. Each leg fails soft to an empty array.
+/// Discover before any search: charts, artists, new releases and genres.
+/// Each part fails to an empty array.
 public struct BrowseLanding: Sendable {
     public var trending: [OnlineTrack]
     public var artists: [OnlineArtist]
@@ -169,25 +142,15 @@ public struct DiscoverResults: Sendable {
     /// Main + featured artists on `topSong`, shown beneath the hero.
     public var songArtists: [OnlineArtist]
 
-    /// Songs matched by lyrics (NetEase search → Deezer). Filled in after the
-    /// main results, shown with a "Lyrics match" badge.
+    /// Lyrics matches, filled in after the main results.
     public var lyricMatches: [OnlineTrack]
 
-    /// True when the query named an ARTIST (so `artists.first` is the anchor the
-    /// whole page was built from and belongs in "Top result"), false when it named
-    /// a song. The search layer decides this from name-match strength, popularity
-    /// and which artist owns the matching songs; a view re-deriving it from the raw
-    /// query text will disagree on abbreviations like "wknd" → The Weeknd.
+    /// Whether the query named an artist, so artists.first is the top result.
+    /// Decided by the search layer; don't re-derive it from the query text.
     public var anchorIsArtist: Bool
 
-    /// True when the songs genuinely answer the query — either they belong to
-    /// the anchor artist, or their titles/credits contain what was typed.
-    ///
-    /// False means the relevance filter emptied the list and the raw Deezer
-    /// full-text hits were kept instead, which is deliberate (a strange query
-    /// showing *something* beats a blank page) but is not the same claim. The
-    /// page has to say which it is: presenting a guess under a plain "Songs"
-    /// heading is exactly how a search reads as broken.
+    /// Whether the songs actually match the query. False means the filter emptied
+    /// the list and raw Deezer hits were kept, so the page labels them differently.
     public var songsMatched: Bool
 
     public init(songs: [OnlineTrack] = [], artists: [OnlineArtist] = [], albums: [OnlineAlbum] = [],
@@ -210,24 +173,16 @@ public struct DiscoverResults: Sendable {
 }
 
 /// Everything the artist page draws.
-///
-/// A struct rather than the tuple this used to be, because the page grew an
-/// "Appears On" shelf and a fan count and a five-field tuple is where that
-/// stops being readable.
 public struct OnlineArtistCatalogue: Sendable {
     /// Their own songs, most popular first.
     public var top: [OnlineTrack] = []
     public var albums: [OnlineAlbum] = []
     public var related: [OnlineArtist] = []
-    /// Songs released under someone else's name that credit this artist —
-    /// Spotify's "Appears On", which for a features-heavy artist is most of
-    /// what you actually came looking for.
+    /// Songs on other artists' releases that credit this artist.
     public var appearsOn: [OnlineTrack] = []
-    /// Deezer's own "fans also like" radio for this artist — the seed for the
-    /// "<name> Radio" station on the page.
+    /// Deezer's artist radio, seeds the station on the page.
     public var radio: [OnlineTrack] = []
-    /// Deezer's fan count, for the header. Nil when the lookup failed —
-    /// a missing number must not render as "0 fans".
+    /// Nil when the lookup failed, so it never shows "0 fans".
     public var fanCount: Int?
 
     public var isEmpty: Bool { top.isEmpty && albums.isEmpty && appearsOn.isEmpty }

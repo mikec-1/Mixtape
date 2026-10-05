@@ -1,35 +1,19 @@
-// SettingsCategory.swift
-// Mixtape — Features/Settings
-//
-// The map of Settings: what the categories are, and every setting inside them
-// that search can find.
-//
-// Splitting one 60-row scroll into pages makes each page readable and every
-// setting one level deeper. The index below is what pays that back — it's the
-// reason "quality" still lands you on Download Quality without knowing it lives
-// under Downloads. Keeping it in the same file as the categories is deliberate:
-// an entry that drifts from the row it points at is worse than no entry, so the
-// two live where you can't edit one without seeing the other.
+// The Settings categories plus the search index for every setting in them.
+// Kept in one file so an index entry can't drift from the row it points at.
 
 import SwiftUI
 import Combine
 
 // MARK: - Deep links
 
-/// A request to open Settings somewhere specific.
-///
-/// The menus that used to present the Spotify importer as a sheet now point at
-/// the page in Settings that owns it, and "open Settings, on Connections, with
-/// the library picker up" is three things to say across two platforms whose
-/// Settings shells share no navigation state. One tiny observable is cheaper
-/// than threading a target through both.
+/// A request to open Settings somewhere specific, e.g. Connections with the Spotify
+/// library picker up. Shared by both platforms' Settings shells.
 @MainActor
 final class SettingsRoute: ObservableObject {
 
     static let shared = SettingsRoute()
 
-    /// The pane macOS shows. Here rather than in SettingsView's `@State` so the
-    /// window's back/forward history can record and restore it (MacAppState).
+    /// The pane macOS shows. Here so the window's back/forward history can restore it (MacAppState).
     @Published var category: SettingsCategory = .general
 
     /// Bumped on every request, so asking for the same page twice still moves.
@@ -120,8 +104,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable, Hashable {
         }
     }
 
-    /// Colour is only used at this level — inside a page the glyphs go quiet.
-    /// Distinct hues here are what let you find "the orange one" without reading.
+    /// Colour only at this level; inside a page the glyphs stay monochrome.
     var tint: Color {
         switch self {
         case .account:     return Color(hex: "#5B8DEF")
@@ -137,8 +120,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable, Hashable {
         }
     }
 
-    /// The categories to show. `developer` is hidden unless the signed-in
-    /// account carries the role, and `account` unless someone is signed in.
+    /// `developer` needs the account role; `account` needs a signed-in user.
     static func visible(isSignedIn: Bool, isDeveloper: Bool) -> [SettingsCategory] {
         allCases.filter { category in
             switch category {
@@ -158,9 +140,7 @@ struct SettingsSearchEntry: Identifiable, Hashable {
     let id: String
     let title: String
     let category: SettingsCategory
-    /// Words that should find this row but don't appear in its title. The
-    /// vocabulary someone searches with is rarely the label we chose — "bitrate"
-    /// for Download Quality, "dark mode" for Appearance.
+    /// Search terms not in the title, like "bitrate" for Download Quality.
     var keywords: [String] = []
 
     func matches(_ query: String) -> Bool {
@@ -173,8 +153,7 @@ struct SettingsSearchEntry: Identifiable, Hashable {
 
 enum SettingsSearchIndex {
 
-    /// Every row worth finding. Rows that are pure display (version numbers,
-    /// status badges) are indexed too — people search for those most of all.
+    /// Every row worth finding, display-only rows (version, status) included.
     static let all: [SettingsSearchEntry] = {
         var entries: [SettingsSearchEntry] = [
 
@@ -191,6 +170,8 @@ enum SettingsSearchIndex {
                   keywords: ["export", "gdpr", "backup", "copy", "json", "takeout"]),
             .init(id: "account.privacy", title: "Privacy Policy", category: .account,
                   keywords: ["gdpr", "data", "personal information", "rights"]),
+            .init(id: "account.analytics", title: "Help Improve Mixtape", category: .account,
+                  keywords: ["analytics", "usage", "data", "privacy", "tracking", "improve"]),
             .init(id: "account.activity", title: "Show My Listening Activity", category: .account,
                   keywords: ["privacy", "share", "stats", "friends", "public", "hide"]),
             .init(id: "account.signOut", title: "Sign Out", category: .account,
@@ -239,13 +220,29 @@ enum SettingsSearchIndex {
             .init(id: "general.chrome", title: "Visual Effects", category: .general,
                   keywords: ["blur", "shadows", "gradient", "wash", "artwork colour",
                              "flat", "glossy", "transparency", "material"]),
+            .init(id: "general.backdrop", title: "Background Colour", category: .general,
+                  keywords: ["background", "colour", "color", "gradient", "tint", "custom",
+                             "wallpaper", "floating", "moving", "aesthetic"]),
             .init(id: "general.allSongs", title: "Show All Songs", category: .general,
                   keywords: ["all songs", "library", "sidebar", "everything",
                              "every song", "hide", "liked songs"]),
+            .init(id: "general.importsTo", title: "Add Imported Songs To", category: .general,
+                  keywords: ["import", "imports", "imported", "liked songs", "all songs",
+                             "files", "youtube", "spotify", "like", "heart"]),
+            .init(id: "general.notifications", title: "Notifications", category: .general,
+                  keywords: ["alerts", "banners", "push", "permission", "messages", "jam", "release"]),
+            .init(id: "general.hardwareAcceleration", title: "Hardware Acceleration", category: .general,
+                  keywords: ["gpu", "metal", "graphics", "compatibility", "flicker", "glitch",
+                             "performance", "advanced", "stems"]),
 
             // Downloads
             .init(id: "downloads.quality", title: "Download Quality", category: .downloads,
                   keywords: ["bitrate", "aac", "size", "compression", "audio quality", "high", "low"]),
+            .init(id: "downloads.editQuality", title: "Song Edit Quality", category: .downloads,
+                  keywords: ["edit", "edits", "slowed", "reverb", "sped up", "bitrate", "aac",
+                             "size", "storage", "audio quality"]),
+            .init(id: "downloads.resaveEdits", title: "Re-save Edits at This Quality", category: .downloads,
+                  keywords: ["edit", "edits", "re-save", "resave", "re-render", "quality", "storage"]),
             .init(id: "downloads.autoAdjust", title: "Lower Quality on Mobile Data", category: .downloads,
                   keywords: ["cellular", "mobile data", "metered", "network",
                              "auto adjust", "automatic quality", "bitrate", "roaming"]),
@@ -319,6 +316,8 @@ enum SettingsSearchIndex {
                              "saved songs", "albums", "transfer", "move", "bring over"]),
             .init(id: "connections.spotifyLink", title: "Import a Spotify Playlist Link", category: .connections,
                   keywords: ["spotify", "playlist", "link", "url", "paste", "import"]),
+            .init(id: "connections.spotifyHistory", title: "Add Spotify Listening to Recaps", category: .connections,
+                  keywords: ["spotify", "history", "recently played", "recap", "listening", "stats"]),
             .init(id: "connections.lastfm", title: "Last.fm Account", category: .connections,
                   keywords: ["scrobble", "api key", "connect", "username"]),
             .init(id: "connections.scrobble", title: "Scrobble What I Play", category: .connections,
@@ -334,8 +333,7 @@ enum SettingsSearchIndex {
             .init(id: "about.terms", title: "Terms of Service", category: .about,
                   keywords: ["terms", "legal", "conditions", "tos"]),
 
-            // Danger Zone — indexed because "top artists are wrong" is a thing you
-            // search for, not something you'd think to look for under a warning sign.
+            // Danger Zone is indexed: "top artists are wrong" is something people search for.
             .init(id: "danger.resetSettings", title: "Reset All Settings", category: .dangerZone,
                   keywords: ["defaults", "restore", "factory", "start over"]),
             .init(id: "danger.removeLyrics", title: "Remove All Your Lyrics", category: .dangerZone,
@@ -381,8 +379,7 @@ enum SettingsSearchIndex {
         return entries
     }()
 
-    /// Hits for `query`, best-first. An exact prefix on the title is what people
-    /// usually mean, so those come before a match buried in a keyword list.
+    /// Hits for `query`, best-first. Title prefix matches beat keyword matches.
     static func results(for query: String,
                         isSignedIn: Bool,
                         isDeveloper: Bool) -> [SettingsSearchEntry] {

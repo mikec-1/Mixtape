@@ -1,26 +1,10 @@
-// BoundedConcurrency.swift
-// Mixtape — Core/Utilities
-//
-// "Do all of these, but not all at once."
-//
-// A plain `withTaskGroup` that adds one task per item is unbounded: fine for the
-// dozen covers in one playlist, ruinous for the thousands in a whole library.
-// Every request leaves at the same instant, the network queue thrashes, and
-// Spotify answers the flood with 429s — so the fastest way to ask for
-// everything turns out to be the slowest way to get it.
-//
-// This keeps a fixed number in flight: prime the group with `limit` tasks, then
-// start one more each time one finishes. Results come back in the order the
-// items were given, not the order they happened to complete.
+// Runs work with a fixed number in flight, keeping results in input order.
+// An unbounded task group floods the network and gets 429s.
 
 import Foundation
 
-/// Applies `transform` to every item with at most `limit` running concurrently,
-/// returning the results in the original order.
-///
-/// `transform` can't throw on purpose — one failure shouldn't abandon the work
-/// already done. Let it return an optional (or a `Result`) and let the caller
-/// decide what a gap means.
+/// `transform` over every item, at most `limit` at a time, in input order.
+/// Non-throwing so one failure doesn't abandon the rest; return an optional instead.
 func mapConcurrently<Item: Sendable, Output: Sendable>(
     _ items: [Item],
     limit: Int,

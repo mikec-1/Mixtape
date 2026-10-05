@@ -1,15 +1,6 @@
-// MusicFileManager.swift
-// Mixtape — Data/FileSystem
-//
-// Copies imported audio files into the app's sandbox and computes a SHA-256
-// content hash for deduplication. Files are stored at:
-//   Application Support/Mixtape/Music/<sha256>.<extension>
-//
-// Content-addressed storage means importing the same file twice is a no-op.
-//
-// Application Support, not Documents and emphatically not Library/Caches: an
-// imported original is frequently the only copy of that audio anywhere, so it
-// must survive both an OS purge and a device restore. See `AudioPaths`.
+// Copies imported audio into Application Support/Mixtape/Music/<sha256>.<ext>.
+// Content-addressed, so importing the same file twice is a no-op. Not Caches:
+// an import may be the only copy. See `AudioPaths`.
 
 import Foundation
 import CryptoKit
@@ -25,12 +16,8 @@ public final class MusicFileManager {
 
     // MARK: - Import
 
-    /// Copy a file into the sandbox and return its `FileProvenance`.
-    /// If a file with the same content hash already exists, the copy is skipped.
-    ///
-    /// - Parameter sourceURL: Security-scoped URL from the file picker.
-    ///   The caller is responsible for starting/stopping security scope access.
-    /// - Returns: `FileProvenance` describing the local file.
+    /// Copies a file in and returns its `FileProvenance`, skipping the copy if the
+    /// hash already exists. The caller manages security scope.
     public func importFile(from sourceURL: URL) throws -> FileProvenance {
         let hash     = try sha256(of: sourceURL)
         let ext      = sourceURL.pathExtension.lowercased()
@@ -44,9 +31,7 @@ public final class MusicFileManager {
 
         let attrs    = try FileManager.default.attributesOfItem(atPath: destURL.path)
         let fileSize = (attrs[.size] as? Int64) ?? 0
-        // Stored as a bare `Music/<file>` path rather than an absolute one: the
-        // container's real path changes between installs and OS versions, and
-        // `AudioPaths.resolve(localPath:)` knows every directory this can name.
+        // Relative path, since the container path changes; `AudioPaths.resolve` handles it.
         let relPath  = "Music/\(filename)"
 
         return FileProvenance(
@@ -88,11 +73,9 @@ public final class MusicFileManager {
         }
     }
 
-    // MARK: - SHA-256 (streaming, 1 MB chunks — handles large FLAC/WAV files)
+    // MARK: - SHA-256 (streaming, 1 MB chunks for large FLAC/WAV)
 
-    /// The content hash of a file that hasn't been imported: the same value
-    /// `importFile` would store in its `FileProvenance`, without copying
-    /// anything.
+    /// A file's content hash without importing it.
     public func contentHash(of url: URL) throws -> String {
         try sha256(of: url)
     }

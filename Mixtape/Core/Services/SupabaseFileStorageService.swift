@@ -1,18 +1,8 @@
-// SupabaseFileStorageService.swift
-// Mixtape — Core/Services
-//
-// Uploads and downloads audio files to/from Supabase Storage.
-//
-// Storage path: <userID>/<sha256>.<ext>  (content-addressed, per-user)
-//
-// • Upload is triggered by SupabaseSyncService during each sync cycle.
-//   Files are read on a background thread to avoid blocking the main actor.
-// • Download is on-demand — called by the playback engine when a
-//   synced track has no local file yet.
-// • Progress: start-of-transfer (0 bytes) + end-of-transfer (total bytes).
-//   Real-time byte progress is a Supabase Swift SDK limitation.
-//
-// AppDependencies sets `currentUserID` after sign-in and clears it on sign-out.
+// Audio upload/download with Supabase Storage at
+// `<userID>/<sha256>.<ext>` (content-addressed, per user).
+// Uploads run during sync; downloads on demand when a synced track has no local
+// file. Progress is start/end only (SDK limitation).
+// `currentUserID` is set by AppDependencies on sign-in/out.
 
 import Foundation
 import Supabase
@@ -59,14 +49,10 @@ public final class SupabaseFileStorageService: ObservableObject, FileStorageProt
 
     // MARK: - Dependencies
 
-    // Held as a provider rather than a value: building the SupabaseClient costs
-    // ~1.3 s and, taken eagerly in `AppDependencies.init`, that whole second sat
-    // on the main thread before the first frame. `@autoclosure` keeps every call
-    // site written exactly as before while moving the work to first real use —
-    // which is a network call, and so already off the launch path.
+    // Deferred: building the client is slow and must stay off the launch path.
     private let clientProvider: () -> SupabaseClient
     private lazy var client: SupabaseClient = clientProvider()
-    private static let bucket = "audio"
+    static let bucket = "audio"
 
     /// Set by AppDependencies when the user signs in; cleared on sign-out.
     public var currentUserID: UUID?
@@ -75,9 +61,7 @@ public final class SupabaseFileStorageService: ObservableObject, FileStorageProt
 
     public init(client: @autoclosure @escaping () -> SupabaseClient) {
         self.clientProvider = client
-        // Empty the pre-split Documents/Music/ folder into the durable imports
-        // directory. This used to sweep it into Library/Caches/Music/ instead,
-        // which quietly made every imported original OS-purgeable.
+        // Move the old Documents/Music/ folder into the durable imports directory.
         Task.detached(priority: .background) {
             AudioPaths.migrateLegacyDocumentsMusic()
         }
@@ -85,8 +69,7 @@ public final class SupabaseFileStorageService: ObservableObject, FileStorageProt
 
     // MARK: - Upload
 
-    /// Uploads the audio file for `track` and returns the remote storage path.
-    /// The caller (SupabaseSyncService) writes the returned key back to the DB.
+    /// Uploads the track's audio and returns the storage path for the caller to save.
     public func upload(track: Track, accessToken: String) async throws -> String {
         guard let userID = currentUserID else { throw FileStorageError.notAuthenticated }
         guard !track.file.localPath.isEmpty else { throw FileStorageError.noLocalFile }
@@ -103,7 +86,7 @@ public final class SupabaseFileStorageService: ObservableObject, FileStorageProt
         )
 
         do {
-            // Read file on a background thread — large lossless files can be 100+ MB.
+            // Off the main thread; lossless files can be 100+ MB.
             let data = try await readFile(at: localURL)
             try await client.storage
                 .from(Self.bucket)
@@ -128,9 +111,8 @@ public final class SupabaseFileStorageService: ObservableObject, FileStorageProt
 
     // MARK: - Download
 
-    /// Downloads the file for `track` to Documents/Music/ and returns the local URL.
-    /// The playback engine or a "Download All" action calls this.
-    /// Updating `localPath` in SwiftData is the caller's responsibility.
+    /// Downloads the track's audio into the cache and returns the local URL. The
+    /// caller updates `localPath`.
     public func download(track: Track, accessToken: String) async throws -> URL {
         guard let remoteKey = track.file.remoteKey, !remoteKey.isEmpty else {
             throw FileStorageError.noRemoteKey
@@ -149,9 +131,7 @@ public final class SupabaseFileStorageService: ObservableObject, FileStorageProt
             throw FileStorageError.downloadFailed(error)
         }
 
-        // Save to Library/Caches/Music/<fileHash>.<ext>
-        // Caches/ is invisible to the user in the Files app, is not included in
-        // iCloud backup, and can be pruned by iOS when storage is low.
+        // Caches/: hidden from Files, not backed up, purgeable.
         let ext      = URL(fileURLWithPath: remoteKey).pathExtension.lowercased()
         let filename = "\(track.file.fileHash).\(ext)"
         let musicDir = Self.cacheDirectory
@@ -176,9 +156,7 @@ public final class SupabaseFileStorageService: ObservableObject, FileStorageProt
 
     // MARK: - Raw Download (export-only, no cache)
 
-    /// Downloads the raw audio bytes from Supabase Storage without writing to the
-    /// local playback cache. Use this when you only need the file for a one-off
-    /// export so the `Documents/Music/` cache folder is never created as a side-effect.
+    /// Raw bytes without touching the cache, for one-off exports.
     public func downloadRawData(track: Track, accessToken: String) async throws -> Data {
         guard let remoteKey = track.file.remoteKey, !remoteKey.isEmpty else {
             throw FileStorageError.noRemoteKey
@@ -202,30 +180,20 @@ public final class SupabaseFileStorageService: ObservableObject, FileStorageProt
 
     // MARK: - Local Cache
 
-    /// Library/Caches/Music/ — private to the app, invisible in Files, not backed up,
-    /// and evictable by the OS. Downloaded copies only; see `AudioPaths`.
-    /// `nonisolated` so it can be read from background threads.
+    /// Library/Caches/Music/: downloaded copies only. See `AudioPaths`.
     nonisolated static var cacheDirectory: URL { AudioPaths.cacheDirectory }
 
-    /// Where this track's audio is on disk, or nil if it isn't.
-    ///
-    /// Delegates to `AudioLocator` so that every caller — playback, downloads,
-    /// export, the badge in the track list — agrees about which copy wins. The
-    /// ordering used to be duplicated here and differed from the engine's, which
-    /// is how a song could be "playable" and "not downloaded" simultaneously.
+    /// The track's audio on disk, or nil. Delegates to `AudioLocator` so every
+    /// caller agrees which copy wins.
     public func localURL(for track: Track) -> URL? {
         AudioLocator.readyURL(for: track)
     }
 
-    /// Every directory that can hold library audio. `localURL(for:)` reads from
-    /// all of them, so anything that wipes audio has to empty all of them — a
-    /// wipe that clears one path leaves files on disk the app goes on playing.
+    /// Every directory that can hold library audio. Wipes must empty all of them.
     nonisolated static var audioDirectories: [URL] { AudioPaths.allAudioDirectories }
 
-    /// Empties every audio directory, imports included. This is the *deletion*
-    /// path (Clear Everything / Delete All Music), not the cache-clear one —
-    /// see `clearLocalCache()`. `nonisolated static` so the destructive library
-    /// actions can reach it without holding a storage instance.
+    /// Deletes all audio, imports included (Clear Everything / Delete All Music).
+    /// Not the cache clear; see `clearLocalCache()`.
     nonisolated static func purgeLocalAudio() {
         let fm = FileManager.default
         for dir in audioDirectories {
@@ -235,14 +203,10 @@ public final class SupabaseFileStorageService: ObservableObject, FileStorageProt
         }
     }
 
-    /// Clears only what can be fetched again. The imports directory is left
-    /// alone on purpose: for a track that was never uploaded, the file there is
-    /// the only copy that exists, and "Clear Playback Cache" is not a request to
-    /// delete the user's music.
+    /// Clears re-fetchable audio only. Imports stay: they may be the only copy.
     public func clearLocalCache() throws {
         PlaybackCache.clear()
-        // The legacy Documents folder is a cache too, for as long as anything is
-        // still left in it.
+        // The legacy Documents folder counts as cache.
         let fm  = FileManager.default
         let old = AudioPaths.legacyDocumentsDirectory
         if fm.fileExists(atPath: old.path(percentEncoded: false)) {
@@ -251,12 +215,7 @@ public final class SupabaseFileStorageService: ObservableObject, FileStorageProt
         }
     }
 
-    /// Size of the purgeable cache only, to match what `clearLocalCache()` frees.
-    ///
-    /// This counts Discover audio as well now. It used to look only in the two
-    /// directories that Supabase downloads land in, which on the Mac that
-    /// authored the library are always empty — so the number was structurally
-    /// zero no matter how much audio was actually cached.
+    /// Size of the purgeable cache (what `clearLocalCache()` frees), Discover audio included.
     public func localCacheSize() throws -> Int64 {
         var total = PlaybackCache.totalBytes
         let old = AudioPaths.legacyDocumentsDirectory
@@ -273,8 +232,7 @@ public final class SupabaseFileStorageService: ObservableObject, FileStorageProt
     // MARK: - Internal Helpers (used by SupabaseSyncService)
 
     static func remotePath(userID: UUID, fileHash: String, ext: String) -> String {
-        // Use lowercased UUID — PostgreSQL auth.uid()::text is lowercase,
-        // so the folder name must match exactly for RLS to pass.
+        // Lowercased to match `auth.uid()::text` for RLS.
         "\(userID.uuidString.lowercased())/\(fileHash).\(ext)"
     }
 

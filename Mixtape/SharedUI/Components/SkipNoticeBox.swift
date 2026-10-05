@@ -1,9 +1,4 @@
-// SkipNoticeBox.swift
-// Mixtape — SharedUI/Components
-//
-// The strip that sits over the bottom of a queue list naming songs the queue
-// gave up on. Both queue lists show the same one, because a skip the user
-// didn't see reads as the app losing their place.
+// Strip over the bottom of a queue list naming songs the queue skipped.
 
 import SwiftUI
 

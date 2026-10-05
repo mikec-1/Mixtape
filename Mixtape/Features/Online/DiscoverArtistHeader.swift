@@ -1,20 +1,8 @@
-// DiscoverArtistHeader.swift
-// Mixtape — Features/Online
-//
-// The top of a Discover artist page, and the "About" block at the bottom of it.
-//
-// The header used to be a 140pt circle beside the name, which is what a *row*
-// in a list of artists looks like — arriving on the page felt like arriving
-// nowhere. This is the Spotify shape instead: the artist's picture as the page,
-// their name over it, and the numbers underneath in one line.
-//
-// Shared by both platforms for the same reason `DiscoverArtistCounts` is.
+// The top of a Discover artist page, and the "About" block at the bottom. Shared by both platforms.
 
 import SwiftUI
 
-/// Spotify's artist photo, which is the one people recognise — Deezer's is
-/// often an older or lower-quality press shot. Shared (and cached inside the
-/// client) by everything on the artist page that draws the picture.
+/// Spotify's artist photo, which is usually better than Deezer's. Cached in the client.
 @MainActor
 enum ArtistPortrait {
     private static let spotify = SpotifyClient()
@@ -27,13 +15,11 @@ enum ArtistPortrait {
 struct DiscoverArtistBanner: View {
 
     let artist: OnlineArtist
-    /// Deezer's fan count. Nil when unknown — which is not the same as zero,
-    /// so the line is dropped rather than reading "0 fans".
+    /// Deezer's fan count. Nil when unknown, and then the line is dropped.
     var fanCount: Int?
     var height: CGFloat = 300
     var onOpenLiked: (() -> Void)? = nil
-    /// The page's Play control, drawn under the name so the header is one
-    /// block instead of a picture with a button floating below it.
+    /// The page's Play control, under the name.
     var accessory: AnyView? = nil
 
     @State private var portrait: URL?
@@ -42,18 +28,14 @@ struct DiscoverArtistBanner: View {
     @State private var likedCount = 0
 
     var body: some View {
-        // One shape, whether or not there is a photo: the picture as a circle,
-        // the name beside it, and a blown-up blur of the same picture behind
-        // the lot. A wide crop of a square press photo was mostly somebody's
-        // chin, and it ended in a hard black edge halfway down the window.
+        // Circle photo beside the name, over a blurred blow-up of the same picture.
         HStack(alignment: .center, spacing: 28) {
             portrait(side: height * 0.52)
             identity
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 32)
-        // Sits low in the banner: the picture behind it is widest at the top,
-        // and nothing below moves because `minHeight` is unchanged.
+        // Sits low in the banner, where the picture is narrower.
         .padding(.top, 78)
         .padding(.bottom, 36)
         .frame(maxWidth: .infinity, minHeight: height, alignment: .leading)
@@ -85,8 +67,7 @@ struct DiscoverArtistBanner: View {
         .shadow(color: .black.opacity(0.45), radius: 18, y: 8)
     }
 
-    /// The name, and what you have of them — the follower count is a fact about
-    /// the artist and lives in `DiscoverArtistAbout` at the foot of the page.
+    /// The name and your counts. Followers are in `DiscoverArtistAbout`.
     private var identity: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(artist.name)
@@ -116,9 +97,8 @@ struct DiscoverArtistBanner: View {
         .shadow(color: .black.opacity(0.5), radius: 12, y: 2)
     }
 
-    /// Rewrites the size segment of a Deezer image URL
-    /// (`.../1000x1000-000000-80-0-0.jpg`) to the size we actually draw.
-    /// Anything that isn't shaped like one is left alone.
+    /// Rewrites a Deezer image URL's size segment (`.../1000x1000-000000-80-0-0.jpg`).
+    /// Other URLs are left alone.
     static func upscaled(_ url: URL?, to side: Int = 1920) -> URL? {
         guard let url else { return nil }
         let name = url.lastPathComponent
@@ -169,9 +149,7 @@ struct DiscoverArtistAbout: View {
                 Spacer(minLength: 0)
             }
 
-            // The catalogue we read has no biography, so this is Wikipedia's
-            // opening paragraph — attributed, and simply absent when there is
-            // no article rather than filled in with something invented.
+            // Wikipedia's opening paragraph, attributed. Absent when there's no article.
             if let bio {
                 Text(bio)
                     .font(.system(size: MixFontScale.size(13)))
@@ -179,8 +157,7 @@ struct DiscoverArtistAbout: View {
                     .lineLimit(bioExpanded ? nil : 4)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 10) {
-                    // Only when there is something folded away: a "Read more"
-                    // that expands nothing is the bug, not the paragraph.
+                    // "Read more" only when something is actually folded away.
                     if bio.count > 260 {
                         Button(bioExpanded ? "Show less" : "Read more") {
                             withMixAnimation(.easeInOut(duration: 0.15)) { bioExpanded.toggle() }
@@ -201,21 +178,18 @@ struct DiscoverArtistAbout: View {
     }
 }
 
-/// The artist's photo, blown up and blurred, as the background of the *whole*
-/// page rather than of the banner alone — as a banner background it ended in a
-/// hard horizontal edge partway down the window, which is the "cut off" line.
-/// It fades into the page colour over the first screenful and then stays there.
+/// The artist photo, blurred, behind the whole page. Fades into the page colour over the first screen.
 struct DiscoverArtistWash: View {
     let artist: OnlineArtist
 
     @State private var portrait: URL?
-    /// Identity for the shared tint — see `ArtworkWashTint.resign`.
+    /// Identity for the shared tint. See `ArtworkWashTint.resign`.
     @State private var id = UUID()
     @Environment(\.mixChrome) private var chrome
 
     var body: some View {
         ZStack(alignment: .top) {
-            Color.mixBackground
+            MixPageBackground()
             CachedRemoteImage(url: DiscoverArtistBanner.upscaled(portrait ?? artist.imageURL, to: 500)) { image in
                 image.resizable().scaledToFill()
             } placeholder: {
@@ -237,9 +211,7 @@ struct DiscoverArtistWash: View {
         .ignoresSafeArea()
         .allowsHitTesting(false)
         .task(id: artist.id) { portrait = await ArtistPortrait.url(for: artist) }
-        // The rest of the window — sidebar, titlebar, queue panel, player bar —
-        // already draws whatever is in `ArtworkWashTint`, so publishing the
-        // artist's colours here carries the page's gradient across the whole app.
+        // The window chrome already draws `ArtworkWashTint`, so publishing here tints the whole app.
         .task(id: portrait ?? artist.imageURL) { await publishTint() }
         .onDisappear { ArtworkWashTint.shared.resign(id) }
     }

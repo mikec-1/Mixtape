@@ -1,29 +1,13 @@
-// MixGenerator.swift
-// Mixtape — Core/Services/Online
-//
-// Builds a playlist to order: pick a vibe, say how much of it should come out
-// of the library you already have, and get a list back.
-//
-// This is a different job from `RecommendationEngine`, which answers "what
-// should the landing page show this week" on its own schedule. Here the user
-// has asked for one specific thing, once, and the two knobs they turned —
-// which vibe, and how much of it is theirs already — are the whole brief.
-//
-// Every fetch fails soft. A vibe whose seeds don't resolve still produces a
-// playlist, it is just more of the user's own music than they asked for; the
-// result says so rather than pretending the split was honoured.
+// Builds a playlist from a vibe and a library/catalogue split. Different from
+// RecommendationEngine, which builds the weekly landing page. Fetches fail
+// soft, and the description says what the split really was.
 
 import Foundation
 
 // MARK: - Vibes
 
-/// One of the ready-made briefs on the generate sheet.
-///
-/// A vibe is described three ways because the two halves of a mix are found in
-/// two different places: `seedArtists` and `queries` are what the catalogue is
-/// asked for, `genres` and `seedArtists` are what the library is scored
-/// against. Genre strings are matched loosely (`contains`), because a file's
-/// genre tag is whatever the person who encoded it typed.
+/// A preset brief. seedArtists and queries search the catalogue; genres and
+/// seedArtists score the library. Genres match loosely.
 public struct MixVibe: Identifiable, Hashable, Sendable {
 
     public let id: String
@@ -35,8 +19,7 @@ public struct MixVibe: Identifiable, Hashable, Sendable {
     public let genres: [String]
     public let queries: [String]
 
-    /// The one vibe with no fixed brief: it reads the seeds out of the user's
-    /// own listening instead. Handled in `generate`.
+    /// No fixed brief: seeds come from the user's listening.
     public static let yourTaste = MixVibe(
         id: "taste",
         title: "Your Taste",
@@ -162,18 +145,11 @@ public struct GeneratedMix: Sendable {
 
 public enum MixGenerator {
 
-    /// The band the slider moves in. Nobody wants a 400-song generated mix, and
-    /// under a dozen it is a row rather than a playlist.
     public static let countRange: ClosedRange<Int> = 12...60
     public static let defaultCount = 25
 
-    /// Build a mix to the given brief.
-    ///
-    /// `libraryShare` is the fraction that should come from the user's own
-    /// library, 0…1 — the slider, straight through. It is a target, not a
-    /// promise: a library with four rock songs in it cannot fill a 50% rock
-    /// mix, and the shortfall is taken from the catalogue rather than left as
-    /// a hole. The reverse holds too, offline.
+    /// Builds a mix. `libraryShare` (0...1) is a target: any shortfall comes from
+    /// the catalogue, and the reverse when offline.
     @MainActor
     public static func generate(vibe: MixVibe,
                                 libraryShare: Double,
@@ -186,7 +162,7 @@ public enum MixGenerator {
         let share  = min(max(libraryShare, 0), 1)
         let wanted = Int((Double(count) * share).rounded())
 
-        // A taste mix has no fixed seeds — the listening history is the brief.
+        // Taste mix: seeds come from history.
         let seeds = vibe.id == MixVibe.yourTaste.id
             ? RecommendationEngine.seeds(stats: stats, library: library, limit: 5)
             : vibe.seedArtists
@@ -194,8 +170,7 @@ public enum MixGenerator {
         let known    = RecommendationEngine.knownKeys(library: library)
         let picked   = libraryPicks(vibe: vibe, seeds: seeds, limit: wanted,
                                     library: library, stats: stats)
-        // Ask for more than the gap so a short shortfall in the library can
-        // still be covered, and so the dedupe below has something to cut.
+        // Ask for extra so dedup has room.
         let needed   = count - picked.count
         let online   = needed > 0
             ? await cataloguePicks(vibe: vibe, seeds: seeds, limit: needed,
@@ -214,9 +189,7 @@ public enum MixGenerator {
         )
     }
 
-    /// Says what actually happened rather than what was asked for — a mix that
-    /// came out 90% library because the network was down should read that way
-    /// on the playlist it produced.
+    /// Describes what actually happened, not what was asked for.
     private static func description(vibe: MixVibe,
                                     fromLibrary: Int,
                                     fromCatalogue: Int) -> String {
@@ -229,11 +202,8 @@ public enum MixGenerator {
 
     // MARK: The library half
 
-    /// The user's own songs that fit the brief, best fit first.
-    ///
-    /// Scored rather than filtered: a hard genre filter returns nothing at all
-    /// for a library whose files were tagged by three different rippers, and
-    /// "nothing at all" is the one answer a generator must never give.
+    /// Library songs that fit, best first. Scored rather than filtered so badly
+    /// tagged libraries still produce something.
     @MainActor
     private static func libraryPicks(vibe: MixVibe,
                                      seeds: [String],
@@ -254,30 +224,24 @@ public enum MixGenerator {
             if seedNames.contains(artist) { score += 60 }
             if let genre = track.genre?.lowercased(),
                vibe.genres.contains(where: { genre.contains($0) }) { score += 40 }
-            // A tie-break, not a ranking of its own: within the songs that fit,
-            // prefer the artists this person actually plays.
+            // Tie-break toward artists the user plays.
             score += min(plays[artist] ?? 0, 20)
             return score
         }
 
-        // Spelled out in steps rather than chained: the tuple-returning `map`
-        // in the middle of a chain is more than the type checker will sit
-        // through in reasonable time.
+        // Split up so the type checker doesn't choke.
         let living: [Track] = library.tracks.filter { !$0.isDeleted && SuggestionFeedback.allows($0) }
         var scored: [ScoredTrack] = living.map { ScoredTrack(track: $0, score: score($0)) }
         scored.sort { a, b in
             a.score == b.score ? a.track.title < b.track.title : a.score > b.score
         }
 
-        // A vibe with a real brief takes only songs that matched it. Falling
-        // back to unmatched ones would quietly turn "Jazz Mix" into "25 songs".
-        // `.yourTaste` has no brief to miss, so everything counts.
+        // A real brief only takes matching songs. yourTaste takes anything.
         let eligible = vibe.id == MixVibe.yourTaste.id
             ? scored
             : scored.filter { $0.score > 20 }
 
-        // Shuffled within the take so two runs of the same brief aren't the
-        // same playlist, then cut to size.
+        // Shuffle so repeat runs differ.
         var rng = SplitMix64(seed: UInt64(Date().timeIntervalSince1970))
         let take: [Track] = eligible.prefix(limit * 3).map { $0.track }
         return Array(take.shuffled(using: &rng).prefix(limit))
@@ -291,8 +255,7 @@ public enum MixGenerator {
 
     // MARK: The catalogue half
 
-    /// New songs for the brief, excluding anything already in the library —
-    /// half the point of the slider is that the other half is *new*.
+    /// New songs for the brief, excluding the library.
     private static func cataloguePicks(vibe: MixVibe,
                                        seeds: [String],
                                        limit: Int,
@@ -331,9 +294,7 @@ public enum MixGenerator {
         return Array(unique.shuffled(using: &rng).prefix(limit))
     }
 
-    /// A catalogue search hit as a playable row. `searchPopular` answers with
-    /// the enrichment shape; everything downstream of a generated mix — saving
-    /// it, playing it — speaks `OnlineTrack`.
+    /// Search hit as an OnlineTrack.
     nonisolated private static func online(_ hit: ITunesTrackResult) -> OnlineTrack {
         OnlineTrack(title: hit.trackName,
                     artistName: hit.artistName,

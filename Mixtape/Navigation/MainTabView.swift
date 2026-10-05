@@ -1,6 +1,3 @@
-// MainTabView.swift
-// Mixtape — Navigation
-
 import SwiftUI
 
 public struct MainTabView: View {
@@ -11,33 +8,24 @@ public struct MainTabView: View {
     @State private var selectedTab: AppTab = .home
     @State private var showSettings = false
     #if os(iOS)
-    /// Lets anything in the app ask for a Settings page — the Spotify library
-    /// import is reached that way now. See SettingsRoute.
+    /// Lets anything request a Settings page. See SettingsRoute.
     @ObservedObject private var settingsRoute = SettingsRoute.shared
+    @ObservedObject private var notifier = InviteNotifier.shared
     #endif
 
     #if os(iOS)
-    // Review queue for enrichment candidates found during iOS import.
-    // Passed down as an environment object so ImportView can enqueue items,
-    // and consumed here to present IOSMetadataReviewSheet one item at a time.
+    // iOS import review queue; ImportView enqueues, this presents
+    // IOSMetadataReviewSheet one item at a time.
     @StateObject private var iosAppState = IOSAppState()
+    @Environment(\.scenePhase) private var scenePhase
     #endif
 
-    /// Tab selection binding — on iOS it routes through IOSAppState so navigation
-    /// requests from the mini player / now-playing sheet can switch tabs;
-    /// elsewhere it falls back to local @State.
+    /// On iOS routes through IOSAppState so the mini player / now-playing sheet
+    /// can switch tabs.
     private var tabSelection: Binding<AppTab> {
         #if os(iOS)
-        // Home and Discover are one tab now, tagged `.home`. `.discover` is
-        // still a live request — the mini player and the now-playing sheet both
-        // ask for it by name to open an online artist — so it's folded onto the
-        // same tab here rather than removed, which would have left those
-        // requests selecting a tag no tab carries and silently doing nothing.
-        //
-        // `.search` is a page again. It used to fold onto the landing's search
-        // field, on the reasoning that a second search could only see the local
-        // library — but SearchView reaches the catalogue as well, and the tab
-        // that people actually press should open the thing it names.
+        // Home and Discover share the `.home` tab; `.discover` is still requested by
+        // name, so it maps onto the same tab.
         return Binding(
             get: {
                 switch iosAppState.selectedTab {
@@ -49,7 +37,7 @@ public struct MainTabView: View {
                 switch tab {
                 case .home:   iosAppState.goHome()
                 case .search: iosAppState.goToSearch()
-                default:      iosAppState.selectedTab = tab
+                default:      if iosAppState.selectedTab != tab { iosAppState.selectedTab = tab }
                 }
             }
         )
@@ -67,6 +55,19 @@ public struct MainTabView: View {
         }
         .onAppear {
             if let name = SpotlightIndex.takePendingArtist() { iosAppState.openOnlineArtist(name: name) }
+            openTappedNotification()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .mixNotificationTap)) { _ in openTappedNotification() }
+        .onChange(of: scenePhase) { _, phase in if phase == .active { openTappedNotification() } }
+        .onReceive(NotificationCenter.default.publisher(for: .mixFocusSearch)) { _ in iosAppState.focusSearch() }
+        // View on a toast. The page opens on the tabs, so whatever covers them closes.
+        .onReceive(NotificationCenter.default.publisher(for: .mixOpenPlaylist)) { note in
+            guard let id = note.object as? UUID, let playlist = deps.libraryService.playlist(id: id) else { return }
+            iosAppState.showNowPlaying = false
+            iosAppState.showMessages = false
+            iosAppState.infoTrack = nil
+            showSettings = false
+            iosAppState.openLibraryPlaylist(playlist)
         }
         .onChange(of: settingsRoute.request) { _, request in
             if request != nil { showSettings = true }
@@ -82,8 +83,7 @@ public struct MainTabView: View {
                          profileStats: deps.profileStatsService,
                          downloadManager: deps.downloadManager)
         }
-        // The full player. Presented here rather than by the mini player so it
-        // survives the bar unmounting mid-skip — see `IOSAppState.showNowPlaying`.
+        // Presented here so it survives the mini player unmounting mid-skip.
         .fullScreenCover(isPresented: $iosAppState.showNowPlaying) {
             NowPlayingView()
                 .environmentObject(engine)
@@ -92,10 +92,14 @@ public struct MainTabView: View {
                 // Clear, so pulling the player down shows the app under it.
                 .presentationBackground(.clear)
         }
-        // Get Info, for whichever row asked. Hosted here for the same reason the
-        // player is: the menu it was picked from no longer exists by the time
-        // the sheet would appear.
-        // Not while the player is up: the queue sheet over it hosts its own.
+        .fullScreenCover(isPresented: $iosAppState.showMessages) {
+            MessagesView()
+                .environmentObject(engine)
+                .environmentObject(deps)
+                .environmentObject(iosAppState)
+        }
+        // Hosted here since the menu that opened it is gone by then.
+        // Not while the player is up; its queue sheet hosts its own.
         .sheet(item: Binding(get: { iosAppState.showNowPlaying ? nil : iosAppState.infoTrack },
                              set: { iosAppState.infoTrack = $0 })) { track in
             GetInfoSheet(track: track,
@@ -106,9 +110,20 @@ public struct MainTabView: View {
                 .environmentObject(deps.queueService)
                 .environmentObject(iosAppState)
         }
+        // Not while the player is up; it presents its own.
+        .sheet(item: Binding(get: { iosAppState.showNowPlaying ? nil : iosAppState.editTrack },
+                             set: { iosAppState.editTrack = $0 })) { track in
+            SongEditorSheet(track: track, onOpenPost: { iosAppState.openPost(code: $0) })
+                .environmentObject(deps)
+        }
+        .sheet(item: Binding(get: { iosAppState.showNowPlaying ? nil : iosAppState.postTrack },
+                             set: { iosAppState.postTrack = $0 })) { track in
+            PostSheet(track: track, onOpen: { iosAppState.openPost(code: $0) })
+                .environmentObject(deps)
+        }
         // Present metadata review sheet whenever the queue is non-empty.
         .sheet(item: Binding(
-            get: { iosAppState.pendingReview },
+            get: { iosAppState.importSheetOpen ? nil : iosAppState.pendingReview },
             set: { _ in iosAppState.dequeueReview() }
         )) { item in
             IOSMetadataReviewSheet(item: item)
@@ -120,23 +135,11 @@ public struct MainTabView: View {
 
     // Extracted so the #if os(iOS) modifiers above can be applied cleanly.
     private var tabContent: some View {
-        // "Syncing" used to be announced here, above every tab. It is a
-        // statement about the library, and reading it while browsing the
-        // catalogue or looking at a search result is noise — it now lives in
-        // `LibraryView`, which is the screen it is describing.
-        // Spotify's placement: a plain line under the tab bar, not a card.
+        // Sync status lives in `LibraryView`. Tab bar gets a plain line underneath.
         ZStack(alignment: .bottom) {
             TabView(selection: tabSelection) {
                 #if os(iOS)
-                // The merged front door. Home used to be its own tab beside
-                // Discover, and neither was complete on its own — Home knew your
-                // library but nothing about the catalogue, Discover the reverse.
-                // Home is the second sub-tab of this landing now, so the two are
-                // one destination and the tab bar is down to three.
-                //
-                // The gear and the avatar come with it: they were in Home's nav
-                // bar (Apple's convention — Settings is not a tab), and this is
-                // Home's nav bar now.
+                // Home + Discover landing. Carries Home's gear and avatar.
                 IOSDiscoverView(
                     onOpenSettings: { showSettings = true }
                 )
@@ -154,69 +157,32 @@ public struct MainTabView: View {
                     .tag(AppTab.search)
                     .tabItem { Label("Search", systemImage: MixtapeIcons.search) }
 
+                #if os(iOS)
+                CommunityTab()
+                    .tag(AppTab.community)
+                    .tabItem { Label("Community", systemImage: "person.2.fill") }
+                #endif
+
                 LibraryView(libraryService: deps.libraryService)
                     .tag(AppTab.library)
                     .tabItem { Label("Library", systemImage: MixtapeIcons.library) }
+                    #if os(iOS)
+                    // The inbox and messages live in Library's header.
+                    .badge(notifier.unread)
+                    #endif
             }
-            // The bar is left to the system. `.tint` colours the selected
-            // item; everything else — the translucent material, the way it
-            // goes opaque when content scrolls under it, the automatic
-            // fallback under Reduce Transparency — is behaviour UIKit already
-            // has and that the old `UITabBarAppearance` override was throwing
-            // away in exchange for a flat `mixSurface` fill. A tab bar that
-            // does not blur is the single loudest tell that an app is not
-            // native, and it was the first thing anyone saw here.
+            // System tab bar with just a tint, so it keeps the native blur and
+            // Reduce Transparency fallback.
             .tint(Color.mixPrimary)
 
             KeyboardAware { typing in miniPlayerLayer(typing: typing) }
         }
-        // In the home-indicator zone, over the bar's own backing: stacking it
-        // under the TabView shrank the tabs and pushed the mini player onto them.
-        .overlay(alignment: .bottom) {
-            OfflineStrip(downloads: deps.downloadManager, auth: deps.authService)
-                .ignoresSafeArea(edges: .bottom)
-        }
-        // Playback error toast — slides down from top, auto-dismisses after 5 s.
-        // Still an overlay: it is transient and must not re-lay-out the page.
-        .overlay(alignment: .top) {
-            if let msg = engine.errorMessage {
-                PlaybackErrorToast(message: msg)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 8)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-            }
-        }
-        .mixAnimation(.spring(response: 0.35, dampingFraction: 0.85), value: engine.errorMessage)
-        // The bottom-corner messages, in one stack so they can never land on
-        // top of each other: the "Added to \u{2026}" pill rides above the wide bar
-        // toast, and both clear the mini player together.
-        .overlay(alignment: .bottom) { KeyboardAware { typing in
-            VStack(spacing: 0) {
-                SavedToastHost(center: deps.savedToasts, bottomGap: 8)
-                if let msg = deps.toastMessage {
-                    PlaylistAddedToast(message: msg)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
-            }
-            .padding(.horizontal, 16)
-            // Stack above the mini player when it's visible, otherwise just above the tab bar
-            .padding(.bottom, showsMiniPlayer(typing: typing)
-                ? MiniPlayerMetrics.overlayBottomPadding + MiniPlayerMetrics.barHeight + 10
-                : MiniPlayerMetrics.tabBarHeight + 12)
-            .ignoresSafeArea(.keyboard, edges: .bottom)
-            .mixAnimation(.spring(response: 0.3, dampingFraction: 0.88), value: deps.toastMessage)
-        } }
     }
 
     // MARK: - Mini Player Layer
 
-    /// The pill, in its own bottom-anchored container so the show/hide spring
-    /// belongs to it alone — an `.animation` on the outer ZStack would animate
-    /// every tab transition underneath it too.
-    ///
-    /// It sits out the keyboard entirely: ignoring the keyboard safe area keeps
-    /// SwiftUI from lifting it above the keys, and `showsMiniPlayer` takes it off screen
-    /// while typing, so the keyboard is the top layer the way it should be.
+    /// Own container so its spring doesn't animate tab transitions. Ignores the
+    /// keyboard safe area and hides while typing.
     private func miniPlayerLayer(typing: Bool) -> some View {
         let shows = showsMiniPlayer(typing: typing)
         return ZStack(alignment: .bottom) {
@@ -227,9 +193,12 @@ public struct MainTabView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
-            // Sits on top of the pill's own bottom padding, so it rides just
-            // above the song name whether or not the pill is up — a cold song
-            // is loading before there is anything to show in the pill.
+            // Above the pill, clear of the tab buttons.
+            OfflineStrip(downloads: deps.downloadManager, auth: deps.authService)
+                .padding(.bottom, MiniPlayerMetrics.overlayBottomPadding
+                                  + (shows ? MiniPlayerMetrics.barHeight + 8 : 0))
+
+            // Just above the song name whether or not the pill is up.
             TrackPreparingBar(coordinator: deps.onlineCoordinator)
                 .padding(.bottom, MiniPlayerMetrics.overlayBottomPadding
                                   + (shows ? MiniPlayerMetrics.barHeight + 8 : 0))
@@ -245,16 +214,31 @@ public struct MainTabView: View {
         engine.state.isActive && !typing
     }
 
+    #if os(iOS)
+    private func openTappedNotification() {
+        // A tap arrives mid-foregrounding; presenting before the scene is active can leave a black screen.
+        guard scenePhase == .active else { return }
+        switch InviteNotifier.shared.takePendingTap() {
+        case .messages(let person): iosAppState.openMessages(with: person)
+        case .jam(let code):
+            // The Jam sheet goes over the tabs, not stacked on a clear full-screen cover.
+            iosAppState.showNowPlaying = false
+            iosAppState.showMessages = false
+            Task { await deps.jam.join(code: code) }
+        case .album(let title, let artist): iosAppState.openOnlineAlbum(title: title, artistName: artist)
+        case nil: break
+        }
+    }
+    #endif
+
     // MARK: - Quick-link routing
 
-    /// Home quick-links jump to the Library tab (which hosts Songs/Albums/
-    /// Artists/Playlists on iOS).
+    /// Quick links jump to the Library tab.
     private func handleQuickLink(_ link: HomeQuickLink) {
         tabSelection.wrappedValue = .library
     }
 
-    /// Home artist taps route to the matching profile (local Library artist or,
-    /// for an unmatched/featured name, the online Discover artist page).
+    /// Local artist page, or the online one for unmatched names.
     private func handleArtist(_ name: String) {
         #if os(iOS)
         iosAppState.openOnlineArtist(name: name)
@@ -263,9 +247,7 @@ public struct MainTabView: View {
 
     // MARK: - Home playback routing
 
-    /// Home cards play through here so online (Discover) tracks are routed to
-    /// the OnlinePlaybackCoordinator rather than the offline engine, which would
-    /// otherwise report the song "hasn't been uploaded yet".
+    /// Online tracks go through OnlinePlaybackCoordinator, not the offline engine.
     private func handlePlay(_ track: Track, context: [Track], origin: String) {
         Task {
             if deps.onlineCoordinator.isStandaloneOnline(track) {
@@ -278,11 +260,38 @@ public struct MainTabView: View {
 
 }
 
+#if os(iOS)
+/// Its own stack, so a post or profile opened here stays on this tab.
+private struct CommunityTab: View {
+    private enum Route: Hashable { case post(String), profile(UserProfile) }
+    @State private var path: [Route] = []
+
+    var body: some View {
+        NavigationStack(path: $path) {
+            CommunityView(onOpenPost: { path.append(.post($0)) }, onOpenProfile: { path.append(.profile($0)) })
+                .miniPlayerSafeArea()
+                .navigationDestination(for: Route.self) { route in
+                    Group {
+                        switch route {
+                        case .post(let code):
+                            PostPageView(code: code, onOpenProfile: { path.append(.profile($0)) })
+                        case .profile(let profile):
+                            ProfilePageView(profile: profile, onOpenPost: { path.append(.post($0)) },
+                                            onOpenProfile: { path.append(.profile($0)) })
+                                .navigationBarTitleDisplayMode(.inline)
+                        }
+                    }
+                    .miniPlayerSafeArea()
+                }
+        }
+    }
+}
+#endif
+
 // MARK: - Keyboard
 
-/// Reads the keyboard in its own body, so showing it redraws only the mini
-/// player and toasts — not the whole TabView, which re-ran every tab's body
-/// (Home's recommendation scan, an open playlist) on each search-bar tap.
+/// Reads the keyboard in its own body so showing it only redraws the mini
+/// player and toasts, not the whole TabView.
 private struct KeyboardAware<Content: View>: View {
     #if os(iOS)
     @ObservedObject private var keyboard = KeyboardVisibility.shared
@@ -298,77 +307,10 @@ private struct KeyboardAware<Content: View>: View {
     }
 }
 
-// MARK: - Toasts
-
-/// The chrome behind both transient messages.
-///
-/// They used to be two structs that had drifted: different corner strokes,
-/// different shadow weights, different label sizes, one of them outlined in a
-/// tinted red that fought the icon already saying the same thing. A floating
-/// message is one component with two things to say, so it is drawn once.
-///
-/// Material rather than a flat fill, and no stroke: something laid over the
-/// page reads as being *above* it because it blurs what it covers, which is
-/// how every banner the system puts on screen behaves. The outline was the
-/// substitute for that depth, and it stopped being needed the moment the
-/// blur arrived. Under Reduce Transparency `MixChrome.material` hands back an
-/// opaque surface on its own.
-private struct MixToast: View {
-
-    let icon: String
-    let tint: Color
-    let message: String
-    var lineLimit: Int
-
-    @Environment(\.mixChrome) private var chrome
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: icon)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(tint)
-            Text(message)
-                .font(.mixLabel)
-                .foregroundStyle(Color.mixTextPrimary)
-                .lineLimit(lineLimit)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
-        .background(chrome.material(.regularMaterial, flat: .mixSurface2),
-                    in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .mixShadow(color: .black.opacity(0.22), radius: 14, y: 5)
-        .accessibilityElement(children: .combine)
-    }
-}
-
-private struct PlaybackErrorToast: View {
-    let message: String
-
-    var body: some View {
-        MixToast(icon: "exclamationmark.circle.fill",
-                 tint: .mixDestructive,
-                 message: message,
-                 lineLimit: 3)
-    }
-}
-
-private struct PlaylistAddedToast: View {
-    let message: String
-
-    var body: some View {
-        MixToast(icon: "checkmark.circle.fill",
-                 tint: .mixPrimary,
-                 message: message,
-                 lineLimit: 2)
-    }
-}
-
 // MARK: - App Tab
 
 public enum AppTab: Hashable {
-    case home, library, search, discover, nowPlaying, settings
+    case home, library, search, community, discover, nowPlaying, settings
 }
 
 // MARK: - Preview

@@ -1,13 +1,4 @@
-// SmartPlaylistEditorView.swift
-// Mixtape — Features/Library
-//
-// Create a new smart playlist: pick a rule type + parameters, and name it.
-//
-// This was a `Form` of `Section`s inside a `NavigationStack`, with Cancel and
-// Save up in a navigation bar — an iOS Settings screen wearing a Mac modal.
-// The rule is the decision this sheet exists to make, so it's now five rows you
-// can see and compare at once, with the chosen rule's parameters directly
-// underneath, instead of a `Picker` that hides four of the five options.
+// Create a smart playlist: pick a rule, set its parameters, name it.
 
 import SwiftUI
 
@@ -38,8 +29,7 @@ public struct SmartPlaylistEditorView: View {
         case fieldFilter         = "Field Filter"
         var id: String { rawValue }
 
-        /// Borrowed from the rule itself so the row, the sidebar and the saved
-        /// playlist can't drift apart. The parameters don't affect the icon.
+        /// From the rule itself, so the row, sidebar and saved playlist match.
         var icon: String {
             switch self {
             case .recentlyAdded:       return SmartPlaylistRule.recentlyAdded(limit: 50).defaultIcon
@@ -147,8 +137,7 @@ public struct SmartPlaylistEditorView: View {
 
                 Spacer(minLength: 8)
 
-                // The only mark of selection that survives at a glance — the
-                // tint alone reads as decoration on a five-row stack.
+                // The checkmark marks selection; the tint alone reads as decoration.
                 Image(systemName: "checkmark")
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(Color.mixPrimary)
@@ -184,8 +173,6 @@ public struct SmartPlaylistEditorView: View {
                 }
             }
         case .neverPlayed:
-            // Nothing to configure — say so rather than leaving a gap that
-            // looks like something failed to load.
             Text("No settings for this one — it's every song you've never played.")
                 .font(.system(size: MixFontScale.size(12)))
                 .foregroundStyle(Color.mixTextTertiary)

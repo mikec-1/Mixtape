@@ -1,17 +1,5 @@
-// SmartPlaylistActionsMenu.swift
-// Mixtape — SharedUI/Components
-//
-// What you can do to a smart playlist from its row, in one place.
-//
-// Not `PlaylistActionsMenu`: that one reads the playlist back out of the
-// library for nearly every item — pin, duplicate, publish, Spotify link — and a
-// smart playlist's id belongs to a rule, not to a library row, so all of those
-// lookups would miss. A rule also has no contents to reorder and no remote to
-// sync with. This is the short list that is actually true of one.
-//
-// It replaces two rows that had drifted: the Mac library's Smart section
-// offered Delete and nothing else, and the Playlists tab's smart rows offered
-// no menu at all.
+// Menu for a smart playlist row. Not `PlaylistActionsMenu`: a smart playlist's
+// id belongs to a rule, not a library row, and has nothing to reorder or sync.
 
 import SwiftUI
 
@@ -23,9 +11,8 @@ struct SmartPlaylistActionsMenu: View {
     @EnvironmentObject private var deps: AppDependencies
 
     var body: some View {
-        // Every item resolves the rule inside its closure, never in the body:
-        // a rule is matched against the whole library, and a context menu is
-        // rebuilt with the row it hangs off.
+        // Songs are resolved in the closures, never in the body; the rule matches
+        // against the whole library.
         Button {
             play(shuffled: false)
         } label: {
@@ -41,8 +28,7 @@ struct SmartPlaylistActionsMenu: View {
         Divider()
 
         Button {
-            // Reversed, so each insert lands after the one before it and the
-            // rule's order survives into the queue.
+            // Reversed so the rule's order survives into the queue.
             for song in tracks().reversed() { deps.playbackEngine.queue.insertNext(song) }
         } label: {
             Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward")
@@ -67,9 +53,7 @@ struct SmartPlaylistActionsMenu: View {
         }
     }
 
-    /// The songs the rule resolves to right now, minus the ones with no audio
-    /// behind them — a queue that stops dead partway through reads as a broken
-    /// player.
+    /// The rule's current songs. Only songs with audio, so the queue doesn't stall.
     private func tracks() -> [Track] {
         deps.smartTrackIDs(playlist)
             .compactMap { deps.libraryService.track(id: $0) }

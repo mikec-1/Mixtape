@@ -1,8 +1,4 @@
-// artist-rank-check.swift
-// Mixtape — scripts
-//
-// The one check on the "your #3 artist this year" maths. No test target, so this
-// compiles standalone against the real source file:
+// Checks the "your #3 artist this year" maths against the real source file:
 //
 //   xcrun swiftc Mixtape/Core/Services/ArtistRanking.swift \
 //       scripts/artist-rank-check.swift -o /tmp/rankcheck && /tmp/rankcheck

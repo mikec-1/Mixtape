@@ -1,12 +1,5 @@
-// ArtworkColors.swift
-// Mixtape — Design System
-//
-// Cheap dominant-colour extraction from album artwork.
-// Downscales the artwork to a tiny bitmap and quantizes pixels into a few
-// colour buckets, returning the most populous buckets as SwiftUI Colors.
-//
-// Cross-platform: UIImage on iOS, NSImage elsewhere.
-// Falls back to the mix* design tokens when no usable colour is found.
+// Dominant colours from artwork: downscale, bucket pixels, return the biggest
+// buckets. Falls back to the mix* tokens.
 
 import SwiftUI
 import CoreGraphics
@@ -25,8 +18,7 @@ public nonisolated enum ArtworkColors {
         Color.mixBackground
     ]
 
-    /// Extracts up to `count` dominant colours from artwork `Data`.
-    /// Returns `fallback` if the data is nil/undecodable or yields no colour.
+    /// Up to `count` dominant colours; `fallback` if nothing usable.
     public static func dominantColors(from data: Data?, count: Int = 3) -> [Color] {
         guard let data, let cg = cgImage(from: data) else { return fallback }
         let buckets = extract(from: cg)
@@ -39,19 +31,10 @@ public nonisolated enum ArtworkColors {
 
     // MARK: - Gradient palette
 
-    /// Colours picked for how well they read as a background wash, which is not
-    /// the same question as "which colour covers the most pixels".
-    ///
-    /// A playlist cover made of photographs is mostly skin, asphalt and overcast
-    /// sky: the largest bucket wins on count and produces the lifeless grey
-    /// wash. So buckets are scored by population *weighted by saturation*, and
-    /// the winner is then pulled into a band that still reads as a colour while
-    /// staying dark enough for white text to sit on top.
-    ///
-    /// The second colour is a different hue where the artwork has one, so the
-    /// gradient has somewhere to travel; otherwise it's a deeper shade of the
-    /// first. Returns `[]` when the artwork is missing or unreadable, so callers
-    /// can skip the wash entirely rather than paint a fake one.
+    /// Colours for a background wash. Buckets are scored by population weighted by
+    /// saturation (photos are mostly grey), then clamped to a band that reads as a
+    /// colour but stays dark enough for white text. The second colour is another hue
+    /// if there is one, else a deeper shade. `[]` when there's no artwork.
     public static func gradientColors(from data: Data?) -> [Color] {
         guard let data, let cg = cgImage(from: data) else { return [] }
         let buckets = extract(from: cg)
@@ -62,16 +45,14 @@ public nonisolated enum ArtworkColors {
 
         let primary = normalised(top)
 
-        // A hue at least this far away reads as a second colour rather than as
-        // a compression artefact of the first.
+        // Minimum hue distance to count as a second colour.
         let minHueGap = 0.07
         let partner = ranked.dropFirst().first { candidate in
             let gap = abs(candidate.hsb.h - top.hsb.h)
             return min(gap, 1 - gap) > minHueGap && candidate.hsb.s > 0.15
         }
 
-        // No second hue in the artwork — a deeper shade of the first still gives
-        // the gradient somewhere to go.
+        // No second hue: use a deeper shade of the first.
         let secondary = partner.map { normalised($0, brightnessScale: 0.74) }
             ?? Color(hue: top.hsb.h,
                      saturation: min(top.hsb.s + 0.06, 0.62),
@@ -80,19 +61,13 @@ public nonisolated enum ArtworkColors {
         return [primary, secondary]
     }
 
-    /// Single wash colour — the first of `gradientColors`.
+    /// The first of `gradientColors`.
     public static func gradientTint(from data: Data?) -> Color? {
         gradientColors(from: data).first
     }
 
-    /// The wash for a surface that must be tinted even when there's nothing to
-    /// sample — a profile whose owner never set an avatar, say.
-    ///
-    /// Built by running the brand accent through the same clamping real artwork
-    /// gets, rather than reaching for the raw token: `mixPrimary` is a full-
-    /// strength control colour, and a page washed in it at the strength a
-    /// sampled colour uses looks like a rendering fault. Derived from
-    /// `BrandAccent.hex` so it still follows if the brand colour ever moves.
+    /// Wash for a surface with nothing to sample (e.g. no avatar). The brand accent
+    /// run through the same clamp, since raw `mixPrimary` is too strong.
     public static var brandGradient: [Color] {
         let digits = BrandAccent.hex.drop { !$0.isHexDigit }
         let packed = UInt32(digits, radix: 16) ?? 0xFF6B00
@@ -104,20 +79,15 @@ public nonisolated enum ArtworkColors {
         return [normalised(bucket), normalised(bucket, brightnessScale: 0.62)]
     }
 
-    /// Population weighted by how colourful the bucket is. The floor keeps a
-    /// genuinely monochrome cover (a black-and-white photo, a plain-text sleeve)
-    /// from being beaten by a handful of stray coloured pixels.
+    /// Population weighted by saturation. The floor stops a few coloured pixels
+    /// beating a monochrome cover.
     private static func score(_ bucket: Bucket) -> Double {
         Double(bucket.count) * (0.35 + bucket.hsb.s)
     }
 
-    /// Clamps a sampled colour into the range that works as a backdrop: vivid
-    /// enough not to look like a rendering bug, dark enough for white text.
-    /// Near-grey samples keep their neutrality instead of having a hue invented
-    /// for them — an invented hue is always the wrong one.
-    /// The bands are deliberately narrow. A wash reads as a mistake long before
-    /// it reads as dull, and this colour now runs behind the window titlebar as
-    /// well, where a vivid tint looks like a rendering bug rather than a choice.
+    /// Clamps a sample into backdrop range: vivid enough to read as colour, dark
+    /// enough for white text. Near-greys stay neutral. Kept narrow since this also
+    /// tints the titlebar.
     private static func normalised(_ bucket: Bucket, brightnessScale: Double = 1.0) -> Color {
         let hsb = bucket.hsb
         let isNeutral = hsb.s < 0.08
@@ -140,9 +110,7 @@ public nonisolated enum ArtworkColors {
 
     // MARK: - Quantization
 
-    /// One cell of the RGB cube: how many pixels landed in it and their average
-    /// colour, in both RGB and HSB (selection reasons about hue and saturation,
-    /// drawing needs the colour).
+    /// One RGB cube cell: pixel count and average colour in RGB and HSB.
     struct Bucket {
         var count = 0
         var r = 0.0, g = 0.0, b = 0.0
@@ -158,8 +126,7 @@ public nonisolated enum ArtworkColors {
             return Color(.sRGB, red: c.r, green: c.g, blue: c.b, opacity: 1)
         }
 
-        /// Hue/saturation/brightness, all 0...1. Hand-rolled so the type stays
-        /// free of UIKit/AppKit and usable from any platform.
+        /// HSB, all 0...1. Hand-rolled to avoid UIKit/AppKit.
         var hsb: (h: Double, s: Double, b: Double) {
             let c = rgb
             let maxC = max(c.r, max(c.g, c.b))
@@ -180,7 +147,7 @@ public nonisolated enum ArtworkColors {
     }
 
     private static func extract(from image: CGImage) -> [Bucket] {
-        // Downscale to a small fixed grid — cheap and plenty for averaging.
+        // Small fixed grid is enough for averaging.
         let dim = 24
         let width = dim
         let height = dim
@@ -203,8 +170,7 @@ public nonisolated enum ArtworkColors {
 
         ctx.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
 
-        // Bucket colours into a coarse 4x4x4 RGB cube; track count + summed
-        // components so we can return the bucket's average colour.
+        // 4x4x4 RGB buckets with summed components for the average.
         var buckets: [Int: Bucket] = [:]
 
         var i = 0

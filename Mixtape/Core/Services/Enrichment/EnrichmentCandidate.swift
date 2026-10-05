@@ -1,9 +1,5 @@
-// EnrichmentCandidate.swift
-// Mixtape — Core/Services/Enrichment
-//
-// The proposed metadata returned by MetadataEnrichmentService.
-// nil fields mean "no suggestion — keep existing value".
-// The UI shows this to the user for confirmation before writing.
+// Proposed metadata from MetadataEnrichmentService, confirmed by the user
+// before writing. Nil fields mean keep the existing value.
 
 import Foundation
 
@@ -12,14 +8,14 @@ import Foundation
 public enum EnrichmentSource: Sendable {
     case itunes           // matched via iTunes Search API
     case filenameOnly     // parsed from filename; no API match found
-    case existingMetadata // track already had complete tags — passthrough review
+    case existingMetadata  // already fully tagged
 }
 
 // MARK: - Candidate
 
 public struct EnrichmentCandidate: Sendable {
 
-    // Proposed values — nil = keep whatever is already stored
+    // Nil keeps the stored value.
     public var title:        String?
     public var artistName:   String?
     public var albumTitle:   String?
@@ -27,14 +23,13 @@ public struct EnrichmentCandidate: Sendable {
     public var genre:        String?
     public var trackNumber:  Int?
 
-    /// Remote album artwork URL (600×600). Caller downloads and embeds on confirm.
+    /// Remote album artwork URL (600x600). Caller downloads and embeds on confirm.
     public var artworkURL:      URL?
 
-    /// Remote artist profile photo URL (from Deezer). Separate from album art.
-    /// Applied to the artist entity only — never used as track/album artwork.
+    /// Artist photo from Deezer. Applied to the artist only, never as track art.
     public var artistImageURL:  URL?
 
-    /// Match confidence 0.0 – 1.0
+    /// Match confidence 0.0-1.0
     public var confidence:   Double
 
     public var source:       EnrichmentSource

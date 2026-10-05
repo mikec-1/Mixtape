@@ -1,14 +1,6 @@
-// LoudnessAnalyzer.swift
-// Mixtape — Core/Services
-//
-// Measures a file's integrated loudness (ITU-R BS.1770: K-weighted, gated) once
-// and caches the answer, so playback can pull every song toward one level. The
-// library is rips from a dozen sources with no shared mastering, so track-to-track
-// level jumps are worse here than on any service that masters its own catalogue.
-//
-// Measuring is a full decode of the file, so it never happens on the main actor
-// and never blocks a play: an unmeasured song starts at the library's typical
-// correction and is measured in the background for next time.
+// Measures integrated loudness (BS.1770, K-weighted and gated) once and caches
+// it, so playback can level songs from different sources. Decoding is slow, so
+// it runs off the main actor and unmeasured songs start at the typical gain.
 
 import AVFoundation
 import Foundation
@@ -18,18 +10,10 @@ public enum LoudnessAnalyzer {
     /// The level every song is pulled toward, in LUFS. Spotify's "normal".
     public nonisolated static let targetLUFS: Double = -14
 
-    /// Where a measurement lives: an extended attribute on the audio file.
-    ///
-    /// Keyed to the file rather than to the track because the *file* is what was
-    /// measured. A re-resolve ("wrong version") or a re-download replaces it, and
-    /// the stale gain goes with it — which no track-keyed cache would get right
-    /// without a hook on every path that can swap a file out.
+    /// Stored as an xattr on the file, so replacing the file drops a stale value.
     private nonisolated static let attribute = "tech.mixtaped.loudness.v1"
 
-    /// Running average of the corrections measured so far, for anything with no
-    /// measurement yet: a stream, or a file being measured right now. Starting
-    /// those at unity instead would make the first second of every new song a
-    /// step down.
+    /// Running average gain, used before a song is measured.
     private nonisolated static let typicalKey = "playback.loudness.typicalGainDB"
 
     public nonisolated static var typicalGainDB: Float {
@@ -48,8 +32,7 @@ public enum LoudnessAnalyzer {
 
     private nonisolated static func cache(_ gain: Float, for url: URL) {
         var value = gain
-        // A read-only source (a watched folder, the user's own Music folder) just
-        // gets measured again next time; nothing here is worth an error path.
+        // Read-only files are just measured again next time.
         _ = setxattr(url.path, attribute, &value, 4, 0, 0)
 
         let defaults = UserDefaults.standard
@@ -59,10 +42,8 @@ public enum LoudnessAnalyzer {
 
     // MARK: - Measurement
 
-    /// The correction for `url` in dB, measured if it hasn't been already.
-    ///
-    /// `@concurrent` keeps the decode off the main actor. Plain `nonisolated async` runs on the
-    /// caller's actor with approachable concurrency on.
+    /// Gain for `url` in dB, measuring if needed. `@concurrent` keeps the decode off the main
+    /// actor; plain nonisolated async runs on the caller's.
     @discardableResult
     @concurrent public nonisolated static func measureGainDB(for url: URL) async -> Float? {
         if let cached = cachedGainDB(for: url) { return cached }
@@ -79,9 +60,8 @@ public enum LoudnessAnalyzer {
         return clamped
     }
 
-    /// Integrated loudness in LUFS plus the sample peak, or nil if the file can't
-    /// be decoded. Blocks are the standard 400 ms with 75% overlap, built out of
-    /// 100 ms bins so the whole file never has to be held in memory.
+    /// Integrated LUFS and sample peak. 400 ms blocks with 75% overlap, built
+    /// from 100 ms bins so the file isn't held in memory.
     private nonisolated static func integrated(_ url: URL) -> (lufs: Double, peak: Float)? {
         guard let file = try? AVAudioFile(forReading: url) else { return nil }
         let format = file.processingFormat
@@ -99,9 +79,7 @@ public enum LoudnessAnalyzer {
         var peak: Float = 0
 
         while file.framePosition < file.length {
-            // AVAudioFile throws at the end of some files instead of returning a
-            // zero-frame buffer, so a throw here is end-of-file, not a failure:
-            // returning nil on it threw away every measurement.
+            // Some files throw at the end instead of returning zero frames.
             do { try file.read(into: buffer) } catch { break }
             let frames = Int(buffer.frameLength)
             if frames == 0 { break }
@@ -136,9 +114,7 @@ public enum LoudnessAnalyzer {
             blocks.append(mean)
         }
 
-        // Two gates: absolute at -70 LUFS, then relative at 10 LU below the mean
-        // of what survived — the part that stops a quiet intro or a long outro
-        // from dragging the answer down.
+        // Absolute gate at -70 LUFS, then relative 10 LU below the mean.
         func loudness(_ meanSquare: Double) -> Double { -0.691 + 10 * log10(meanSquare) }
         let audible = blocks.filter { $0 > 0 && loudness($0) > -70 }
         guard !audible.isEmpty else { return nil }
@@ -148,9 +124,8 @@ public enum LoudnessAnalyzer {
         return (loudness(kept.reduce(0, +) / Double(kept.count)), peak)
     }
 
-    /// One second-order section. Two of them are BS.1770's K-weighting — a +4 dB
-    /// high shelf and a 38 Hz high-pass — bilinear-transformed to the file's own
-    /// sample rate rather than assuming the 48 kHz the spec tabulates.
+    /// One biquad. Two make up K-weighting (+4 dB shelf and 38 Hz high-pass),
+    /// computed for the file's own sample rate.
     private nonisolated struct Biquad {
         let b0, b1, b2, a1, a2: Double
         private var x1 = 0.0, x2 = 0.0, y1 = 0.0, y2 = 0.0

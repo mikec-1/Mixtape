@@ -1,36 +1,26 @@
-// MacAppState.swift
-// Mixtape — Mac/App
-//
-// Window-level state for the macOS app.
-// Injected as @EnvironmentObject from MacRootView so all Mac views share one instance.
-//
-// Right-panel model
-// -----------------
-// A single optional value (stored as a 1-element array for API consistency).
-// Pressing a button while another panel is open swaps to it immediately.
-// Pressing the active button closes the panel entirely.
+// Window-level state for the macOS app, injected from MacRootView.
+// Right panel: another panel's button swaps to it, the active one's closes it.
 
 #if os(macOS)
 import SwiftUI
 import Combine
 
 extension Notification.Name {
-    /// View ▸ Toggle Sidebar (⌃⌘S). Posted by the menu command in MixtapeApp,
-    /// which has no route to `MacAppState`; MacRootView turns it into a call.
+    /// View > Toggle Sidebar (⌃⌘S). Posted from MixtapeApp, which can't reach `MacAppState`; MacRootView relays it.
     static let mixToggleSidebar  = Notification.Name("mix.toggleSidebar")
-    /// View ▸ Zoom In (⌘+). Same indirection as the sidebar toggle.
+    /// View > Zoom In (⌘+). Same indirection as the sidebar toggle.
     static let mixZoomIn         = Notification.Name("mix.zoomIn")
-    /// View ▸ Zoom Out (⌘−). Same indirection as the sidebar toggle.
+    /// View > Zoom Out (⌘−). Same indirection as the sidebar toggle.
     static let mixZoomOut        = Notification.Name("mix.zoomOut")
-    /// View ▸ Actual Size (⌘0). Same indirection as the sidebar toggle.
+    /// View > Actual Size (⌘0). Same indirection as the sidebar toggle.
     static let mixActualSize     = Notification.Name("mix.actualSize")
-    /// View ▸ Go Back (⌘[). Same indirection as the sidebar toggle.
+    /// View > Go Back (⌘[). Same indirection as the sidebar toggle.
     static let mixGoBack         = Notification.Name("mix.goBack")
-    /// View ▸ Go Forward (⌘]). Same indirection as the sidebar toggle.
+    /// View > Go Forward (⌘]). Same indirection as the sidebar toggle.
     static let mixGoForward      = Notification.Name("mix.goForward")
-    /// Controls ▸ Get Info (⌘I) for the playing song. Same indirection as the sidebar toggle.
+    /// Controls > Get Info (⌘I) for the playing song, relayed the same way.
     static let mixShowInfo       = Notification.Name("mix.showInfo")
-    /// File ▸ New Playlist (⌘N). Creates a blank playlist and navigates to it.
+    /// File > New Playlist (⌘N). Creates a blank playlist and navigates to it.
     static let mixNewPlaylist    = Notification.Name("mix.newPlaylist")
 }
 
@@ -39,18 +29,13 @@ extension Notification.Name {
 enum MacSidebarItem: String, Hashable, CaseIterable, Identifiable {
     case home      = "Home"
     case library   = "Library"
-    // The raw value used to be " Songs", leading space and all, which is what
-    // put "Go to  Songs" in the command palette. Safe to fix now: the only thing
-    // that ever persisted a raw value was the sidebar's stored item order, and
-    // that went with the sections.
     case songs     = "Songs"
     case albums    = "Albums"
     case artists   = "Artists"
     case playlists = "Playlists"
     case discover  = "Discover"
-    /// The user's watched folders, shown as songs. Only appears when at least
-    /// one folder actually has music in it — an empty row for a feature nobody
-    /// has set up is just clutter.
+    case community = "Community"
+    /// Watched folders shown as songs. Hidden until a folder has music in it.
     case localFiles = "Local Files"
     case settings  = "Settings"
 
@@ -66,30 +51,19 @@ enum MacSidebarItem: String, Hashable, CaseIterable, Identifiable {
         case .artists:   return "music.mic"
         case .playlists: return "music.note.list"
         case .discover:  return "sparkle.magnifyingglass"
+        case .community: return "person.2"
         case .localFiles: return "folder"
         case .settings:  return "gear"
         }
     }
 
-    /// The rows the sidebar actually draws, top to bottom.
-    ///
-    /// Songs / Albums / Artists / Playlists are deliberately absent: they are
-    /// now *tabs within* the Library page rather than four sidebar rows. They
-    /// stay in this enum because they are still perfectly good destinations —
-    /// Home's quick links and the "go to album" menus select them by name — and
-    /// `MacContentRouter` turns any of them into Library-with-that-tab-open. So
-    /// nothing that could navigate before has stopped being able to; the four
-    /// just no longer each cost a permanent line of sidebar.
-    /// Discover is absent for the same reason, one level up: it and Home are
-    /// tabs of a single landing page now, so two rows would have pointed at the
-    /// same view. `.discover` still resolves — it opens that page on For You.
-    static var primaryItems: [MacSidebarItem] { [.home, .library] }
+    /// Songs/Albums/Artists/Playlists are Library tabs and Discover is a Home tab; they still resolve via MacContentRouter.
+    static var primaryItems: [MacSidebarItem] { [.home, .library, .community] }
 
     /// True when this destination is a face of the merged Home/Discover page.
     var isLandingPage: Bool { self == .home || self == .discover }
 
-    /// The Library tab this destination corresponds to, for the four that are
-    /// really tabs. Nil for a genuine page of its own.
+    /// The Library tab for the four destinations that are really tabs, nil otherwise.
     var libraryTab: LibraryTab? {
         switch self {
         case .songs:     return .songs
@@ -100,23 +74,13 @@ enum MacSidebarItem: String, Hashable, CaseIterable, Identifiable {
         }
     }
 
-    /// True for every selection that puts the Library page on screen — the row
-    /// itself and the four tab identities alike. The sidebar highlights on this
-    /// rather than on `== .library`, so arriving via a Home quick link or a
-    /// "go to album" menu still lights up the row you're standing in.
+    /// Any selection that shows the Library page, so the row stays lit when arriving via a tab.
     var isLibraryPage: Bool { self == .library || libraryTab != nil }
 }
 
 // MARK: - Library Tabs
 
-/// The four views that used to be sidebar rows, now segments of one page.
-///
-/// Mixtape started as a place to keep files you owned, and a sidebar listing
-/// Songs / Albums / Artists made sense when that was the whole app. It reads
-/// differently now that most of what people play arrives from Discover: those
-/// are three ways of slicing *the same library*, and giving each one a
-/// permanent row pushed the playlists — the thing actually navigated to — below
-/// the fold behind a button.
+/// Segments of the Library page.
 enum LibraryTab: String, Hashable, CaseIterable, Identifiable {
     /// Spotify's unfiltered library: playlists, saved albums and smart playlists.
     case all       = "All"
@@ -124,8 +88,7 @@ enum LibraryTab: String, Hashable, CaseIterable, Identifiable {
     case songs     = "Songs"
     case albums    = "Albums"
     case artists   = "Artists"
-    /// Rule-based playlists. A Mac had no way to see one at all — the + menu
-    /// created them and they went nowhere.
+    /// Rule-based playlists.
     case smart     = "Smart"
 
     var id: String { rawValue }
@@ -139,8 +102,7 @@ enum RightPanelMode: Equatable, CaseIterable {
     case queue        // shows MacQueuePanelView
     case recent       // shows MacRecentPanelView
 
-    /// Label for the panel's own tab bar. Short on purpose: three of these plus
-    /// a close button have to fit a column the user can drag down to 220pt.
+    /// Short: three tabs and a close button must fit a 220pt column.
     var tabTitle: String {
         switch self {
         case .nowPlaying: return "Now Playing"
@@ -164,27 +126,18 @@ final class MacAppState: ObservableObject {
     private static let libraryTabKey       = "mixtape.libraryTab"
     private static let sidebarCollapsedKey = "mixtape.sidebarCollapsed"
 
-    /// Which slice of the library the Library page is showing.
-    ///
-    /// Persisted globally rather than per-account: it's a view preference about
-    /// how someone likes to browse, not anything to do with whose music it is.
+    /// Library page segment. Global, not per-account: it's a browsing preference.
     @Published var libraryTab: LibraryTab = .all {
         didSet {
             guard libraryTab != oldValue else { return }
             UserDefaults.standard.set(libraryTab.rawValue, forKey: Self.libraryTabKey)
-            // Leaving the tab leaves the artist, as it did when this was the
-            // Artists view's own `@State`.
+            // Leaving the tab closes the open artist.
             if libraryTab != .artists { libraryArtistID = nil }
             scheduleHistoryCapture()
         }
     }
 
-    /// Sidebar folded down to an icon rail.
-    ///
-    /// A fold, not a hide: `NavigationSplitView` only offered "there" or "gone
-    /// entirely", which is part of why it isn't here. Collapsing to icons keeps
-    /// every destination one click away while giving the content the width —
-    /// which is the trade people actually want on a laptop screen.
+    /// Sidebar folded to an icon rail.
     @Published var sidebarCollapsed: Bool = UserDefaults.standard.bool(forKey: MacAppState.sidebarCollapsedKey) {
         didSet {
             guard sidebarCollapsed != oldValue else { return }
@@ -192,23 +145,13 @@ final class MacAppState: ObservableObject {
         }
     }
 
-    /// Fold the sidebar down to the icon rail, or back out again.
-    ///
-    /// One flag, and MacRootView animates the column's width off it. It used to
-    /// set `NavigationSplitView`'s `columnVisibility` in the same breath — the
-    /// rail was drawn beside a column that had to be hidden to make room — and
-    /// the two moved on separate animations that visibly disagreed. The column
-    /// is hand-rolled now, so there is only this.
+    /// MacRootView animates the column width off this flag.
     func toggleSidebar() {
         sidebarCollapsed.toggle()
     }
 
-    /// The order playlists are shown in — the sidebar's own control now, and
-    /// the single source both the sidebar and the Playlists page draw from, so
-    /// the two can never show a different order for the same choice. A mirror
-    /// of `PlaylistSortSyncService.shared.sortOrder`, which owns the value,
-    /// persists it and carries it to the phone — this stays a `@Published` on
-    /// `MacAppState` only so the sidebar's existing bindings keep working.
+    /// Playlist order shared by the sidebar and the Playlists page. Mirrors
+    /// `PlaylistSortSyncService.shared.sortOrder`, which owns and syncs it.
     @Published var playlistSortOrder: LibrarySortOrder = .manual {
         didSet {
             guard playlistSortOrder != oldValue else { return }
@@ -218,8 +161,7 @@ final class MacAppState: ObservableObject {
 
     private var sortOrderObserver: AnyCancellable?
 
-    /// Whether the sidebar's playlist list is in drag-to-reorder mode. Not
-    /// persisted — it describes this visit to the sidebar, not a preference.
+    /// Sidebar drag-to-reorder mode. Not persisted.
     @Published var isArrangingPlaylists = false
 
     // MARK: - Init (loads persisted UI scale)
@@ -235,9 +177,7 @@ final class MacAppState: ObservableObject {
         settingsObserver = SettingsRoute.shared.$category.dropFirst().sink { [weak self] _ in
             self?.scheduleHistoryCapture()
         }
-        // Follows the account: a change made on the phone lands here the
-        // moment the session refreshes. The `didSet` above pushes the other
-        // way, and both sides stop on the equality guard.
+        // Follows the account; the `didSet` pushes the other way and the equality guard stops the loop.
         playlistSortOrder = PlaylistSortSyncService.shared.sortOrder
         sortOrderObserver = PlaylistSortSyncService.shared.$sortOrder
             .receive(on: RunLoop.main)
@@ -249,14 +189,12 @@ final class MacAppState: ObservableObject {
            let tab = LibraryTab(rawValue: raw) {
             libraryTab = tab
         }
-        // The sort order is not restored here — `PlaylistSortSyncService` owns
-        // both the stored value and the account's copy of it. See `init`.
+        // Sort order is restored by `PlaylistSortSyncService`, not here.
     }
 
     // MARK: - UI Scale  (Cmd+= / Cmd+-)
 
     private static let scaleKey   = "mixtape.uiScale"
-    /// Allowed zoom steps — 70 % … 150 % in 10 % increments.
     static  let scaleSteps: [CGFloat] = [0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5]
 
     @Published var uiScale: CGFloat = 1.0 {
@@ -273,126 +211,63 @@ final class MacAppState: ObservableObject {
 
     // MARK: Navigation
     @Published var selection:        MacSidebarItem?               = .home {
-        // Changing sidebar section swaps the main content column; dismiss
-        // fullscreen lyrics so the new section isn't hidden behind them.
+        // A new section swaps the content column, so dismiss fullscreen lyrics.
         didSet {
             if oldValue != selection, lyricsPresented && lyricsFullscreen {
                 lyricsPresented = false
             }
-            if oldValue != selection { leaveSearchOnSectionChange(); libraryArtistID = nil }
-            // The four old sections open the Library page on that tab. Set here,
-            // not in the router's `onChange`, so the history reads the tab in
-            // the same turn as the section.
+            if oldValue != selection {
+                leaveSearchOnSectionChange(); libraryArtistID = nil
+                if let selection { Analytics.screen(selection.rawValue.lowercased()) }
+            }
+            // Old section items open Library on that tab. Set here so the history sees the tab in the same turn.
             if let tab = selection?.libraryTab { libraryTab = tab }
             selectedCrateID = nil
             scheduleHistoryCapture()
         }
     }
     // MARK: Search
-    //
-    // One field, one query, one corpus — the catalogue, with your own library
-    // folded in above it (see `LocalMatchesSection`).
-    //
-    // It used to be one query *per corpus*: Discover searched online, every
-    // other section searched the local library. Which meant the same box did
-    // two different jobs depending on where you happened to be standing, and
-    // the job it did most of the time was the one that couldn't reach a song
-    // you didn't already own. Typing a song you'd heard about got you "no
-    // results" from a box that had never looked anywhere but your own disk.
-    //
-    // The per-corpus storage existed to stop a Discover query following you
-    // into the library and silently filtering it. Committing (see
-    // `searchCommitted`) solves that directly: an uncommitted query is invisible
-    // to everything that draws, so leaving a section leaves its search behind
-    // whether or not the text is still sitting in the field.
+    // One query over the catalogue, with library matches folded in above (`LocalMatchesSection`).
 
-    /// Backing store. Written through `searchText` so every edit can also reset
-    /// the library narrowing and the parked flag below. Nothing that *draws*
-    /// reads this — see `activeSearchText`.
+    /// Backing store, written via `searchText`. Drawing code reads `activeSearchText`.
     @Published private var searchStorage: String = "" {
-        // Only ever a *refresh* of the search entry while one is on screen —
-        // `resolvedDestination` ignores an uncommitted query.
+        // Only refreshes a search entry already on screen; an uncommitted query is ignored.
         didSet { scheduleHistoryCapture() }
     }
 
-    /// The live query. Still a plain settable String, so the field's binding,
-    /// the Library page's filters and OnlineDiscoverView all keep working
-    /// untouched — only what it searches changed.
+    /// The live query, bound to the search field.
     var searchText: String {
         get { searchStorage }
         set {
             guard searchStorage != newValue else { return }
             searchStorage = newValue
-            // Typing is not asking for results — a new query gets the panel
-            // under the field and nothing else until Return. An already
-            // committed one stays committed, because there the typing is
-            // refining a page the user is looking at; emptying the field ends
-            // the search outright.
+            // Typing only feeds the suggestions panel until Return. A committed query stays
+            // committed while edited; emptying the field ends it.
             if newValue.isEmpty { searchCommitted = false }
         }
     }
 
-    /// Whether the query has been *asked for* — Return, or a row picked out of
-    /// the suggestions panel — rather than merely typed.
-    ///
-    /// Typing used to hand the entire content column to the results on the first
-    /// character, which made the search field a trapdoor: three letters and the
-    /// page you were reading was gone, before you had finished deciding what you
-    /// were even looking for. And because the router checks the query *before*
-    /// the drill-downs, a playlist opened while text sat in the field was
-    /// genuinely selected and simply never drawn.
-    ///
-    /// So typing now only feeds the panel hanging off the field, which is what
-    /// iOS has always done — UIKit draws `.searchSuggestions` over the content
-    /// and only reveals the results on submit. Return commits, and committing is
-    /// what puts the results on screen (`showSearchResults`). Editing a query
-    /// that is already committed keeps it committed — there the typing is
-    /// refining a search you are looking at, not starting one. Navigating
-    /// anywhere else un-commits (`leaveSearch`), leaving the text in the field
-    /// with nothing behind it: click back into the field and the panel returns,
-    /// press Return and the results do.
+    /// Whether the query was asked for (Return or a suggestion pick) rather than just typed.
+    /// Typing only feeds the suggestions panel, like iOS. Committing shows the results;
+    /// navigating away un-commits (`leaveSearch`) but keeps the text.
     @Published private(set) var searchCommitted: Bool = false {
         didSet { scheduleHistoryCapture() }
     }
 
-    /// The query as far as anything that *draws* is concerned — empty until the
-    /// search is committed. Only the field itself binds to `searchText`; every
-    /// reader that would put the query on screen — the router, Discover, the
-    /// Library page's filters — reads this one, so a query that hasn't been
-    /// asked for is invisible to all of them at once.
+    /// The query as drawing code sees it: empty until committed. Only the field binds to `searchText`.
     var activeSearchText: String { searchCommitted ? searchStorage : "" }
 
-    /// Leaving the search behind: keep the text, give back the screen.
-    ///
-    /// Called from every navigation that opens a specific page — the sidebar
-    /// sections, and the album and playlist drill-downs, which set their targets
-    /// directly and so never went through `goToSection`.
+    /// Keep the text, give back the screen. Called by every navigation that opens a specific page.
     func leaveSearch() {
         if searchCommitted { searchCommitted = false }
     }
 
-    /// Return in the search field: show me the results.
-    ///
-    /// The router hands the content column to Discover as soon as a query
-    /// exists — but four things are drawn in front of it, and fullscreen lyrics
-    /// are the worst of them, because they replace the column outright. Reading
-    /// along to a song and searching for something else got you the suggestions
-    /// panel hanging off the field and nothing behind it: the results were
-    /// there, under the lyrics, with no way to tell. The account page, a profile
-    /// and a public playlist all outrank the search in the same way.
-    ///
-    /// Deliberately not run on every keystroke: typing is not a decision to
-    /// leave the page you're on, and Return is. Until this runs, the query
-    /// exists only in the field and in the suggestions panel — see
-    /// `searchCommitted`.
+    /// Return in the search field. Clears everything drawn over the content column (fullscreen
+    /// lyrics, account, profile, public playlist) so the results are visible.
     func showSearchResults() {
         if lyricsPresented { lyricsPresented = false }
         dismissContentOverlays()
-        // The commit itself. Everything above clears what is drawn *over* the
-        // content column; this is what puts the results in it. The drill-down
-        // the query was sitting behind goes too — the search is the page you're
-        // on now, so clearing the query later lands on the section rather than
-        // reopening the playlist that was hiding behind the results.
+        // Commit. Also drop the drill-down behind the query, so clearing it later lands on the section.
         guard !searchCommitted else { return }
         searchCommitted  = true
         selectedAlbum    = nil
@@ -400,82 +275,58 @@ final class MacAppState: ObservableObject {
         selectedSmartPlaylist = nil
     }
 
-    /// Called from `selection`'s `didSet`. Clicking a sidebar row means "show me
-    /// that", not "show me that, filtered by whatever I was last looking for".
     private func leaveSearchOnSectionChange() { leaveSearch() }
 
-    /// Bumped to ask the toolbar search field to take focus. The field owns its
-    /// own `@FocusState`, so ⌘F can't just set a boolean here — it has to send
-    /// an edge the field can observe.
+    /// Bumped to focus the toolbar search field, which owns its own `@FocusState`.
     @Published var searchFocusToken: Int                           = 0
     func focusSearch() { searchFocusToken &+= 1 }
 
-    /// ⌘K — the command palette overlay in MacRootView.
+    /// ⌘K palette, drawn by MacRootView.
     @Published var commandPaletteOpen: Bool = false
 
-    /// Incremented when the user presses ↓ in the search field, handing keyboard
-    /// control to the results list so typing and then arrowing works without
-    /// reaching for the mouse.
+    /// Bumped on ↓ in the search field to move keyboard focus into the results.
     @Published var resultsFocusToken: Int = 0
     func focusResults() { resultsFocusToken &+= 1 }
 
-    /// True → MacContentRouter shows the inline account page (full content
-    /// area). Navigated to from Settings → Manage Account; its Back button
-    /// sets this false. (Ported presentation from main's 1.1 Account window.)
+    /// Shows the inline account page (Settings > Manage Account).
     @Published var showingAccount:   Bool                          = false {
         didSet { scheduleHistoryCapture() }
     }
 
-    /// Person whose profile the user opened — from search, or from Find People.
-    /// Non-nil → MacContentRouter shows ProfilePageView across the whole content
-    /// area, the same way albums and playlists drill in. A profile is a
-    /// destination, not a popover.
+    /// Profile opened from search or Find People; fills the content area.
     @Published var profileTarget: UserProfile? = nil {
         didSet { scheduleHistoryCapture() }
     }
 
-    /// A public playlist opened from someone's profile. Checked *before*
-    /// `profileTarget` in MacContentRouter, so closing it returns to the profile
-    /// it was opened from rather than unwinding the whole way out.
+    /// Public playlist opened from a profile. Checked before `profileTarget`, so closing it returns to the profile.
     @Published var publicPlaylistTarget: PublicPlaylistTarget? = nil {
         didSet { scheduleHistoryCapture() }
     }
 
-    /// Drops the pages that take over the entire content area.
-    ///
-    /// Called from the drill-down setters below and not only from the router's
-    /// `onChange(of: selection)`: a sidebar playlist row sets `selectedPlaylist`
-    /// and `selection = nil`, so selection never becomes non-nil and that handler
-    /// never runs — which is why an open profile used to stay on top of every
-    /// playlist clicked afterwards.
-    /// Fullscreen lyrics belong in this list for the same reason: they replace
-    /// the content column outright, so a playlist opened underneath them
-    /// switched invisibly.
+    enum MessagesPage: Equatable { case list, thread(UserProfile) }
+
+    /// Messages, from the paper plane in the top bar or a profile's Message button.
+    @Published var messagesPage: MessagesPage? = nil {
+        didSet { scheduleHistoryCapture() }
+    }
+
+    /// Drops pages that take over the whole content area, including fullscreen lyrics.
+    /// Called from the drill-down setters too: a sidebar playlist sets `selection = nil`,
+    /// so the router's `onChange` never runs.
     private func dismissContentOverlays() {
         showingAccount       = false
         profileTarget        = nil
         publicPlaylistTarget = nil
+        messagesPage         = nil
         discoverLinkActive   = false
         leaveFullscreenLyricsForNavigation()
     }
 
     // MARK: - Sidebar navigation
 
-    /// What clicking a sidebar row means: show me that page, from the top —
-    /// including when it is already the selected page.
-    ///
-    /// `selection`'s `didSet` can't do this, because clicking Home while Home is
-    /// selected assigns the same value: `oldValue != selection` is false and
-    /// nothing resets. That is precisely the state a search leaves you in. Type
-    /// anything while on Home and the router hands the whole content column to
-    /// the results (`isSearching`), so the page you're looking at is no longer
-    /// the page the sidebar says you're on — and Home, the one control that
-    /// should undo that, was the one click guaranteed to do nothing.
-    ///
-    /// So the reset lives here rather than in the `didSet`, and it runs on every
-    /// click: the query goes, the drill-downs go, and the landing page's own
-    /// stack unwinds so Home means the greeting rather than whichever artist
-    /// page was open behind the search.
+    /// Sidebar click: show that page from the top, even if already selected (`selection`'s
+    /// `didSet` can't, reselecting assigns the same value). Clears the query and drill-downs
+    /// and unwinds the landing page's stack.
     func goToSection(_ item: MacSidebarItem) {
         leaveFullscreenLyricsForNavigation()
         dismissContentOverlays()
@@ -489,9 +340,7 @@ final class MacAppState: ObservableObject {
         selection = item
     }
 
-    /// Album the user drilled into from any content view.
-    /// Non-nil → MacContentRouter shows MacAlbumDetailView.
-    /// Setting this to nil returns to whichever section was active.
+    /// Album drill-down; nil returns to the active section.
     @Published var selectedAlbum: Album? = nil {
         didSet {
             if selectedAlbum != nil {
@@ -502,18 +351,13 @@ final class MacAppState: ObservableObject {
         }
     }
 
-    /// The artist open on the Library's Artists tab; nil shows the grid. Here
-    /// rather than in MacArtistsView so the history can record and restore it.
+    /// Artist open on the Artists tab, nil shows the grid. Lives here so history can restore it.
     @Published var libraryArtistID: Artist.ID? = nil {
         didSet { scheduleHistoryCapture() }
     }
     private var settingsObserver: AnyCancellable?
 
-    /// Playlist the user drilled into from the Playlists view.
-    /// Non-nil → MacContentRouter shows PlaylistDetailView.
-    /// Setting this to nil returns to the playlists list.
-    /// Smart playlist the user opened from Home's "Made by Mixtape" shelf.
-    /// Non-nil → MacContentRouter shows its page; navigating anywhere clears it.
+    /// Smart playlist opened from Home's "Made by Mixtape" shelf. Navigating anywhere clears it.
     @Published var selectedSmartPlaylist: SmartPlaylist? = nil {
         didSet { scheduleHistoryCapture() }
     }
@@ -527,6 +371,7 @@ final class MacAppState: ObservableObject {
         leaveSearch()
     }
 
+    /// Playlist drill-down; nil returns to the list.
     /// Crate page. A drill-down like a playlist; any sidebar section clears it.
     @Published var selectedCrateID: UUID? = nil {
         didSet { scheduleHistoryCapture() }
@@ -555,19 +400,9 @@ final class MacAppState: ObservableObject {
     }
 
     // MARK: - Navigation history (⌘[ / ⌘])
-    //
-    // The content area is addressed by six independent properties, which is fine
-    // for showing a page and useless for going back to one: "where was I" isn't
-    // written down anywhere. So every settled arrangement of those properties is
-    // collapsed into a single `MacDestination` and pushed onto a stack, the same
-    // model a browser uses.
-    //
-    // Capture is deferred to the next main-actor turn rather than run inside the
-    // `didSet`s that trigger it. A single navigation writes several of these
-    // properties in one synchronous burst — `dismissContentOverlays()` alone
-    // clears three — and recording each write would fill the stack with
-    // half-built states nobody ever saw. Waiting for the burst to finish means
-    // the history only ever holds arrangements that actually reached the screen.
+    // Each settled arrangement of the destination properties is one `MacDestination` on a
+    // browser-style stack. Capture waits a main-actor turn so one navigation's burst of
+    // writes records only its final state.
 
     /// Everywhere the content column can be, as one value.
     enum MacDestination {
@@ -576,11 +411,9 @@ final class MacAppState: ObservableObject {
         case playlist(Playlist)
         case profile(UserProfile)
         case publicPlaylist(PublicPlaylistTarget)
+        case messages(MessagesPage)
         case account
-        /// A committed search. The results fill the content column exactly the
-        /// way a playlist does, so they are a page, and Back has to come back
-        /// to them — it used to land on whatever section the search was drawn
-        /// over, which for most people is Home.
+        /// A committed search is a page, so Back returns to it.
         case search(String)
         case smartPlaylist(SmartPlaylist)
         case crate(UUID)
@@ -588,12 +421,7 @@ final class MacAppState: ObservableObject {
         case library(LibraryTab, artist: Artist.ID?)
         case settings(SettingsCategory)
 
-        /// Identity, not equality — deliberately not `Equatable`.
-        ///
-        /// The payloads are snapshots taken when the page opened, so a playlist
-        /// renamed since then no longer equals the one in the stack. Comparing
-        /// whole values would make "am I already here?" answer no, and every
-        /// rename would push a duplicate entry for the page already on screen.
+        /// Identity, not equality: payloads are snapshots, so a renamed playlist must still match its entry.
         func matches(_ other: MacDestination) -> Bool {
             switch (self, other) {
             case let (.section(a),        .section(b)):        return a == b
@@ -601,30 +429,24 @@ final class MacAppState: ObservableObject {
             case let (.playlist(a),       .playlist(b)):       return a.id == b.id
             case let (.profile(a),        .profile(b)):        return a.id == b.id
             case let (.publicPlaylist(a), .publicPlaylist(b)): return a.id == b.id
+            case let (.messages(a),       .messages(b)):       return a == b
             case (.account,               .account):           return true
             case let (.smartPlaylist(a),  .smartPlaylist(b)):  return a.id == b.id
             case let (.crate(a),          .crate(b)):          return a == b
             case let (.library(a, x),     .library(b, y)):     return a == b && x == y
             case let (.settings(a),       .settings(b)):       return a == b
-            // Refining a query is the same page asking a different question,
-            // not a new one — see `captureHistory`, which refreshes the entry
-            // rather than pushing one.
+            // A refined query refreshes the entry rather than pushing one.
             case (.search,                .search):            return true
             default:                                           return false
             }
         }
     }
 
-    /// Past and future. `@Published` so the toolbar's arrows enable and disable
-    /// themselves — `canGoBack` is computed, and a computed property only
-    /// refreshes a view when something it reads publishes.
+    /// Published so the toolbar arrows refresh; `canGoBack` is computed.
     @Published private(set) var backStack:    [HistoryEntry] = []
     @Published private(set) var forwardStack: [HistoryEntry] = []
 
-    /// A page plus the Discover drill-downs open on it. The path is one global
-    /// stack that Home and a search share, and leaving either clears it — so
-    /// without the copy, Back to a search landed on the results, not on the
-    /// artist or "In your library" page you had actually left.
+    /// A page plus the Discover drill-downs open on it. Home and search share one path, so it's copied here.
     typealias HistoryEntry = (destination: MacDestination, discoverPath: [DiscoverDestination])
 
     var canGoBack: Bool {
@@ -635,43 +457,27 @@ final class MacAppState: ObservableObject {
     }
 
     // MARK: Discover's own stack
-    //
-    // Discover drills into artists, albums, genres and mixes through a
-    // NavigationStack path that lives in DiscoverSessionStore — none of it
-    // touches the six destination properties, so as far as the history above is
-    // concerned opening an artist page never happened. That is why the arrows
-    // looked broken: inside Discover, which is where most browsing actually
-    // takes place, there was nothing in `backStack` to go back to, and the
-    // arrows greyed out mid-journey.
-    //
-    // So the path is mirrored here and treated as a second layer of history,
-    // the same way the fullscreen lyrics are: Back unwinds it before it touches
-    // the destination stack, and only once it is empty does the window-level
-    // history take over.
+    // Discover's NavigationStack path is a second history layer: Back unwinds it before
+    // the destination stack, like fullscreen lyrics.
 
-    /// Mirror of `DiscoverSessionStore.shared.path.count`. Published because
-    /// `canGoBack` has to refresh the toolbar when a drill-down opens, and the
-    /// store's own changes don't reach a view observing this object.
+    /// Mirror of `DiscoverSessionStore.shared.path.count`, published so `canGoBack` refreshes the toolbar.
     @Published private(set) var discoverDepth = 0
 
     /// Pages popped off the Discover path by the Back arrow, newest last.
     private var discoverForward: [DiscoverDestination] = []
 
-    /// True while *we* are the ones mutating the path, so the observer doesn't
-    /// mistake our own unwinding for the user taking a new turn.
+    /// Set while we mutate the path, so the observer doesn't treat it as a new turn.
     private var isRestoringDiscover = false
     private var discoverObserver: AnyCancellable?
 
-    /// Whether the Discover view is the thing filling the content column. The
-    /// store is a singleton whose path outlives the view, so without this check
-    /// Back would silently pop a drill-down nobody can see while the user is
-    /// somewhere else entirely.
+    /// Whether Discover fills the content column. The store's path outlives the view, so Back
+    /// mustn't pop a drill-down nobody can see.
     private var discoverOnScreen: Bool {
         guard !showingAccount,
               publicPlaylistTarget == nil,
+              messagesPage         == nil,
               profileTarget        == nil else { return false }
-        // A linked page is Discover's column too, drawn over whatever section
-        // the sidebar is still pointing at — so Back has to unwind it first.
+        // A linked page is Discover's column drawn over the current section.
         if discoverLinkActive { return true }
         guard selectedAlbum    == nil,
               selectedSmartPlaylist == nil,
@@ -684,69 +490,47 @@ final class MacAppState: ObservableObject {
     }
 
     private func observeDiscoverPath() {
-        // `$path` publishes in `willSet`, so the value handed over is the one
-        // about to be installed and `discoverDepth` still holds the old one —
-        // which is exactly the comparison needed to tell a push from a pop.
+        // `$path` publishes in `willSet`, so `discoverDepth` still holds the old count: that tells a push from a pop.
         discoverObserver = DiscoverSessionStore.shared.$path.sink { [weak self] newPath in
             guard let self else { return }
             let newDepth = newPath.count
             defer { self.discoverDepth = newDepth }
-            // A linked page lives exactly as long as its stack. Emptying it —
-            // Back, the page's own back button, a committed search — is what
-            // hands the column back to the page the link was clicked on. Above
-            // the guard below because the commonest way to empty it is Back,
-            // which sets `isRestoringDiscover`.
+            // A linked page lives as long as its stack. Before the guard below, since Back sets `isRestoringDiscover`.
             if newDepth == 0, self.discoverDepth != 0 { self.discoverLinkActive = false }
-            // The stack belongs to the page it was opened on. Recorded only while
-            // that page is still the one on screen, so a navigation that clears
-            // it on the way out (Home, a new search) can't wipe the copy Back
-            // restores.
+            // Record only while the page the stack was opened on is on screen, so a navigation
+            // clearing it on the way out can't wipe Back's copy.
             if !self.historyCaptureScheduled, self.resolvedDestination.matches(self.currentDestination) {
                 self.currentDiscoverPath = self.discoverOnScreen ? newPath : []
             }
             guard !self.isRestoringDiscover, newDepth != self.discoverDepth else { return }
-            // Same rule as the destination history: a turn the user takes
-            // themselves discards the future they were no longer walking to.
+            // A new turn discards the forward history.
             self.discoverForward.removeAll()
         }
     }
 
-    /// True while fullscreen lyrics are the thing filling the content column.
-    ///
-    /// They are drawn by MacRootView *instead of* MacContentRouter, so for as
-    /// long as they're up they are the page on screen — but they set no
-    /// destination property, so `resolvedDestination` can't see them and the
-    /// history has no idea they ever opened.
+    /// Fullscreen lyrics replace MacContentRouter but set no destination property, so the history tracks them separately.
     private var lyricsCoverContent: Bool { lyricsPresented && lyricsFullscreen }
 
-    /// Where the history believes we are. Distinct from `resolvedDestination`,
-    /// which is where we actually are — they differ for exactly as long as it
-    /// takes a capture to run.
+    /// Where the history thinks we are; lags `resolvedDestination` until a capture runs.
     private var currentDestination: MacDestination = .section(.home)
     private var currentDiscoverPath: [DiscoverDestination] = []
     private var liveDiscoverPath: [DiscoverDestination] {
         discoverOnScreen ? DiscoverSessionStore.shared.path : []
     }
 
-    /// True while `apply` is writing the properties. Restoring a destination
-    /// looks identical to navigating to it from the outside, so without this the
-    /// act of going back would record going back, and forward could never win.
+    /// Set while `apply` writes, so going back isn't recorded as a navigation.
     private var isRestoringHistory = false
     private var historyCaptureScheduled = false
 
-    /// Deep enough that nobody reaches the end of it in a session, bounded so a
-    /// week-long run doesn't accumulate every page ever opened.
     private static let historyLimit = 60
 
-    /// Reads the six properties in the router's own precedence order. Any other
-    /// order would record a destination different from the one on screen.
+    /// Reads the properties in the router's precedence order, so it matches what's on screen.
     private var resolvedDestination: MacDestination {
         if showingAccount                     { return .account }
         if let target = publicPlaylistTarget  { return .publicPlaylist(target) }
+        if let page = messagesPage            { return .messages(page) }
         if let profile = profileTarget        { return .profile(profile) }
-        // Exactly where the router puts it: above the drill-downs, which in
-        // practice can never both be set (opening one calls `leaveSearch`, and
-        // committing a query clears them).
+        // Above the drill-downs, as in the router.
         if isSearching                        { return .search(activeSearchText) }
         if let album = selectedAlbum          { return .album(album) }
         if let smart = selectedSmartPlaylist  { return .smartPlaylist(smart) }
@@ -773,24 +557,18 @@ final class MacAppState: ObservableObject {
     private func captureHistory() {
         let destination = resolvedDestination
         guard !destination.matches(currentDestination) else {
-            // Same page, newer payload: a refined query, or a playlist renamed
-            // since it opened. No entry to push, but the one Back restores has
-            // to be what is actually on screen.
+            // Same page, newer payload (refined query, renamed playlist): refresh the entry instead of pushing.
             currentDestination = destination
             currentDiscoverPath = liveDiscoverPath
             return
         }
 
-        // Leaving a page drops its song selection. The selection is shared
-        // across every track list, so without this the row you clicked stays
-        // highlighted — and stays the target of Delete and the toolbar — on
-        // every page you visit afterwards.
+        // Leaving a page drops its song selection, which is shared across every track list.
         clearTrackSelection()
 
         backStack.append((currentDestination, currentDiscoverPath))
         if backStack.count > Self.historyLimit { backStack.removeFirst() }
-        // Same rule as a browser: taking a new turn discards the future you were
-        // no longer walking towards.
+        // A new turn discards the forward history.
         if !forwardStack.isEmpty { forwardStack.removeAll() }
         if !discoverForward.isEmpty { discoverForward.removeAll() }
         currentDestination = destination
@@ -798,26 +576,14 @@ final class MacAppState: ObservableObject {
     }
 
     func goBack() {
-        // Lyrics first, because they're the top layer and the history can't see
-        // them. Without this, Back read straight past the fullscreen lyrics to
-        // the section you'd arrived from: open lyrics over a page of Discover
-        // results, press Back, and instead of the results you got whatever
-        // preceded Discover — the search you were reading gone, because
-        // leaving the section swaps its query out from under it.
-        //
-        // Closing them is what "one step back" means from here, and it's the
-        // same thing Escape already does (MacRootView's `.onExitCommand`).
-        // Deliberately not pushed onto `forwardStack`: dismissing an overlay
-        // isn't travel, and Forward re-opening the lyrics you just closed would
-        // be a strange thing for a history arrow to do.
+        // Fullscreen lyrics close first: they're the top layer and the history can't see them.
+        // Same as Escape. Not pushed forward, since dismissing isn't travel.
         if lyricsCoverContent {
             lyricsPresented = false
             return
         }
 
-        // Discover's drill-downs sit above the destination history in exactly
-        // the way the lyrics do: they're steps the user took after arriving,
-        // so they have to unwind first.
+        // Then Discover's drill-downs, which were opened after arriving.
         if discoverOnScreen, let top = DiscoverSessionStore.shared.path.last {
             isRestoringDiscover = true
             DiscoverSessionStore.shared.path.removeLast()
@@ -833,9 +599,7 @@ final class MacAppState: ObservableObject {
     }
 
     func goForward() {
-        // Mirror image of Back, and deliberately in the opposite order: the
-        // destination history is unwound last on the way back, so it is
-        // rewound first on the way forward.
+        // Mirror of Back: the destination history is rewound first.
         guard let next = forwardStack.popLast() else {
             if discoverOnScreen, let page = discoverForward.popLast() {
                 isRestoringDiscover = true
@@ -849,38 +613,27 @@ final class MacAppState: ObservableObject {
         apply(next)
     }
 
-    /// Every property is cleared before one is set, so a destination is restored
-    /// exactly, not merged into whatever happened to be showing.
+    /// Clears every property before setting one, so the destination is restored exactly, not merged.
     private func apply(_ entry: HistoryEntry) {
         isRestoringHistory = true
         defer { isRestoringHistory = false }
 
-        // Same rule as ordinary navigation — which routes through
-        // `captureHistory`, and this path deliberately doesn't.
+        // Ordinary navigation does this in `captureHistory`, which this path skips.
         clearTrackSelection()
 
-        // `selection` is one of the properties `resolvedDestination` reads, so
-        // skipping it here didn't restore a destination, it merged one into the
-        // section that happened to be showing: Back out of Settings drew the
-        // playlist with Settings still lit in the sidebar, and ⌘, then assigned
-        // `.settings` over `.settings` — a write that changes nothing, so the
-        // router's `onChange` never fired and the playlist never cleared.
-        //
-        // Nil rather than the section the page was opened from, which the
-        // history doesn't record: a drill-down highlighting nothing is never
-        // wrong, and it's the same shape the sidebar's own `openPlaylist` makes.
+        // `selection` too, or Back merges the destination into the current section. Nil, since
+        // the history doesn't record which section a drill-down came from.
         selection            = nil
         showingAccount       = false
         publicPlaylistTarget = nil
+        messagesPage         = nil
         profileTarget        = nil
         selectedAlbum        = nil
         selectedPlaylist     = nil
         selectedSmartPlaylist = nil
         selectedCrateID      = nil
         discoverLinkActive   = false
-        // Restoring any other page ends the search, for the same reason the
-        // drill-downs call `leaveSearch`: the results are no longer what the
-        // column is showing. The `.search` case below puts it back.
+        // Restoring any other page ends the search; `.search` below puts it back.
         searchCommitted      = false
 
         switch entry.destination {
@@ -889,6 +642,7 @@ final class MacAppState: ObservableObject {
         case .playlist(let playlist):  selectedPlaylist     = playlist
         case .profile(let profile):    profileTarget        = profile
         case .publicPlaylist(let t):   publicPlaylistTarget = t
+        case .messages(let page):      messagesPage         = page
         case .account:                 showingAccount       = true
         case .smartPlaylist(let p):    selectedSmartPlaylist = p
         case .crate(let id):           selectedCrateID      = id
@@ -904,8 +658,7 @@ final class MacAppState: ObservableObject {
             searchCommitted  = true
         }
 
-        // Last, because `discoverOnScreen` reads everything above. A stack on a
-        // page that isn't Discover's own was a linked page drawn over it.
+        // Last, because `discoverOnScreen` reads everything above.
         isRestoringDiscover = true
         DiscoverSessionStore.shared.path = entry.discoverPath
         isRestoringDiscover = false
@@ -914,14 +667,9 @@ final class MacAppState: ObservableObject {
     }
 
     // MARK: Toolbar Delete Selection
-    /// Track IDs selected in MacSongsView — drives the toolbar trash button.
+    /// Selected track IDs; drives the toolbar trash button.
     @Published var selectedTrackIDs:   Set<Track.ID> = []
-    /// The row a shift-click measures its range from — the last row picked
-    /// without shift, exactly as Finder anchors a range.
-    ///
-    /// Only the SwiftUI track lists need it; the AppKit tables anchor their own
-    /// ranges. It lives here rather than in a view so it survives the view being
-    /// rebuilt and is cleared by the same call that clears the selection.
+    /// Where a shift-click range starts, like Finder. Only the SwiftUI lists use it; AppKit tables anchor their own.
     @Published var selectionAnchorTrackID: Track.ID? = nil
     /// Playlist ID selected in MacPlaylistsView (system playlists excluded).
     @Published var selectedPlaylistID: UUID? = nil
@@ -929,16 +677,14 @@ final class MacAppState: ObservableObject {
     /// True when the toolbar delete button should be enabled.
     var canDelete: Bool { !selectedTrackIDs.isEmpty || selectedPlaylistID != nil }
 
-    /// Wipes both selection buckets — call on view disappear or after deletion.
+    /// Clears both selections. Call on disappear or after deletion.
     func clearDeleteSelection() {
         clearTrackSelection()
         selectedPlaylistID = nil
         clearPlaylistSelection()
     }
 
-    /// Drops the song selection and its anchor, leaving the selected playlist
-    /// alone — Escape inside a playlist means "never mind these rows", not
-    /// "forget which playlist I'm in".
+    /// Drops the song selection but keeps the playlist: Escape means "never mind these rows".
     func clearTrackSelection() {
         selectedTrackIDs       = []
         selectionAnchorTrackID = nil
@@ -946,18 +692,13 @@ final class MacAppState: ObservableObject {
 
     // MARK: Track selection (SwiftUI lists)
 
-    /// Applies a click to the track selection the way Finder does: plain click
-    /// replaces it, ⌘-click toggles one row, ⇧-click extends from the anchor.
-    ///
-    /// `ordered` is the list as it appears on screen, because a shift-range means
-    /// "everything between these two rows" — which depends on the sort the user
-    /// is looking at, not on any order the library keeps.
+    /// Finder rules: click replaces, ⌘-click toggles, ⇧-click extends from the anchor.
+    /// `ordered` is the on-screen order.
     func selectTrack(_ id: Track.ID, in ordered: [Track.ID], modifiers: NSEvent.ModifierFlags) {
         if modifiers.contains(.command) {
             if selectedTrackIDs.contains(id) {
                 selectedTrackIDs.remove(id)
-                // Deselecting the anchor hands the role to whatever is left, so
-                // a following shift-click still has somewhere to measure from.
+                // Hand the anchor to what's left so shift-click still has a start.
                 if selectionAnchorTrackID == id {
                     selectionAnchorTrackID = ordered.last { selectedTrackIDs.contains($0) }
                 }
@@ -972,8 +713,7 @@ final class MacAppState: ObservableObject {
            let anchor = selectionAnchorTrackID,
            let from   = ordered.firstIndex(of: anchor),
            let to     = ordered.firstIndex(of: id) {
-            // The anchor deliberately stays put: dragging a shift-click up and
-            // down the list should grow and shrink one range, not ratchet.
+            // The anchor stays put, so shift-clicking up and down resizes one range.
             selectedTrackIDs = Set(ordered[min(from, to) ... max(from, to)])
             return
         }
@@ -984,18 +724,13 @@ final class MacAppState: ObservableObject {
 
     // MARK: Playlist selection
 
-    /// Playlists picked on the Playlists page, for the actions that can be done
-    /// to several at once. Ordinary rows only — a right-click outside the
-    /// selection still acts on the one row it landed on.
+    /// Playlists selected on the Playlists page, for bulk actions.
     @Published var selectedPlaylistIDs: Set<UUID> = []
 
     /// Where a shift-click measures its range from, same as the track list.
     @Published var playlistSelectionAnchor: UUID? = nil
 
-    /// Finder's rules again: plain click replaces, ⌘-click toggles, ⇧-click
-    /// extends from the anchor. Shared with the track list in behaviour but not
-    /// in code — the two selections are independent, and one list's Escape
-    /// should not clear the other's rows.
+    /// Same Finder rules as `selectTrack`, but independent so one list's Escape doesn't clear the other.
     func selectPlaylist(_ id: UUID, in ordered: [UUID], modifiers: NSEvent.ModifierFlags) {
         if modifiers.contains(.command) {
             if selectedPlaylistIDs.contains(id) {
@@ -1010,9 +745,7 @@ final class MacAppState: ObservableObject {
             return
         }
 
-        // With nothing picked yet, the playlist that is actually open is what
-        // the user sees as "where they are" — extend from there so it ends up
-        // highlighted too, instead of starting a fresh one-row selection.
+        // With nothing selected, extend from the open playlist.
         if modifiers.contains(.shift),
            let anchor = playlistSelectionAnchor ?? selectedPlaylist?.id,
            let from   = ordered.firstIndex(of: anchor),
@@ -1025,10 +758,7 @@ final class MacAppState: ObservableObject {
         playlistSelectionAnchor = id
     }
 
-    /// Finder's right-click rule: a right-click inside the selection leaves it
-    /// alone, so the menu can act on all of it; one outside replaces it with
-    /// the row that was hit, so the menu is always about something the click
-    /// visibly pointed at.
+    /// Finder's right-click: inside the selection keeps it, outside replaces it with the clicked row.
     func contextClickPlaylist(_ id: UUID) {
         guard !selectedPlaylistIDs.contains(id) else { return }
         selectedPlaylistIDs     = [id]
@@ -1040,9 +770,7 @@ final class MacAppState: ObservableObject {
         playlistSelectionAnchor = nil
     }
 
-    /// The selected tracks in the order they appear on screen. Order matters for
-    /// everything a multi-row menu item does — queueing, adding to a playlist —
-    /// and a `Set` has none.
+    /// Selected tracks in on-screen order, for queueing and adding to playlists.
     func orderedSelection(from ordered: [Track.ID]) -> [Track.ID] {
         ordered.filter { selectedTrackIDs.contains($0) }
     }
@@ -1061,33 +789,29 @@ final class MacAppState: ObservableObject {
         didSet { if !lyricsPresented { karaokeActive = false } }
     }
 
-    /// Preferred lyrics presentation. Persisted so reopening lyrics restores the
-    /// last-used mode (windowed popover vs. Spotify-style fullscreen).
+    /// Persisted lyrics mode: popover or fullscreen.
     @Published var lyricsFullscreen: Bool = UserDefaults.standard.bool(forKey: MacAppState.lyricsFullscreenKey) {
         didSet { UserDefaults.standard.set(lyricsFullscreen, forKey: Self.lyricsFullscreenKey) }
     }
 
-    /// The song whose lyrics the user is editing, or nil.
-    ///
-    /// Lives here rather than in `MacLyricsView` because in windowed mode that
-    /// view is the content of a `.popover`, and a popover hosts its own window.
-    /// A sheet presented from inside one belongs to that window, so it dismisses
-    /// into a context that's being torn down — the save landed on disk but the
-    /// popover never re-evaluated, and the lyrics only appeared after closing
-    /// and reopening them. `MacRootView` presents the editor instead, from the
-    /// main window, and the popover observes this state like any other, so
-    /// clearing it on dismiss is what brings the popover back up to date.
+    /// Song whose lyrics are being edited. Lives here because a sheet inside the lyrics
+    /// popover dismisses into a dead window; MacRootView presents the editor instead.
     @Published var lyricsEditorTrack: Track? = nil
 
-    /// Get Info's song. A sheet, not the Now Playing panel: that panel follows
-    /// playback, so Get Info on any other row showed the wrong song.
+    /// The lyric card sheet, presented from the main window for the same reason.
+    @Published var lyricCard: LyricCardRequest? = nil
+
+    /// Get Info's song. A sheet, since the Now Playing panel follows playback.
     @Published var infoTrack: Track? = nil
 
-    /// Karaoke: fullscreen lyrics with the rest of the app out of the way —
-    /// no sidebar, no right panel, and chrome that fades until the mouse moves.
-    ///
-    /// Deliberately not persisted, and not the same thing as `lyricsFullscreen`:
-    /// that one is a size, this one is a mode you are in for a song.
+    /// The song editor's song, presented from the main window like Get Info.
+    @Published var editTrack: Track? = nil
+
+    /// An edit being posted to the community. Same reason as `editTrack`.
+    @Published var postTrack: Track? = nil
+
+    /// Karaoke: fullscreen lyrics, no sidebar or right panel, fading chrome. Not persisted,
+    /// and separate from `lyricsFullscreen` (a size, not a mode).
     @Published var karaokeActive = false
 
     /// Open/close the lyrics UI (mode is whatever `lyricsFullscreen` remembers).
@@ -1096,9 +820,7 @@ final class MacAppState: ObservableObject {
     /// Switch between windowed and fullscreen lyrics while keeping them open.
     func toggleLyricsFullscreen() { lyricsFullscreen.toggle() }
 
-    /// Karaoke in one gesture: open the lyrics *and* put them fullscreen, or
-    /// close them outright. Distinct from `toggleLyrics`, which reopens in
-    /// whichever mode was last used.
+    /// Open lyrics fullscreen, or close them. `toggleLyrics` reopens in the last-used mode instead.
     func toggleKaraoke() {
         karaokeActive.toggle()
         if karaokeActive {
@@ -1148,19 +870,18 @@ final class MacAppState: ObservableObject {
         panelStack = [.nowPlaying]
     }
 
-    /// Toggle Now Playing — closes if already open, otherwise switches to it.
+    /// Close Now Playing if open, otherwise switch to it.
     func toggleNowPlaying(for track: Track) {
         inspectorTrack = track
         panelStack = (rightPanel == .nowPlaying) ? [] : [.nowPlaying]
     }
 
-    /// Switch the panel to `mode` without touching whether it was open — used by
-    /// the panel's own tab bar, where every tab is a lateral move.
+    /// Switch panel mode without changing whether it's open, for the panel's tab bar.
     func showPanel(_ mode: RightPanelMode) {
         panelStack = [mode]
     }
 
-    /// Toggle Queue — closes if already open, otherwise switches to it.
+    /// Close Queue if open, otherwise switch to it.
     func toggleQueue() {
         panelStack = (rightPanel == .queue) ? [] : [.queue]
     }
@@ -1173,26 +894,35 @@ final class MacAppState: ObservableObject {
 
     // MARK: - Drill-down navigation (from the inspector's clickable title rows)
 
-    /// Fullscreen lyrics take over the main content column, so any navigation
-    /// that swaps that column must first dismiss them — otherwise the destination
-    /// page opens hidden behind the lyrics.
+    /// Navigation that swaps the content column must dismiss fullscreen lyrics, or the page opens behind them.
     private func leaveFullscreenLyricsForNavigation() {
         if lyricsPresented && lyricsFullscreen { lyricsPresented = false }
     }
 
-    /// Open someone's profile as a full page. Clears the search that usually led
-    /// here, so coming back lands on the section rather than on stale results.
+    /// Open a profile as a full page, clearing the search that led here.
     func showProfile(_ profile: UserProfile) {
         leaveFullscreenLyricsForNavigation()
         clearSearch()
         showingAccount  = false
         selectedAlbum   = nil
         selectedPlaylist = nil
+        messagesPage    = nil
         profileTarget   = profile
     }
 
-    /// Open one of someone's public playlists as a full page. Leaves
-    /// `profileTarget` alone on purpose — the profile is where Back goes.
+    /// Messages as a full page, on one conversation when `person` is set.
+    func openMessages(with person: UserProfile? = nil) {
+        leaveFullscreenLyricsForNavigation()
+        clearSearch()
+        showingAccount       = false
+        selectedAlbum        = nil
+        selectedPlaylist     = nil
+        profileTarget        = nil
+        publicPlaylistTarget = nil
+        messagesPage         = person.map { .thread($0) } ?? .list
+    }
+
+    /// Open a public playlist as a full page. Keeps `profileTarget` so Back returns to the profile.
     func showPublicPlaylist(_ summary: PublicPlaylistSummary, ownerName: String) {
         leaveFullscreenLyricsForNavigation()
         publicPlaylistTarget = PublicPlaylistTarget(summary: summary, ownerName: ownerName)
@@ -1205,30 +935,20 @@ final class MacAppState: ObservableObject {
         selectedAlbum  = album
     }
 
-    /// Switch to the Playlists section and open the given playlist.
-    ///
-    /// For jumps that arrive from outside the library — a saved mix picked off
-    /// Mixtape's profile, say. Sets the section as well as the selection so the
-    /// sidebar agrees with the page; `selectedPlaylist` alone would leave
-    /// Discover highlighted behind a playlist.
+    /// Switch to Playlists and open `playlist`, for jumps from outside the library.
     func showPlaylist(_ playlist: Playlist) {
         leaveFullscreenLyricsForNavigation()
         clearSearch()
         selectedAlbum        = nil
-        // Both of these outrank `selectedPlaylist` in the router's precedence
-        // order, so leaving one set would open the playlist behind the page it
-        // was picked from.
+        // Both outrank `selectedPlaylist` in the router, so they must be cleared.
         profileTarget        = nil
         publicPlaylistTarget = nil
+        messagesPage         = nil
         selection            = .playlists
         selectedPlaylist     = playlist
     }
 
-    /// Open Mixtape's own profile.
-    ///
-    /// It's a page inside Discover rather than a `profileTarget`: mixes live
-    /// there, the page is already wired into that stack's playback, and giving
-    /// the app a second profile route would mean two copies of the same screen.
+    /// Mixtape's own profile: a page in Discover's stack, not a `profileTarget`.
     func showMixtapeProfile() {
         leaveFullscreenLyricsForNavigation()
         clearSearch()
@@ -1237,11 +957,20 @@ final class MacAppState: ObservableObject {
         selectedPlaylist     = nil
         profileTarget        = nil
         publicPlaylistTarget = nil
-        // Replaces the stack rather than pushing onto it: this is arrived at
-        // from outside Discover, so whatever was last drilled into there isn't
-        // where Back should go.
+        messagesPage         = nil
+        // Replace the stack: arriving from outside Discover, the old drill-down isn't where Back should go.
         DiscoverSessionStore.shared.path = [.mixtapeProfile]
         selection            = .discover
+    }
+
+    /// A community post, drawn over the current page like other links.
+    /// From a profile page, the profile goes under it so Back lands there.
+    func showPost(code: String, from profile: UserProfile? = nil) {
+        clearSearch()
+        dismissContentOverlays()
+        openLinkedDiscover()
+        if let profile { DiscoverSessionStore.shared.path.append(.profile(profile)) }
+        DiscoverSessionStore.shared.path.append(.post(code))
     }
 
     /// Switch to the Artists section and select the given artist.
@@ -1253,49 +982,29 @@ final class MacAppState: ObservableObject {
         libraryArtistID = artist.id
     }
 
-    /// A pending deep-link into the Discover section, consumed by
-    /// OnlineDiscoverView. Used when the now-playing track is an online song that
-    /// hasn't been saved locally, so its artist/album live online, not in the
-    /// local library.
+    /// Pending deep link into Discover, consumed by OnlineDiscoverView. Used for online songs
+    /// whose artist/album aren't in the library.
     enum DiscoverDeepLink: Equatable {
         case artist(name: String, trackID: Int?)
         case album(title: String, artistName: String, trackID: Int?)
-        /// A station built from one song — "Go to Song Radio" on a track row.
+        /// Station seeded from one song (Go to Song Radio).
         case songRadio(title: String, artistName: String)
         /// Station seeded from an artist name (⌘K radio).
         case artistRadio(name: String)
     }
     @Published var pendingDiscover: DiscoverDeepLink? = nil
 
-    /// A Discover page opened from a link somewhere else in the window — the
-    /// artist under the player bar, a song's album in the queue, a name in the
-    /// lyrics header. It is its own page *over* the page you were reading, not a
-    /// trip to the Discover section.
-    ///
-    /// It used to be exactly that trip: a link set `selection = .discover`, which
-    /// rendered Discover's landing — Home — for as long as the name took to
-    /// resolve into a page, and left Home selected in the sidebar afterwards.
-    /// Every click on a name went to Home first and then jumped. Now the section
-    /// never moves: the sidebar keeps your place, and closing the page (Back, its
-    /// own back button) puts you straight back on the page you clicked from.
+    /// A Discover page opened from a link elsewhere (player bar, queue, lyrics header). Drawn
+    /// over the current page without changing the sidebar section; closing it returns there.
     @Published var discoverLinkActive = false
 
-    /// The name a link is currently turning into a page. Set at the click and
-    /// cleared when the page lands, so Discover has something to draw for the
-    /// length of the round trip — resolving "Travis Scott" to a catalogue id is
-    /// a network call, and the landing page is what used to fill that gap.
+    /// Name a link is resolving, so Discover has something to draw during the network round trip.
     @Published var resolvingDiscoverLink: String? = nil
 
-    /// Put Discover's stack on screen without moving the window to Discover.
-    ///
-    /// Already looking at Discover — the landing, a drill-down, a search — then
-    /// there is nothing to open: the pending link lands on the stack that is
-    /// already there, which is what a drill-down has always done.
+    /// Show Discover's stack without switching section. Already on Discover: the link lands on the existing stack.
     private func openLinkedDiscover() {
         guard !discoverOnScreen, !discoverLinkActive else { return }
-        // A link starts its own stack rather than inheriting wherever Discover
-        // was left; the store outlives the view, so without this the old page
-        // would be on screen for the instant before the new one resolves.
+        // A link starts a fresh stack; the store outlives the view.
         DiscoverSessionStore.shared.path.removeAll()
         discoverLinkActive = true
     }
@@ -1304,10 +1013,7 @@ final class MacAppState: ObservableObject {
     func showOnlineArtist(name: String, trackID: Int?) {
         leaveFullscreenLyricsForNavigation()
         clearSearch()
-        // Explicit, because the router's `onChange(of: selection)` only clears
-        // overlays when the value actually changes — and these are now reachable
-        // from a profile opened while Discover was already the selected section,
-        // where the assignment below is a no-op and the profile would stay on top.
+        // Explicit: the router's `onChange(of: selection)` doesn't fire when Discover was already selected.
         dismissContentOverlays()
         pendingDiscover       = .artist(name: name, trackID: trackID)
         resolvingDiscoverLink = name
@@ -1355,22 +1061,17 @@ final class MacAppState: ObservableObject {
 
     // MARK: - Track drag & drop
 
-    /// Prefix that marks a dragged pasteboard string as a *track* rather than a
-    /// sidebar playlist being reordered. Both payloads are UUIDs, so without it
-    /// the sidebar can't tell "add these songs" from "move this playlist".
+    /// Marks a dragged string as tracks, not a sidebar playlist reorder (both are UUIDs).
     static let trackDragPrefix = "mixtape.track:"
 
     static func trackDragPayload(_ id: Track.ID) -> String { trackDragPayload([id]) }
 
-    /// One payload for a whole selection. SwiftUI's `.onDrag` hands over a single
-    /// item provider no matter how many rows are selected, so dragging several
-    /// songs has to travel as one string rather than one string per song.
+    /// One payload for the whole selection: `.onDrag` gives a single item provider.
     static func trackDragPayload(_ ids: [Track.ID]) -> String {
         trackDragPrefix + ids.map(\.uuidString).joined(separator: ",")
     }
 
-    /// Decode a batch of dropped strings into track IDs. Empty when the drop was
-    /// a playlist reorder rather than a track drag.
+    /// Dropped strings -> track IDs. Empty for a playlist reorder.
     static func trackIDs(fromDrop items: [String]) -> [Track.ID] {
         items.flatMap { item -> [Track.ID] in
             guard item.hasPrefix(trackDragPrefix) else { return [] }
@@ -1382,18 +1083,14 @@ final class MacAppState: ObservableObject {
 
     // MARK: - Playlist drag & drop
 
-    /// Prefix that marks a dragged pasteboard string as a playlist on its way
-    /// *into* the sidebar. Sidebar rows drag a bare UUID to reorder themselves, so
-    /// the prefix is what tells "keep this playlist in the sidebar" apart from
-    /// "move this one within it" — all three payloads are otherwise just UUIDs.
+    /// Marks a playlist dragged into the sidebar, vs. a sidebar row reordering (bare UUID).
     static let playlistDragPrefix = "mixtape.playlist:"
 
     static func playlistDragPayload(_ id: Playlist.ID) -> String {
         playlistDragPrefix + id.uuidString
     }
 
-    /// Decode a batch of dropped strings into playlist IDs. Empty when the drop
-    /// was a track drag or a sidebar reorder.
+    /// Dropped strings -> playlist IDs. Empty for a track drag or sidebar reorder.
     static func playlistIDs(fromDrop items: [String]) -> [Playlist.ID] {
         items.compactMap {
             guard $0.hasPrefix(playlistDragPrefix) else { return nil }
@@ -1401,34 +1098,19 @@ final class MacAppState: ObservableObject {
         }
     }
 
-    /// True while the user is dragging track rows. The sidebar uses this to show
-    /// a "drop into this playlist" highlight instead of the reorder insertion
-    /// line — the two gestures land on the same rows and need to look different.
+    /// True while dragging track rows, so the sidebar shows a drop highlight instead of the reorder line.
     @Published var isDraggingTracks = false
-
-    // MARK: - "Go to Artist" / "Go to Album" (track context menus)
-    //
-    // Both used to prefer a local library row and only fall back to Discover.
-    // That made one menu item mean two different pages: "Go to Artist" on a song
-    // by someone you own three records by opened a list of those three records,
-    // and on anyone else opened the artist. A menu item whose destination
-    // depends on what happens to be saved isn't a destination. They are the
-    // Discover routes now — the local pages keep their own front doors,
-    // Library › Albums and Library › Artists.
 
     // MARK: - Song-row artist / album links
 
-    /// Clicking an artist name in a song row, or "Go to Artist" in its menu.
-    /// The Discover page carries the whole catalogue (and says how much of it is
-    /// already in the library) rather than only the songs owned.
+    /// Artist name click or Go to Artist. Always the Discover page, never a local library row.
     func openDiscoverArtist(named name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
         showOnlineArtist(name: trimmed, trackID: nil)
     }
 
-    /// "Go to Song Radio" in a song's menu. The printed song, not the stored
-    /// one — a station titled with the feature credit still on it reads wrong.
+    /// Go to Song Radio, titled with the printed song rather than the stored one.
     func openSongRadio(for track: Track) {
         showSongRadio(title: track.displayTitle, artistName: track.displayArtistName)
     }
@@ -1436,8 +1118,7 @@ final class MacAppState: ObservableObject {
     /// Clicking the album name in a song row, or "Go to Album" in its menu.
     func openDiscoverAlbum(for track: Track) {
         guard !track.albumTitle.isEmpty else { return }
-        // A multi-artist credit would be searched verbatim otherwise, and no
-        // catalogue files "Album X" under "c4rl, Yungpalo".
+        // Search a multi-artist credit by its first artist.
         let artist = ImportService.creditedArtists(from: track.artistName).first
                   ?? track.artistName
         showOnlineAlbum(title: track.albumTitle, artistName: artist, trackID: nil)
@@ -1451,12 +1132,7 @@ final class MacAppState: ObservableObject {
 
     // MARK: - Misc
 
-    /// Drops the query. Every navigation that opens a specific page calls this
-    /// first: the router hands the whole content column to Discover whenever a
-    /// query exists, so a live query would swallow the very page being opened.
-    ///
-    /// There used to be a second, section-aware version of this. With one query
-    /// instead of one per corpus there is nothing left for it to disambiguate.
+    /// Drops the query. Pages call this before opening, since the router gives the whole column to Discover while a query exists.
     func clearSearch() {
         searchText      = ""
         searchCommitted = false
@@ -1464,3 +1140,9 @@ final class MacAppState: ObservableObject {
 }
 
 #endif
+
+struct LyricCardRequest: Identifiable {
+    let track: Track
+    let lyrics: TrackLyrics
+    var id: Track.ID { track.id }
+}

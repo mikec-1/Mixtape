@@ -1,26 +1,8 @@
-// DownloadManager.swift
-// Mixtape — Core/Services
-//
-// Owns "is this song available without a network, and is there a file copy of
-// it on disk" — two questions that used to be one.
-//
-// The old model had a single `DownloadStatus` that meant "an MP3 for this track
-// exists in the user's export folder". That conflated three unrelated things:
-// keeping a song playable offline, keeping a human-readable file, and having
-// imported the song from disk in the first place. The result was that pressing
-// Download on a playlist wrote a folder full of MP3s nobody asked for, songs
-// imported from the user's own drive got downloaded a second time once they'd
-// synced, and a playlist of local files could never finish "going offline".
-//
-// So there are now two axes:
-//
-//   • Availability — `TrackAvailability`. Streaming only, downloading, in the
-//     offline store, or already local because the user imported it.
-//   • Export — `isExported(_:)`. Does a file copy exist in the export folder?
-//     Opt-in, and never a side effect of playing music.
-//
-// Downloading means "put a copy in `OfflineStore`". Keeping a file copy is a
-// separate wish, honoured alongside a download when the user asks for it.
+// Answers two separate questions per song:
+// - Availability (`TrackAvailability`): streaming only, downloading, in the offline store, or local
+// because the user imported it.
+// - Export (`isExported(_:)`): does a file copy exist in the export folder? Opt-in, never a side effect.
+// Downloading means "put a copy in `OfflineStore`"; a file copy is a separate wish.
 
 import Foundation
 import Combine
@@ -29,18 +11,14 @@ import OSLog
 
 /// How a track can be played on *this* device, right now.
 public enum TrackAvailability: Equatable, Hashable {
-    /// Nothing on disk — playing it needs the network.
+    /// Nothing on disk; playing it needs the network.
     case streamOnly
     case downloading(progress: Double)
     /// Deliberately downloaded into the offline store.
     case offline
-    /// Imported from the user's own disk. Offline by nature, so never something
-    /// to download, and never something for this app to delete.
+    /// Imported from the user's own disk: offline already, never downloaded or deleted by the app.
     case local
-    /// Asked for, tried, and didn't land. A state that has to exist: a download
-    /// that quietly falls back to "stream only" is indistinguishable from one
-    /// that was never requested, which is exactly how a Download All over
-    /// twenty-three songs finishes with eighteen and says nothing.
+    /// Requested but didn't land. Kept separate so a failed download doesn't look like one never asked for.
     case failed
 
     /// Plays with the network off.
@@ -48,8 +26,7 @@ public enum TrackAvailability: Equatable, Hashable {
         self == .offline || self == .local
     }
 
-    /// Whether "Remove Download" applies. Local files are the user's own —
-    /// removing them isn't ours to offer.
+    /// Local files are the user's own, so only downloads can be removed.
     public var isRemovableDownload: Bool { self == .offline }
 
     public var isDownloading: Bool {
@@ -58,9 +35,7 @@ public enum TrackAvailability: Equatable, Hashable {
     }
 }
 
-/// The colour family a row badge is drawn in. Named by meaning rather than by
-/// hue so the SwiftUI and AppKit sides can each resolve it to their own colour
-/// type without inventing their own opinion about which state is which.
+/// Badge colour by meaning, so SwiftUI and AppKit each map it to their own colour type.
 public enum AvailabilityBadgeTint {
     /// Here and playable with the network off.
     case positive
@@ -70,13 +45,8 @@ public enum AvailabilityBadgeTint {
     case negative
 }
 
-/// How a track's availability draws as a row badge.
-///
-/// This lives on the state rather than in the views because there are two
-/// renderers — SwiftUI rows on both platforms and an AppKit `NSTableCellView`
-/// on the Mac — and every time a state was added they drifted: `.failed`
-/// reached one and not the other, and `.local` reached neither. Adding a case
-/// to `TrackAvailability` now breaks this switch, which is the point.
+/// Row badge for each state. Lives here so the SwiftUI rows and the Mac's `NSTableCellView` can't drift;
+/// a new case breaks this switch.
 public extension TrackAvailability {
 
     /// SF Symbol for the badge, or nil for states that show none.
@@ -86,8 +56,7 @@ public extension TrackAvailability {
         case .local:       return "checkmark.circle.fill"
         case .downloading: return "arrow.down.circle"
         case .failed:      return "exclamationmark.circle"
-        // The ordinary case for a saved Discover song. Badging it would put a
-        // marker on most of the library and say nothing by being everywhere.
+        // Most saved Discover songs; a badge on nearly every row says nothing.
         case .streamOnly:  return nil
         }
     }
@@ -108,9 +77,7 @@ public extension TrackAvailability {
     var badgeDescription: String? {
         switch self {
         case .offline:     return "Downloaded for offline listening"
-        // Deliberately distinct wording, not just a distinct glyph: this file is
-        // the user's own upload, which is why it is here and why the app will
-        // never offer to delete it.
+        // Different wording: this is the user's own file, which the app never offers to delete.
         case .local:       return "Added by you — available offline"
         case .downloading: return "Downloading"
         case .failed:      return "Download failed"
@@ -119,16 +86,11 @@ public extension TrackAvailability {
     }
 }
 
-/// Why pressing Download on a track would do nothing.
-///
-/// The old code expressed all of this as `guard … else { return }`, which is the
-/// same answer for "you already have it" and "there is no audio anywhere to
-/// fetch" — silence. Every rejection now has a reason that can be shown.
+/// Why pressing Download on a track would do nothing, so the UI can say why.
 public enum DownloadBlock: Equatable {
     /// Already in the offline store.
     case alreadyDownloaded
-    /// The user's own imported file. Downloading it would mean fetching back a
-    /// file they handed us.
+    /// The user's own imported file.
     case alreadyLocal
     /// Queued or in flight already.
     case inFlight
@@ -153,24 +115,14 @@ public enum DownloadBlock: Equatable {
     }
 }
 
-/// The download values that change many times a second.
-///
-/// Split off `DownloadManager` so a percent tick republishes only the progress
-/// bar, not every view that happens to read a download setting. Read by
-/// `DownloadStatusBar` and by nothing else that draws per frame — see the
-/// comment on `DownloadManager.progress`.
+/// The download values that change many times a second, split off `DownloadManager` so a percent tick
+/// only redraws the progress views. See `DownloadManager.progress`.
 @MainActor
 public final class DownloadProgress: ObservableObject {
     /// Per-track fraction, already coalesced to whole percent by the manager.
     @Published public internal(set) var fractions: [UUID: Double] = [:]
 
-    /// Songs finished, and songs asked for, in the run currently under way.
-    ///
-    /// "Downloading 8 of 10" is the only honest answer to "how long is this
-    /// going to take" — a percentage of a 2,000-song library is a number that
-    /// sits on 0 for several minutes and then on 1, which reads as broken. The
-    /// pair resets to zero once nothing is left in flight, so the bar tells the
-    /// truth about *this* run rather than accumulating across the session.
+    /// Songs finished and songs requested in the current run ("8 of 10"). Reset once nothing is in flight.
     @Published public internal(set) var completed = 0
     @Published public internal(set) var total = 0
 }
@@ -178,24 +130,9 @@ public final class DownloadProgress: ObservableObject {
 @MainActor
 public final class DownloadManager: ObservableObject {
 
-    /// Coalesced "something about downloads changed", for views that redraw on it.
-    ///
-    /// `objectWillChange` is a firehose. This class has two dozen `@Published`
-    /// properties, and the ones that move during a download move constantly —
-    /// so a view subscribing to it redraws tens of times a second for as long as
-    /// anything is downloading. Measured on the playlist page: 180 full body
-    /// passes in the twelve seconds around a play, each one re-walking the whole
-    /// track list to answer "is this playlist downloaded", and each one a layout
-    /// pass over a page that can hold thousands of rows. Nothing on screen said
-    /// anything new for the vast majority of them.
-    ///
-    /// A download ring cannot report anything the eye can read faster than a few
-    /// times a second, so this throttles to 4 Hz. `latest: true` is what makes it
-    /// safe rather than merely cheaper: the last event of a burst is always
-    /// delivered, so the settled state after a download finishes still arrives.
-    ///
-    /// `lazy` for a stable identity — `.onReceive` re-subscribes when the
-    /// publisher it is handed changes, so this must not be rebuilt per body pass.
+    /// Throttled "downloads changed" signal (4 Hz) for views that redraw on it; `objectWillChange` fires
+    /// dozens of times a second during a download. `latest: true` still delivers the final state.
+    /// `lazy` for a stable identity: `.onReceive` re-subscribes when handed a new publisher.
     public private(set) lazy var didChangeThrottled: AnyPublisher<Void, Never> =
         objectWillChange
             .throttle(for: .milliseconds(250), scheduler: DispatchQueue.main, latest: true)
@@ -204,26 +141,21 @@ public final class DownloadManager: ObservableObject {
     // MARK: - Published State
 
     /// In the offline store. Deliberate downloads only.
-    @Published public private(set) var offlineTrackIDs = Set<UUID>()
+    @Published public private(set) var offlineTrackIDs = Set<UUID>() {
+        didSet { downloadedTrackIDs = offlineTrackIDs.union(localTrackIDs) }
+    }
     /// Imported from disk and the file is still there.
-    @Published public private(set) var localTrackIDs = Set<UUID>()
+    @Published public private(set) var localTrackIDs = Set<UUID>() {
+        didSet { downloadedTrackIDs = offlineTrackIDs.union(localTrackIDs) }
+    }
+    /// Everything playable offline: downloads plus local imports. Stored, since rows and discs read it per item.
+    public private(set) var downloadedTrackIDs = Set<UUID>()
     /// A file copy exists in the export folder. Independent of the above.
     @Published public private(set) var exportedTrackIDs = Set<UUID>()
 
     @Published public private(set) var downloadingTrackIDs = Set<UUID>()
-    /// Per-track download fraction, and the batch counters.
-    ///
-    /// Deliberately not stored here. `ObservableObject` has one
-    /// `objectWillChange` for all of its state, so a percent tick on one song
-    /// republished this manager — and with it every view that reads
-    /// `keepOfflineIDs`, `downloadQuality`, `isConnected` or any of the other
-    /// two dozen properties on it, none of which moved. The main songs table
-    /// rehashes the whole library when that happens, and it doesn't even draw
-    /// the fraction (see `NativeTrackTable`, which collapses `.downloading` to
-    /// a constant in its row hash).
-    ///
-    /// So the high-frequency values live on their own small object, and the two
-    /// leaf views that actually draw them observe that instead.
+    /// Per-track fractions and batch counters live on their own object so a percent tick doesn't republish
+    /// the whole manager (and every view reading its settings). Only the leaf views that draw them observe it.
     public let progress = DownloadProgress()
 
     /// Write-through access, so the rest of this file reads as it always did.
@@ -231,38 +163,21 @@ public final class DownloadManager: ObservableObject {
         get { progress.fractions }
         set { progress.fractions = newValue }
     }
-    /// Tried the full retry budget and never landed. Stays set until the user
-    /// asks again, so the row can say so instead of looking untouched.
+    /// Exhausted the retry budget. Stays set until the user asks again.
     @Published public private(set) var failedTrackIDs = Set<UUID>()
-    /// Starts true: the path monitor reports within moments of launch, and a
-    /// false default read as "went offline" to everything watching for that
-    /// edge — which switched the Downloaded filter on at every launch.
+    /// Starts true: the path monitor reports within moments, and a false default read as "went offline".
     @Published public private(set) var isConnected: Bool = true
     @Published public private(set) var isWifi: Bool = false
-    /// Plugged into Ethernet. Tracked separately from Wi-Fi because the two are
-    /// different facts, and one screen still wants to say "Wi-Fi" specifically.
+    /// Ethernet, tracked apart from Wi-Fi because one screen names Wi-Fi specifically.
     @Published public private(set) var isWired: Bool = false
 
-    /// A connection nobody is being billed by the byte for.
-    ///
-    /// This is what "Wi-Fi only" has always meant — don't spend my mobile data —
-    /// and asking `isWifi` instead got it wrong on exactly one machine: a Mac on
-    /// Ethernet reports `usesInterfaceType(.wifi) == false`, so with the setting
-    /// at its default the whole queue silently refused to start and no screen
-    /// said why.
+    /// Not billed by the byte. What "Wi-Fi only" means; a Mac on Ethernet isn't Wi-Fi.
     public var isUnmetered: Bool { isWifi || isWired }
 
     /// What went wrong, per track, for the tooltip on a failed row.
     @Published public private(set) var failureReasons = [UUID: String]()
 
-    /// Songs finished, and songs asked for, in the run currently under way.
-    ///
-    /// "Downloading 8 of 10" is the only honest answer to "how long is this
-    /// going to take" — a percentage of a 2,000-song library is a number that
-    /// sits on 0 for several minutes and then on 1, which reads as broken. The
-    /// pair resets to zero once nothing is left in flight, so the bar tells the
-    /// truth about *this* run rather than accumulating across the session.
-    /// Stored on `progress` for the same reason the fractions are; see there.
+    /// See `DownloadProgress.completed`.
     public internal(set) var batchCompleted: Int {
         get { progress.completed }
         set { progress.completed = newValue }
@@ -272,32 +187,19 @@ public final class DownloadManager: ObservableObject {
         set { progress.total = newValue }
     }
 
-    /// Songs asked for but not started yet — waiting on a slot, a connection, or
-    /// a retry timer.
+    /// Requested but not started: waiting on a slot, a connection, or a retry timer.
     public var pendingDownloadCount: Int { downloadQueue.count + retryTasks.count }
 
-    /// Everything playable without a network — downloads plus local imports.
-    public var downloadedTrackIDs: Set<UUID> {
-        offlineTrackIDs.union(localTrackIDs)
-    }
-
-    /// Is every one of these songs on this device? The green disc's one
-    /// definition — four screens used to carry their own copy of this line.
-    /// An empty list is not "downloaded": a playlist with no songs has nothing
-    /// to play offline, and a disc on it reads as a promise it can't keep.
+    /// Whether every one of these songs is on this device; the green disc's one definition.
+    /// An empty list is not downloaded.
     public func isFullyDownloaded(_ ids: [UUID]) -> Bool {
         guard !ids.isEmpty else { return false }
         let have = downloadedTrackIDs
         return ids.allSatisfy { have.contains($0) }
     }
 
-    /// How far along a download of these songs is, or nil when none is running.
-    ///
-    /// Counts songs, not bytes, with the one song currently being fetched
-    /// contributing its own fraction — the same arithmetic as the status bar,
-    /// so a ring and the bar under it never disagree. Nil rather than 1.0 when
-    /// nothing is in flight: the caller draws the finished disc for that, and a
-    /// full ring that never goes away is worse than no ring.
+    /// Progress of a download of these songs, or nil when none is running. Counts songs, with the one being
+    /// fetched adding its fraction, the same as the status bar. Nil when idle: callers draw the finished disc.
     public func downloadFraction(_ ids: [UUID]) -> Double? {
         guard !ids.isEmpty else { return nil }
         let running = ids.contains { downloadingTrackIDs.contains($0) || downloadQueue.contains($0) }
@@ -344,6 +246,13 @@ public final class DownloadManager: ObservableObject {
         return "mix.downloadQuality"
     }
 
+    private var editQualityKey: String {
+        if let id = currentUserID {
+            return "mix.editQuality_\(id)"
+        }
+        return "mix.editQuality"
+    }
+
     private var autoAdjustQualityKey: String {
         if let id = currentUserID {
             return "mix.autoAdjustQuality_\(id)"
@@ -365,8 +274,7 @@ public final class DownloadManager: ObservableObject {
         return "mix.keepPlaylistsOffline"
     }
 
-    /// Songs the user downloaded one at a time, rather than by switching a
-    /// playlist on. See `manualOfflineIDs`.
+    /// Songs downloaded one at a time rather than via a playlist; see `manualOfflineIDs`.
     private var manualOfflineKey: String {
         if let id = currentUserID {
             return "mix.manualOfflineTracks_\(id)"
@@ -374,8 +282,8 @@ public final class DownloadManager: ObservableObject {
         return "mix.manualOfflineTracks"
     }
 
-    /// Marks that this account's stored set has had the old seed's system-playlist
-    /// guesses cleared out of it. See `repairSeededSystemPlaylists`.
+    /// Marks that this account's stored set had the old seed's system-playlist guesses removed.
+    /// See `repairSeededSystemPlaylists`.
     private var keepOfflineRepairKey: String {
         if let id = currentUserID {
             return "mix.keepOfflineRepaired_\(id)"
@@ -383,20 +291,9 @@ public final class DownloadManager: ObservableObject {
         return "mix.keepOfflineRepaired"
     }
 
-    /// The playlists the user has asked to keep on the device.
-    ///
-    /// Stored rather than worked out from the songs, because the two answers
-    /// differ in the case that matters: importing a playlist made of songs you
-    /// already downloaded produces a playlist every one of whose songs is on
-    /// disk, and nobody said it should stay that way. A derived answer calls
-    /// that playlist "downloaded" and then — since this set is also what makes
-    /// songs added later download themselves — starts fetching things on its
-    /// own. So the green button means "you pressed it", nothing else.
-    ///
-    /// Nothing seeds this set. It is written by `togglePlaylistOffline` and read
-    /// back per account, and that is the only way an id gets into it — see
-    /// `loadKeepOffline` for the inference that used to live there and why it
-    /// had to go.
+    /// The playlists the user asked to keep on the device. Stored, not derived from the songs: a playlist
+    /// made of already-downloaded songs isn't "kept" unless the user says so, and this set also makes songs
+    /// added later download themselves. Only `togglePlaylistOffline` writes it.
     @Published public private(set) var keepOfflineIDs: Set<UUID> = [] {
         didSet {
             guard keepOfflineIDs != oldValue else { return }
@@ -404,23 +301,11 @@ public final class DownloadManager: ObservableObject {
         }
     }
 
-    /// Track lists last seen for the kept playlists, so a change publish can
-    /// tell "a song was added" from "something else about the library moved".
+    /// Last-seen track lists for kept playlists, to tell "a song was added" apart from other changes.
     private var keptTrackIDs: [UUID: [UUID]] = [:]
 
-    /// Songs the user asked for by name — the download button on a row, the
-    /// menu item, a multi-selection — as opposed to ones that came down because
-    /// a playlist they are in is being kept.
-    ///
-    /// A separate set from `keepOfflineIDs` because the two are different kinds
-    /// of promise. A kept playlist is a standing subscription: songs added to it
-    /// later download themselves. A song downloaded on its own is a claim on
-    /// that one song and nothing else. Switching a playlist off has to honour
-    /// both, and without this set there is no record that the second one was
-    /// ever made — so a song downloaded by hand, later added to a playlist and
-    /// then removed with it, lost the copy the user had personally asked for.
-    ///
-    /// Cleared by "Remove Download", which is the user taking the claim back.
+    /// Songs the user downloaded individually (row button, menu, selection), not via a kept playlist.
+    /// Switching a playlist off keeps these. Cleared by "Remove Download".
     @Published public private(set) var manualOfflineIDs: Set<UUID> = [] {
         didSet {
             guard manualOfflineIDs != oldValue else { return }
@@ -428,15 +313,17 @@ public final class DownloadManager: ObservableObject {
         }
     }
 
-    /// How much disk each download is allowed to take.
-    ///
-    /// Normal by default. A library of a few thousand songs kept at whatever
-    /// bitrate the source happened to serve runs to tens of gigabytes, and
-    /// almost nobody wants that as the unasked-for default. `.high` is one tap
-    /// away for anyone who does.
+    /// Disk budget per download. Normal by default; a big library at source bitrate runs to tens of GB.
     @Published public var downloadQuality: DownloadQuality {
         didSet {
             UserDefaults.standard.set(downloadQuality.rawValue, forKey: downloadQualityKey)
+        }
+    }
+
+    /// What a saved song edit is rendered at. Normal by default.
+    @Published var editQuality: EditQuality {
+        didSet {
+            UserDefaults.standard.set(editQuality.rawValue, forKey: editQualityKey)
         }
     }
 
@@ -447,22 +334,14 @@ public final class DownloadManager: ObservableObject {
         }
     }
 
-    /// The quality the next download will actually use.
-    ///
-    /// Read at the moment a download starts rather than when it's queued: a
-    /// queue can outlive the connection it was built on, and the honest answer
-    /// to "what quality is this" is the one true when the bytes arrive.
+    /// The quality a download starting now will use, read when the bytes arrive, not when queued.
     public var effectiveDownloadQuality: DownloadQuality {
         guard autoAdjustQuality, isConnected, !isUnmetered else { return downloadQuality }
         return downloadQuality.loweredForCellular
     }
 
-    /// When ON, every download also drops a file copy in the export folder.
-    ///
-    /// OFF by default: a download is for listening, and most people don't want
-    /// a second, much larger copy of their library appearing in Music. This
-    /// setting is scoped to the download action only — adding a song to the
-    /// library never writes a file on its own.
+    /// When on, every download also writes a file copy to the export folder. Off by default; only
+    /// applies to downloads, never to adding a song to the library.
     @Published public var keepFileCopyOnDownload: Bool {
         didSet {
             UserDefaults.standard.set(keepFileCopyOnDownload, forKey: keepFileCopyKey)
@@ -482,19 +361,9 @@ public final class DownloadManager: ObservableObject {
         }
     }
 
-    /// When ON, a playlist that arrives from outside is kept on the device the
-    /// moment it lands — a Spotify import, a saved mix, someone else's playlist.
-    ///
-    /// OFF by default, and it has to stay that way. This app used to do exactly
-    /// this by inference and it went badly: see `loadKeepOffline`, where a seed
-    /// that switched playlists on by itself turned every later import into a
-    /// silent download with no green button anywhere to explain it. The
-    /// difference now is that this is a switch the user threw, it names what it
-    /// does, and every playlist it opts in shows its own button switched on —
-    /// so the state is visible in the place you'd go to undo it.
-    ///
-    /// Only playlists that came from somewhere else. A playlist the user makes
-    /// here is made from songs they already have.
+    /// When on, a playlist from elsewhere (Spotify import, saved mix, someone else's playlist) is kept on
+    /// the device as it lands. Off by default; each playlist it opts in shows its own button switched on.
+    /// Playlists made here aren't included.
     @Published public var autoDownloadImportedPlaylists: Bool {
         didSet {
             UserDefaults.standard.set(autoDownloadImportedPlaylists, forKey: autoDownloadImportedKey)
@@ -505,14 +374,14 @@ public final class DownloadManager: ObservableObject {
 
     private let fileStorage:    SupabaseFileStorageService
     private let libraryService: LibraryService
-    /// Held for the queue-observation hook; nothing downloads off playback any
-    /// more (see the note on `setupQueueObservation`).
+    /// Only for queue observation; nothing downloads off playback (see `setupQueueObservation`).
     private let queueService:   QueueService
     private let trackResolver:  any TrackResolver
-    /// Where "Wrong version" keeps its picks and refusals. A download searches
-    /// the same way playback does, so without these it fetched the very upload
-    /// the user had just rejected. Set by AppDependencies; weak, it's created after.
+    /// "Wrong version" picks and refusals, so a download skips the upload the user rejected.
+    /// Set by AppDependencies; weak because it's created after.
     weak var onlineCoordinator: OnlinePlaybackCoordinator?
+    /// Renders an edit this device has no file for, from its original. Set by AppDependencies.
+    var editRebuilder: ((Track) async throws -> URL)?
 
     // MARK: - Private State
 
@@ -524,40 +393,28 @@ public final class DownloadManager: ObservableObject {
 
     /// How many times each track has been tried this session.
     private var attempts: [UUID: Int] = [:]
-    /// The download currently running for each track.
-    ///
-    /// These used to be fire-and-forget `Task {}`s that nothing held a handle
-    /// to, which made an in-flight download impossible to stop: clearing
-    /// `activeDownloads` only made the UI look calm while the task carried on,
-    /// finished, and wrote the file into the offline store afterwards. Switching
-    /// a 2,000-song playlist back off therefore deleted what had landed while
-    /// the rest kept arriving, with no button anywhere reflecting it.
+    /// The running download task per track, so a download can be cancelled rather than finishing and
+    /// writing into the offline store after the user switched it off.
     private var downloadTasks: [UUID: Task<Void, Never>] = [:]
 
-    /// Sleeping retries, so they can be cancelled when the user changes their
-    /// mind (or signs out) rather than firing into a different library.
+    /// Sleeping retries, cancellable when the user changes their mind or signs out.
     private var retryTasks: [UUID: Task<Void, Never>] = [:]
-    /// Tracks being fetched again to land at a new quality. They're already in
-    /// the offline store, so they skip the "already downloaded" check and their
-    /// existing copy is ignored when choosing a source.
+    /// Already-offline tracks being refetched at a new quality: skip the "already downloaded" check and
+    /// ignore the existing copy as a source.
     private var requalifying: Set<UUID> = []
 
-    /// The queue is only safe to drain once the library has actually loaded —
-    /// before that every restored id looks like a track that no longer exists.
+    /// Don't drain the queue until the library loads, or every restored id looks deleted.
     private var hasSeenLibrary = false
 
     private static let maxAttempts = 3
 
-    /// How many downloads run at once. The resolver decides, because it is the
-    /// thing doing the work — the Mac's own yt-dlp scales with the machine,
-    /// the hosted resolver does not (see `suggestedDownloadConcurrency`).
+    /// Concurrent downloads, chosen by the resolver: the Mac's yt-dlp scales, the hosted one doesn't.
+    /// See `suggestedDownloadConcurrency`.
     private var maxConcurrentDownloads: Int {
         max(1, trackResolver.suggestedDownloadConcurrency)
     }
 
-    /// 4s, then 16s. Long enough for a flaky resolver or a moment of no
-    /// connectivity to pass, short enough that a Download All finishes while the
-    /// user is still in the room.
+    /// 4s, then 16s.
     private static func retryDelay(afterAttempt attempt: Int) -> Duration {
         .seconds(min(60, 1 << (2 * attempt)))
     }
@@ -584,15 +441,16 @@ public final class DownloadManager: ObservableObject {
         self.syncMetadataToDisk     = UserDefaults.standard.object(forKey: "mix.syncMetadataToDisk") as? Bool ?? true
         self.keepFileCopyOnDownload = UserDefaults.standard.object(forKey: "mix.keepFileCopyOnDownload") as? Bool ?? false
         self.downloadQuality        = DownloadQuality(rawValue: UserDefaults.standard.string(forKey: "mix.downloadQuality") ?? "") ?? .normal
+        self.editQuality            = EditQuality(rawValue: UserDefaults.standard.string(forKey: "mix.editQuality") ?? "") ?? .normal
         self.autoAdjustQuality      = UserDefaults.standard.object(forKey: "mix.autoAdjustQuality") as? Bool ?? true
         self.autoDownloadImportedPlaylists =
             UserDefaults.standard.object(forKey: "mix.autoDownloadImportedPlaylists") as? Bool ?? false
 
         self.offlineTrackIDs = OfflineStore.shared.trackIDs
+        self.downloadedTrackIDs = offlineTrackIDs
         self.downloadQueue   = Self.restoreQueue(key: "mix.downloadQueue")
 
-        // Signed-out defaults; `loadSettings` re-reads both under the account's
-        // own keys the moment one is known.
+        // Signed-out defaults; `loadSettings` re-reads them per account.
         loadKeepOffline()
 
         setupNetworkMonitoring()
@@ -626,10 +484,7 @@ public final class DownloadManager: ObservableObject {
                 self.isConnected = connected
                 self.isWifi      = wifi
                 self.isWired     = wired
-                // Coming back online is the moment the songs that gave up
-                // deserve another go: the overwhelmingly common cause of a
-                // batch losing songs is a connection that wasn't there, and
-                // without this they stay failed until the app is relaunched.
+                // Coming back online, retry the songs that failed; lost connectivity is the usual cause.
                 if !couldDownload, self.isConnectedForDownload {
                     self.retryFailedDownloads()
                 }
@@ -665,21 +520,12 @@ public final class DownloadManager: ObservableObject {
                 guard let self else { return }
                 let trackID = progress.entityID
                 if progress.fraction < 1.0 {
-                    // Coalesced to whole percent. This publisher fires per
-                    // received chunk — dozens of times a second per download —
-                    // and `downloadProgress` is `@Published`, so every one of
-                    // those republished this manager, then `AppDependencies`
-                    // (which forwards it), then every view holding either. The
-                    // songs table rehashes the whole library when that happens.
-                    // A progress ring can't show more than whole percent
-                    // anyway, so the rest of those publishes bought nothing.
+                    // Coalesced to whole percent: this fires per chunk, and a ring can't show finer anyway.
                     let last = self.downloadProgress[trackID] ?? 0
                     guard progress.fraction - last >= 0.01 else { return }
                     self.downloadProgress[trackID] = progress.fraction
                 } else {
-                    // The file has landed, but it isn't a download until it's in
-                    // the offline store — the worker below does that and clears
-                    // the in-flight state itself.
+                    // Not a download until it's in the offline store; the worker below does that and clears the state.
                     self.downloadProgress.removeValue(forKey: trackID)
                 }
             }
@@ -694,8 +540,7 @@ public final class DownloadManager: ObservableObject {
         }
         if offlineTrackIDs.contains(trackID) { return .offline }
         if localTrackIDs.contains(trackID)   { return .local }
-        // Checked after the two "it's here" sets: a track that failed once and
-        // arrived some other way isn't failed any more.
+        // After the "it's here" checks: a failed track that arrived another way isn't failed.
         if failedTrackIDs.contains(trackID)  { return .failed }
         return .streamOnly
     }
@@ -709,9 +554,7 @@ public final class DownloadManager: ObservableObject {
         status(for: track.id)
     }
 
-    /// Whether a file copy of this track exists in the export folder. Separate
-    /// from availability: a song can be downloaded without a file copy, exported
-    /// without being downloaded, or both.
+    /// Whether a file copy exists in the export folder. Independent of availability.
     public func isExported(_ trackID: UUID) -> Bool {
         exportedTrackIDs.contains(trackID)
     }
@@ -719,22 +562,15 @@ public final class DownloadManager: ObservableObject {
     /// Why the download control is inert for this track, or nil if it's live.
     public func downloadUnavailableReason(for track: Track) -> String? {
         guard let block = blockReason(for: track) else { return nil }
-        // Being downloaded, or already downloaded, isn't a reason the *control*
-        // is inert — the menu shows Remove Download or a progress item instead.
+        // Downloading or downloaded doesn't make the control inert; the menu shows Remove Download or progress.
         switch block {
         case .alreadyDownloaded, .inFlight: return nil
         case .alreadyLocal, .unavailable:   return block.message(for: track.title)
         }
     }
 
-    /// Why this track can't be downloaded right now, or nil if it can.
-    ///
-    /// Decided from the filesystem via `AudioLocator` rather than from the
-    /// published sets, because the sets are a cache of that answer and the
-    /// action should be taken against what's actually on disk.
-    ///
-    /// Note what is deliberately *not* a block: having no connection. That's a
-    /// reason to wait in the queue, not a reason to refuse.
+    /// Why this track can't be downloaded right now, or nil. Checked against the disk via `AudioLocator`,
+    /// not the published sets. No connection isn't a block: the song waits in the queue.
     public func blockReason(for track: Track) -> DownloadBlock? {
         if downloadingTrackIDs.contains(track.id) || downloadQueue.contains(track.id) {
             return .inFlight
@@ -743,31 +579,22 @@ public final class DownloadManager: ObservableObject {
         switch AudioLocator.locate(track) {
         case .ready(_, .offlineDownload):
             return .alreadyDownloaded
-        // A watched-folder file is already on this device, in a folder the user
-        // chose. Copying it into the offline store would only waste the space.
+        // A watched-folder file is already here, in a folder the user chose.
         case .ready(_, .importedFile), .ready(_, .watchedFolder):
             return .alreadyLocal
-        // A cached copy or an exported file copy is a source, not a download.
-        // Both used to fail the old `hasRemoteKey || isOnline` guard and drop
-        // out of the queue without a word.
+        // A cached copy or exported file copy is a source, not a download.
         case .ready(_, .cached), .ready(_, .exportedCopy):
             return nil
         case .remote, .resolvable:
             return nil
         case .unavailable(let reason):
-            // Not a block when the resolver would have a go anyway. Playback
-            // already does exactly this (PlaybackEngine.needsOnlineResolution),
-            // so refusing here meant Download said a song had no audio while
-            // the play button fetched it seconds later.
+            // Not a block when the resolver would try anyway, same as `PlaybackEngine.needsOnlineResolution`.
             return Self.resolverMightFind(reason) ? nil : .unavailable(reason)
         }
     }
 
-    /// The reasons worth handing to the resolver rather than failing on.
-    /// Deliberately the same set playback uses: a row stranded by a device that
-    /// never uploaded, or one whose file went missing, can still be found by
-    /// searching. A row shared out of someone else's library genuinely has no
-    /// source to look for.
+    /// Reasons worth handing to the resolver, the same set playback uses. A row from someone else's
+    /// shared library has nothing to search for.
     static func resolverMightFind(_ reason: UnavailableReason) -> Bool {
         reason == .notUploadedYet || reason == .fileMissing
     }
@@ -786,17 +613,13 @@ public final class DownloadManager: ObservableObject {
 
     public var offlineCount: Int { offlineTrackIDs.count }
 
-    /// Download a single track for offline playback. Returns why it didn't
-    /// start, or nil when it's queued.
+    /// Downloads a single track. Returns why it didn't start, or nil when queued.
     @discardableResult
     public func download(_ track: Track) -> DownloadBlock? {
         let block = enqueueTrackDownload(track)
-        // Pressing Download on one song is a claim on that song, remembered so
-        // that switching some playlist off later can't quietly take it away.
-        // Recorded even when the enqueue is refused because the copy is already
-        // here or already on its way: the ask is the same either way. Not
-        // recorded when there is nothing to claim — an imported file this app
-        // never fetched, or a song with no audio anywhere.
+        // A single-song download is remembered so switching a playlist off later can't remove it. Recorded
+        // even if the copy is already here or on its way; not when there's nothing to claim (an imported
+        // file, or no audio anywhere).
         switch block {
         case .some(.alreadyLocal), .some(.unavailable):
             break
@@ -806,24 +629,13 @@ public final class DownloadManager: ObservableObject {
         return block
     }
 
-    /// Writes a copy of `track` into the user's export folder, at the current
-    /// download quality.
-    ///
-    /// This is "Save a File Copy", and it goes through the same source
-    /// resolution as a download for one reason: it used to have its own, which
-    /// went straight to `fileStorage` and therefore only ever worked for songs
-    /// with a `remoteKey`. A Discover song has none — so the one menu item
-    /// whose entire job is "put this song in my Music folder" failed on exactly
-    /// the songs people wanted it for, with "Track file not downloaded locally
-    /// yet." Resolving an online row is now part of the job, not a precondition.
+    /// "Save a File Copy": writes `track` to the export folder at the current download quality.
+    /// Uses the same source resolution as a download, so Discover songs (no `remoteKey`) work too.
     public func saveFileCopy(of track: Track) async throws {
         var staged: URL?
         defer { if let staged { try? FileManager.default.removeItem(at: staged) } }
 
-        // An existing offline copy is the ideal source — same audio, already
-        // local — but it was written at this very quality setting, so encoding
-        // it again would be a second lossy pass that changes nothing about the
-        // bitrate. Copy those bytes straight through instead.
+        // An offline copy is already at this quality, so copy its bytes rather than encode a second lossy pass.
         let fromOfflineStore: Bool
         if case .ready(_, .offlineDownload) = AudioLocator.locate(track) {
             fromOfflineStore = true
@@ -842,9 +654,14 @@ public final class DownloadManager: ObservableObject {
         exportedTrackIDs.insert(track.id)
     }
 
-    /// True when at least one of these songs is queued, downloading, or sleeping
-    /// between retries — i.e. the ring on a playlist button is describing work
-    /// that is actually going to happen.
+    /// A local file of `track`'s audio for the song editor, fetched like a download when there isn't one.
+    /// `scratch` is a temporary copy the caller deletes when done.
+    public func localAudio(for track: Track) async throws -> (url: URL, scratch: URL?) {
+        let source = try await fetchAudio(for: track, ignoringOfflineCopy: false)
+        return (source.url, source.isTemporary ? (source.container ?? source.url) : nil)
+    }
+
+    /// Whether any of these songs is queued, downloading, or waiting to retry.
     public func hasWorkInFlight(tracks: [Track]) -> Bool {
         tracks.contains { track in
             downloadingTrackIDs.contains(track.id)
@@ -858,15 +675,9 @@ public final class DownloadManager: ObservableObject {
         tracks.reduce(0) { $0 + (failedTrackIDs.contains($1.id) ? 1 : 0) }
     }
 
-    /// Queues everything in this list that isn't on the device yet, from a clean
-    /// attempt count — the "try again" behind a stalled playlist button.
-    ///
-    /// Kept separate from `retryFailedDownloads` because the two populations
-    /// differ in the case this exists for: a song can be missing from a kept
-    /// playlist without ever having been marked failed — the queue was dropped
-    /// when the app quit, or the track arrived while the network was down and
-    /// the retry chain has since been cancelled. Only asking `failedTrackIDs`
-    /// would leave those sitting there forever.
+    /// Queues everything in this list not on the device yet, with a fresh attempt count (the "try again"
+    /// on a stalled playlist). Separate from `retryFailedDownloads`: a song can be missing without ever
+    /// being marked failed, e.g. a queue dropped on quit or a cancelled retry.
     public func resumeDownloads(tracks: [Track]) {
         for track in tracks where track.canResolveAudio {
             let state = status(for: track.id)
@@ -885,37 +696,22 @@ public final class DownloadManager: ObservableObject {
         }
     }
 
-    /// Fetches everything in the offline store again so it lands at the current
-    /// quality.
-    ///
-    /// Changing the quality setting can't reach songs that are already on disk —
-    /// those files are written, and their bitrate is a fact about the bytes, not
-    /// a setting to re-read. Without this the picker would appear to do nothing
-    /// for anyone whose library was already downloaded, which is most people who
-    /// go looking for it.
-    ///
-    /// Imported files are untouched: they're the user's own, this app didn't
-    /// fetch them, and re-encoding someone's own audio because they changed a
-    /// download setting isn't ours to do.
-    /// The existing file is left in place until its replacement has landed. The
-    /// old version deleted first and re-fetched second, which turned "I changed
-    /// my mind about bitrate" into "my downloads are gone" for every song whose
-    /// fetch then failed — on a plane, exactly when it mattered.
+    /// Refetches everything in the offline store at the current quality, since changing the setting can't
+    /// touch files already written. Imported files are left alone. Each old file stays until its
+    /// replacement lands, so a failed fetch doesn't lose the download.
     public func redownloadAllAtCurrentQuality() {
         for trackID in offlineTrackIDs {
             guard let track = libraryService.track(id: trackID) else { continue }
             requalifying.insert(trackID)
-            // Refused (already queued, or nothing to fetch from): don't leave it
-            // flagged, or a later ordinary download would ignore the very copy
-            // it should be reusing.
+            // Refused (already queued or no source): clear the flag, or a later download would ignore this copy.
             if enqueueTrackDownload(track, force: true) != nil {
                 requalifying.remove(trackID)
             }
         }
     }
 
-    /// Drop the downloaded file but not the wish to have it — "Wrong version" on
-    /// a downloaded song. Returns whether there was one; `refetch` brings it back.
+    /// Drops the downloaded file but keeps the wish for it ("Wrong version" on a downloaded song).
+    /// Returns whether there was one; `refetch` brings it back.
     public func discardOfflineCopy(of track: Track) -> Bool {
         guard offlineTrackIDs.contains(track.id) else { return false }
         OfflineStore.shared.remove(track.id)
@@ -923,47 +719,23 @@ public final class DownloadManager: ObservableObject {
         return true
     }
 
-    /// Download a song again after `discardOfflineCopy`, without adding a claim
-    /// of its own: it was kept by whatever kept it before.
+    /// Downloads a song again after `discardOfflineCopy`, without a claim of its own.
     public func refetch(_ track: Track) {
         enqueueTrackDownload(track, force: true)
     }
 
     // MARK: - Playlist Offline State Management
 
-    /// True when every song in the playlist plays with the network off — whether
-    /// it got there by being downloaded or by having been imported from disk.
-    /// Whether the user has asked for this playlist to be kept on the device.
-    ///
-    /// Not "is every song here on disk" — see `keepOfflineIDs` for why those
-    /// came apart.
+    /// Whether the user asked for this playlist to be kept on the device; not whether its songs are on disk.
+    /// See `keepOfflineIDs`.
     public func isPlaylistOffline(_ playlistID: UUID) -> Bool {
         keepOfflineIDs.contains(playlistID)
     }
 
-    /// Whether anything still wants this song on the device.
-    ///
-    /// The question switching a playlist off has to ask before it deletes
-    /// anything. A song can be in five playlists; the one being switched off is
-    /// not the only voice, and the old code behaved as though it were — turning
-    /// a playlist off took the copy away from every other playlist that had
-    /// asked for the same song, and from the user who had downloaded it by hand.
-    ///
-    /// Two kinds of claim count, and both have to:
-    ///
-    /// - any *other* playlist the user is keeping. System playlists included:
-    ///   All Songs and Favourites are never kept by default — see
-    ///   `repairSeededSystemPlaylists` — so if one of them is in the set the
-    ///   user pressed the button on it, and that is exactly as real an ask as
-    ///   any other playlist's.
-    /// - `manualOfflineIDs`, the songs downloaded one at a time.
-    ///
-    /// Call it *after* removing the playlist being switched off from
-    /// `keepOfflineIDs`, or it answers "yes" for every song in it.
-    ///
-    /// Built once per toggle rather than asked per song: the membership test is
-    /// a scan of every kept playlist's track list, and a 2,000-song playlist
-    /// switching off would run it 2,000 times.
+    /// Songs something still wants on the device: other kept playlists (system ones included; they're
+    /// only in the set if the user pressed the button) and `manualOfflineIDs`.
+    /// Call after removing the playlist being switched off from `keepOfflineIDs`. Built once per toggle,
+    /// not per song.
     private func claimedOfflineTrackIDs() -> Set<UUID> {
         var claimed = manualOfflineIDs
         for playlist in libraryService.playlists
@@ -973,36 +745,21 @@ public final class DownloadManager: ObservableObject {
         return claimed
     }
 
-    /// The same question for a list of songs that isn't a stored playlist.
-    ///
-    /// Only songs this device could ever hold count. A track ID left behind by
-    /// a song that has since left the library, or a collaborator's placeholder
-    /// with no audio to fetch, can never be downloaded — and counting it meant
-    /// a playlist whose every real song was on disk still reported "not
-    /// downloaded", permanently, with no way for the user to fix it.
+    /// The same question for a list of songs that isn't a stored playlist. Only songs this device could
+    /// ever hold count; a stale id or an unfetchable placeholder would keep it "not downloaded" forever.
     public func isOffline(trackIDs: [UUID]) -> Bool {
         isOffline(tracks: resolve(trackIDs))
     }
 
-    /// The same answer for songs already in hand.
-    ///
-    /// `libraryService.track(id:)` is a scan of the whole library, so the id
-    /// version costs one of those per song — which a view redrawing on every
-    /// progress tick, over an All Songs of a few thousand, feels. Every caller
-    /// that is already holding the rows should hand them over.
+    /// The same for songs already in hand; `libraryService.track(id:)` scans the library per id.
     public func isOffline(tracks: [Track]) -> Bool {
         let downloadable = tracks.filter(\.canResolveAudio)
         guard !downloadable.isEmpty else { return false }
         return downloadable.allSatisfy { status(for: $0.id).isAvailableOffline }
     }
 
-    /// True when there is nothing here this device could ever fetch.
-    ///
-    /// The empty playlist and the playlist of nothing but unresolvable shares
-    /// are the same case: no work exists, so "not finished yet" is the wrong
-    /// reading of them. `isOffline` deliberately answers `false` for both —
-    /// an empty All Songs must not claim to be fully downloaded — so callers
-    /// that also know the playlist is *kept* ask this alongside it.
+    /// True when there's nothing here this device could ever fetch (empty, or only unresolvable shares).
+    /// `isOffline` answers false for these, so callers that know the playlist is kept ask this too.
     public func nothingToDownload(tracks: [Track]) -> Bool {
         tracks.allSatisfy { !$0.canResolveAudio }
     }
@@ -1011,16 +768,8 @@ public final class DownloadManager: ObservableObject {
         nothingToDownload(tracks: resolve(trackIDs))
     }
 
-    /// How much of a list of songs is on the device, from 0 to 1.
-    ///
-    /// The same population `isOffline` asks about, so the two can never
-    /// disagree: a fraction of 1 and "it's all here" mean the same thing, and
-    /// songs this device could never hold are outside both.
-    ///
-    /// A song being fetched right now counts for the part of it that has
-    /// arrived. Without that the ring on a playlist of six long songs would sit
-    /// still for a minute at a time and then jump a sixth, which reads as
-    /// stalled rather than as working.
+    /// How much of a list is on the device, 0 to 1, over the same songs as `isOffline`. A song being
+    /// fetched counts for the part that has arrived, so the ring moves smoothly.
     public func offlineFraction(trackIDs: [UUID]) -> Double {
         offlineFraction(tracks: resolve(trackIDs))
     }
@@ -1039,12 +788,7 @@ public final class DownloadManager: ObservableObject {
         return min(done / Double(downloadable.count), 1)
     }
 
-    /// Songs fully on the device, and songs that could be — for "18 of 240".
-    ///
-    /// Deliberately not `offlineFraction` rounded: a song half-downloaded is
-    /// nought songs you can play on a plane, and the ring is already the place
-    /// where partial progress shows. Counting only what's finished is what makes
-    /// this number safe to put in a sentence about what you'd lose.
+    /// Songs fully on the device and songs that could be, for "18 of 240". Partial downloads don't count.
     public func offlineCounts(tracks: [Track]) -> (done: Int, total: Int) {
         let downloadable = tracks.filter(\.canResolveAudio)
         let done = downloadable.filter {
@@ -1056,36 +800,24 @@ public final class DownloadManager: ObservableObject {
         return (done, downloadable.count)
     }
 
-    /// Everything a download button needs to know about a list, in one pass.
-    ///
-    /// The playlist header used to ask five separate questions — is it offline,
-    /// is there nothing to download, is any work in flight, what fraction is
-    /// here, is there anything removable — and each one walked the whole track
-    /// list calling `status(for:)` per song. On an All Songs of a few thousand
-    /// that is five walks per body pass, and the page redraws whenever anything
-    /// about downloads moves. Asking once and reading five answers off the
-    /// result costs a fifth of that and cannot produce a self-contradicting
-    /// button, since every answer is measured against the same instant.
+    /// Everything a download button needs about a list, from one pass over the tracks. The header used to
+    /// ask five separate questions, each a full walk, on every redraw.
     public struct ListDownloadSummary {
-        /// Songs this device could ever fetch. Everything else — a placeholder
-        /// with no resolvable audio — is outside every count here.
+        /// Songs this device could ever fetch; unresolvable placeholders are outside every count.
         public let downloadableCount: Int
-        /// Of those, the ones fully on disk. Partial downloads are not counted:
-        /// see `offlineCounts`.
+        /// Of those, the ones fully on disk.
         public let offlineCount: Int
-        /// 0…1, counting a song being fetched for the part that has arrived.
+        /// 0...1, counting a song being fetched for the part that has arrived.
         public let fraction: Double
         /// Anything downloading, queued, or waiting to retry.
         public let hasWorkInFlight: Bool
         /// Anything whose audio a "remove downloads" press would delete.
         public let hasRemovableDownloads: Bool
 
-        /// Nothing here this device could ever fetch — empty, or nothing but
-        /// unresolvable shares. Distinct from "finished".
+        /// Nothing fetchable here: empty or only unresolvable shares. Not the same as finished.
         public var nothingToDownload: Bool { downloadableCount == 0 }
 
-        /// Every fetchable song is on the device. False for an empty list, so
-        /// an empty All Songs never claims to be fully downloaded.
+        /// Every fetchable song is here. False for an empty list.
         public var isOffline: Bool {
             downloadableCount > 0 && offlineCount == downloadableCount
         }
@@ -1138,23 +870,17 @@ public final class DownloadManager: ObservableObject {
         guard let playlist = libraryService.playlists.first(where: { $0.id == playlistID }) else { return }
 
         if isPlaylistOffline(playlistID) {
-            // Removed from the kept set *before* the claim check below, so this
-            // playlist can't count as a reason to keep its own songs.
+            // Removed before the claim check so this playlist doesn't count as a reason to keep its own songs.
             keepOfflineIDs.remove(playlistID)
             keptTrackIDs.removeValue(forKey: playlistID)
 
             let claimed = claimedOfflineTrackIDs()
             let doomed = playlist.trackIDs.filter { !claimed.contains($0) }
 
-            // Stop the backlog *first*. Deleting the finished copies while two
-            // thousand more were still queued behind them is how switching this
-            // off used to leave the folder growing. Only the unclaimed ones: a
-            // song still on its way down for another kept playlist is work that
-            // is still wanted, and cancelling it here left that playlist
-            // permanently short of a song with nothing to say so.
+            // Stop the backlog first, but only unclaimed songs: one still coming down for another kept playlist
+            // is still wanted.
             stopDownloads(for: doomed)
-            // Only the copies this app made. Imported files stay exactly where
-            // the user put them.
+            // Only copies this app made; imported files stay put.
             for trackID in doomed where status(for: trackID).isRemovableDownload {
                 removeDownload(for: trackID)
             }
@@ -1163,18 +889,9 @@ public final class DownloadManager: ObservableObject {
         }
     }
 
-    /// Switch a playlist on, without the "off" half.
-    ///
-    /// Idempotent, and separate from `togglePlaylistOffline` for a reason worth
-    /// spelling out: toggling something already on switches it *off*, and the
-    /// off branch deletes the downloads. Anything that means "make sure this is
-    /// kept" — the auto-download hook below, or any future caller — has to come
-    /// through here, or it will eventually run twice and wipe a playlist the
-    /// user asked to keep.
-    ///
-    /// Safe to call before the songs land: `syncKeptPlaylists` downloads what
-    /// arrives afterwards, and `keptTrackIDs` starts as whatever is here now, so
-    /// nothing is counted as already-seen that hasn't been.
+    /// Switches a playlist on, idempotently. Anything meaning "make sure this is kept" must come through
+    /// here: toggling an already-kept playlist switches it off and deletes its downloads. Safe to call
+    /// before the songs land; `syncKeptPlaylists` picks up later arrivals.
     public func keepPlaylistOffline(_ playlistID: UUID) {
         guard !keepOfflineIDs.contains(playlistID) else { return }
         guard let playlist = libraryService.playlists.first(where: { $0.id == playlistID }),
@@ -1186,38 +903,18 @@ public final class DownloadManager: ObservableObject {
         enqueuePlaylistTracks(playlist)
     }
 
-    /// Called when a playlist arrives from outside — see
-    /// `LibraryService.onPlaylistImported`, which `AppDependencies` wires to
-    /// this. Does nothing unless the user asked for it.
-    ///
-    /// All Songs and Favourites are excluded even though nothing imports into
-    /// them by creating them: this is the one caller that hands out a standing
-    /// subscription without anyone pressing a button, and `syncKeptPlaylists`
-    /// explains at length why those two must never carry one. Pressing the
-    /// button on them by hand still works, and still means only "what's in
-    /// there now".
+    /// Called when a playlist arrives from outside (`LibraryService.onPlaylistImported`, wired by
+    /// `AppDependencies`). No-op unless the setting is on. All Songs and Favourites are excluded; see
+    /// `syncKeptPlaylists`.
     public func autoKeepImportedPlaylist(_ playlistID: UUID) {
         guard autoDownloadImportedPlaylists else { return }
         guard libraryService.playlist(id: playlistID)?.isSystem == false else { return }
         keepPlaylistOffline(playlistID)
     }
 
-    /// Loads the kept-offline set for whichever account is signed in.
-    ///
-    /// Nothing is inferred. This used to seed itself, when nothing was stored,
-    /// from every playlist that happened to be fully on disk — so that updating
-    /// wouldn't show a shelf of downloaded playlists all switched off. That seed
-    /// was the one thing in the app that could switch the button on without
-    /// anyone pressing it, which is precisely what the doc comment on
-    /// `keepOfflineIDs` says must never happen, and it did the most damage where
-    /// it was least visible: `All Songs` and `Favourites` are playlists like any
-    /// other to this scan, and every import ends by adding its songs to
-    /// `All Songs`. Getting caught by the seed once therefore meant every
-    /// playlist imported afterwards quietly downloaded itself, with no green
-    /// button anywhere to explain why and no way to call it off.
-    ///
-    /// It also ran per account rather than once, so a second account signing in
-    /// on the same device inherited opt-ins derived from the first one's files.
+    /// Loads the kept-offline set for the signed-in account. Nothing is inferred: the old seed from
+    /// fully-downloaded playlists switched buttons on by itself, and via All Songs made every later
+    /// import download silently.
     private func loadKeepOffline() {
         let defaults = UserDefaults.standard
         keepOfflineIDs = Set((defaults.stringArray(forKey: keepOfflineKey) ?? [])
@@ -1230,25 +927,9 @@ public final class DownloadManager: ObservableObject {
             .map { ($0.id, $0.trackIDs) })
     }
 
-    /// Undoes the old seed where it can be identified with certainty.
-    ///
-    /// `All Songs` and `Favourites` are the two entries nobody navigates to in
-    /// order to press this button, and the two whose presence turns every future
-    /// import into a download — so an account carrying them is almost certainly
-    /// carrying the seed's guess rather than a decision. Ordinary playlists are
-    /// left exactly as they are: the seed may have chosen those too, but their
-    /// button is visible and green, which makes it something the user can see
-    /// and undo.
-    ///
-    /// The backlog the seed already built is dropped along with it. The queue
-    /// outlives the launch that made it, so an account caught by this is
-    /// carrying hundreds of songs it never asked for, and leaving them in would
-    /// mean the fix landing and the downloads continuing anyway. Only songs that
-    /// belong to a playlist the user really did switch on survive the cut —
-    /// nothing on disk is touched, and anything dropped in error comes back by
-    /// pressing the button again.
-    ///
-    /// Runs once per account. Turning the button back on afterwards sticks.
+    /// Removes All Songs and Favourites left by the old seed (nobody presses the button there) and drops
+    /// the backlog it queued, keeping songs from playlists the user did switch on. Nothing on disk is
+    /// touched. Runs once per account.
     private func repairSeededSystemPlaylists() {
         let defaults = UserDefaults.standard
         guard !defaults.bool(forKey: keepOfflineRepairKey) else { return }
@@ -1266,24 +947,9 @@ public final class DownloadManager: ObservableObject {
         if downloadQueue.count != before { persistQueue() }
     }
 
-    /// Downloads whatever has appeared in a kept playlist since it was last
-    /// seen, and forgets playlists that have left the library.
-    ///
-    /// This is the whole point of the button being a stored choice: "keep this
-    /// playlist on my device" has to include the songs added to it tomorrow,
-    /// and that is a promise only the playlists the user actually opted in to
-    /// are allowed to make.
-    ///
-    /// All Songs and Favourites are deliberately not among them. They are the
-    /// two playlists nobody curates — every import, every saved mix, every song
-    /// added from Discover lands in All Songs by definition — so a standing
-    /// subscription to one of those isn't "keep this list offline", it is "from
-    /// now on, download everything I ever add", which is not what pressing a
-    /// button on one page can reasonably be taken to mean. It is also invisible
-    /// afterwards: the songs arrive on disk with no green button anywhere near
-    /// them to explain why, which is exactly the report this rule comes from.
-    /// Pressing the button on those two still downloads what they hold right
-    /// now, which is the whole of what it looked like it was offering.
+    /// Downloads songs that appeared in a kept playlist since last seen, and forgets playlists that left
+    /// the library. All Songs and Favourites are skipped: a subscription to either would mean "download
+    /// everything I ever add". Pressing the button on them still downloads what they hold now.
     private func syncKeptPlaylists(_ playlists: [Playlist]) {
         let live = Set(playlists.filter { !$0.isDeleted }.map(\.id))
         let gone = keepOfflineIDs.subtracting(live)
@@ -1300,9 +966,7 @@ public final class DownloadManager: ObservableObject {
 
             let added = Set(playlist.trackIDs).subtracting(seen)
             guard !added.isEmpty else { continue }
-            // `enqueueBatch` applies the already-on-disk and already-queued
-            // rules itself, so this only has to drop the rows that can never
-            // be fetched at all.
+            // `enqueueBatch` skips songs already on disk or queued; only drop the unfetchable ones here.
             enqueueBatch(playlist.trackIDs
                 .filter { added.contains($0) }
                 .compactMap { libraryService.track(id: $0) }
@@ -1316,12 +980,12 @@ public final class DownloadManager: ObservableObject {
             self.syncMetadataToDisk     = UserDefaults.standard.object(forKey: syncMetadataToDiskKey) as? Bool ?? true
             self.keepFileCopyOnDownload = UserDefaults.standard.object(forKey: keepFileCopyKey) as? Bool ?? false
             self.downloadQuality        = DownloadQuality(rawValue: UserDefaults.standard.string(forKey: downloadQualityKey) ?? "") ?? .normal
+            self.editQuality            = EditQuality(rawValue: UserDefaults.standard.string(forKey: editQualityKey) ?? "") ?? .normal
             self.autoAdjustQuality      = UserDefaults.standard.object(forKey: autoAdjustQualityKey) as? Bool ?? true
             self.autoDownloadImportedPlaylists =
                 UserDefaults.standard.object(forKey: autoDownloadImportedKey) as? Bool ?? false
 
-            // Clear current transient download queue/progress states to prevent
-            // bleed, then pick up whatever this account left unfinished.
+            // Clear the previous account's queue and progress, then pick up whatever this one left.
             cancelInFlightWork()
             activeDownloads.removeAll()
             downloadingTrackIDs.removeAll()
@@ -1333,18 +997,16 @@ public final class DownloadManager: ObservableObject {
             downloadQueue = Self.restoreQueue(key: queueKey)
 
             rescan(tracks: libraryService.tracks)
-            // After the rescan: the seed asks what is on disk, and the answer is
-            // only true once this account's offline store has been read.
+            // After the rescan, once this account's offline store has been read.
             loadKeepOffline()
             processDownloadQueue()
         } else {
-            // Logged out: reset to defaults and wipe all memory lists immediately.
-            // The files stay — they belong to whoever downloaded them, and the
-            // next sign-in re-derives the lists from disk.
+            // Signed out: reset to defaults and clear the in-memory lists. Files stay; the next sign-in rescans.
             self.downloadOnWifiOnly     = true
             self.syncMetadataToDisk     = true
             self.keepFileCopyOnDownload = false
             self.downloadQuality        = .normal
+            self.editQuality            = .normal
             self.autoAdjustQuality      = true
             self.autoDownloadImportedPlaylists = false
             cancelInFlightWork()
@@ -1360,8 +1022,7 @@ public final class DownloadManager: ObservableObject {
             failureReasons.removeAll()
             attempts.removeAll()
             requalifying.removeAll()
-            // In-memory only. The stored set belongs to the account that made
-            // it and is read back on the next sign-in, exactly like the queue.
+            // In-memory only; the stored set is read back on the account's next sign-in.
             keepOfflineIDs.removeAll()
             keptTrackIDs.removeAll()
             manualOfflineIDs.removeAll()
@@ -1371,15 +1032,12 @@ public final class DownloadManager: ObservableObject {
 
     // MARK: - Scanning
 
-    /// Recomputes both axes from the filesystem.
-    ///
-    /// The offline set is a directory listing, so it's read on the main actor.
-    /// The other two stat one file per track, so they go to the background.
+    /// Recomputes both axes from the filesystem. The offline set is a directory listing, read here;
+    /// the others stat one file per track, so they run in the background.
     private func rescan(tracks: [Track]) {
         offlineTrackIDs = OfflineStore.shared.trackIDs
 
-        // The restored queue holds track ids and nothing else, so it can't be
-        // drained until there's a library to look them up in.
+        // The restored queue is only ids, so it waits for a library to look them up in.
         if !tracks.isEmpty, !hasSeenLibrary {
             hasSeenLibrary = true
             processDownloadQueue()
@@ -1394,28 +1052,9 @@ public final class DownloadManager: ObservableObject {
         }
     }
 
-    /// Probe the disk for every track: which are imported, which are exported.
-    ///
-    /// This is `nonisolated` and `async` on purpose, and the two together are
-    /// the whole point. A non-isolated async function runs on the global
-    /// executor even when an actor calls it (SE-0338), so the scan genuinely
-    /// leaves the main thread.
-    ///
-    /// It used to be a `Task.detached` closure written inline, which read as
-    /// backgrounded and was not. `DownloadManager` is `@MainActor`, so the
-    /// closure literal inherited that isolation, and `Task.detached` takes an
-    /// `@isolated(any)` closure — it honours the isolation the closure carries
-    /// instead of stripping it. The task therefore ran *on the main actor*: one
-    /// `UserDefaults` dictionary decode and up to thirty `fileExists` probes per
-    /// track, for the whole library, blocking the UI. A sampled main-thread
-    /// stack during a 1242 ms hang sat squarely in here.
-    ///
-    /// Keep the body free of anything main-actor-isolated. Touching such a
-    /// member would re-introduce hops and quietly undo this.
-    /// Note the shape: a `Task.detached` around a `nonisolated` *synchronous*
-    /// body. `nonisolated async` on its own is not enough under Swift 6.2 —
-    /// SE-0461 made a `nonisolated async` function run on its **caller's**
-    /// actor, so awaiting one from here put it straight back on the main thread.
+    /// Probes the disk for every track: which are imported, which are exported.
+    /// A `Task.detached` around a synchronous body, because under Swift 6.2 (SE-0461) `nonisolated async`
+    /// runs on the caller's actor. Keep the body free of main-actor state.
     nonisolated private static func scanFilesystem(tracks: [Track],
                                                    exports: ExportManager.Lookup) async -> (Set<UUID>, Set<UUID>) {
         await Task.detached(priority: .utility) {
@@ -1434,13 +1073,8 @@ public final class DownloadManager: ObservableObject {
         return (local, exported)
     }
 
-    /// True when this track came from the user's own disk and the file is still
-    /// where the library says it is.
-    ///
-    /// Deliberately narrower than `SupabaseFileStorageService.localURL`, which
-    /// also counts the export folder and the purgeable download cache. Neither
-    /// makes a song *local* — an exported copy is a file the user may move or
-    /// delete at any time, and a cached copy is one the OS may reclaim.
+    /// True when this track came from the user's own disk and the file is still there. Narrower than
+    /// `SupabaseFileStorageService.localURL`: exported and cached copies can vanish, so they don't count.
     nonisolated private static func hasImportedFile(_ track: Track) -> Bool {
         guard !track.isOnline else { return false }
         return AudioPaths.durableURL(forLocalPath: track.file.localPath) != nil
@@ -1452,20 +1086,8 @@ public final class DownloadManager: ObservableObject {
         enqueueBatch(playlist.trackIDs.compactMap { libraryService.track(id: $0) })
     }
 
-    /// Queue a whole list in one pass, skipping everything already on the
-    /// device.
-    ///
-    /// Same admission rules as `enqueueTrackDownload`, but paid for once
-    /// instead of per song. The per-track path writes the queue to
-    /// UserDefaults and re-drives the scheduler on every id, and its
-    /// `downloadQueue.contains` check is a linear scan of the queue it is in
-    /// the middle of filling — so switching on a 2,000-song playlist meant
-    /// 2,000 disk writes and a quadratic sweep before a single byte was
-    /// fetched.
-    ///
-    /// The skipping is the point of the whole method: a playlist with 10 of
-    /// its 12 songs already downloaded enqueues the 2 that are missing and
-    /// leaves the 10 alone. Nothing is ever re-fetched to satisfy a button.
+    /// Queues a whole list in one pass, skipping everything already on the device. Same rules as
+    /// `enqueueTrackDownload`, but one queue write and one scheduler pass instead of one per song.
     @discardableResult
     private func enqueueBatch(_ tracks: [Track]) -> Int {
         var queued: Set<UUID> = Set(downloadQueue)
@@ -1482,8 +1104,7 @@ public final class DownloadManager: ObservableObject {
                 // Already playable with the network off. Nothing to do.
                 continue
             case .unavailable(let reason):
-                // The user asked, and "there is no audio for this anywhere" is
-                // the answer — recorded rather than silently dropped.
+                // No audio anywhere is an answer: recorded, not dropped.
                 markFailed(track.id, message: reason.message(for: track.title))
                 continue
             case .ready, .remote, .resolvable:
@@ -1508,16 +1129,8 @@ public final class DownloadManager: ObservableObject {
 
     // MARK: - Stopping
 
-    /// Stop everything in progress for these songs: queued, downloading, or
-    /// sleeping between retries.
-    ///
-    /// Every one of those three had its own way of surviving a stop. Queued ids
-    /// sat in `downloadQueue` waiting for a slot; in-flight tasks were untracked
-    /// and ran to completion; retry tasks slept through it and re-enqueued
-    /// afterwards. Clearing one without the others is what made pressing the
-    /// button look like it worked while files kept landing.
-    ///
-    /// Leaves downloaded copies alone — this is "stop", not "remove".
+    /// Stops everything in progress for these songs: queued, downloading, or waiting to retry.
+    /// Leaves downloaded copies alone.
     public func stopDownloads(for trackIDs: [UUID]) {
         let doomed = Set(trackIDs)
         guard !doomed.isEmpty else { return }
@@ -1536,8 +1149,7 @@ public final class DownloadManager: ObservableObject {
             clearFailure(id)
         }
 
-        // Free slots just opened up, and anything left in the queue for a
-        // *different* playlist is still wanted.
+        // Slots just freed up, and the rest of the queue may still be wanted.
         processDownloadQueue()
         resetBatchIfIdle()
         objectWillChange.send()
@@ -1563,9 +1175,7 @@ public final class DownloadManager: ObservableObject {
 
     private func noteBatchEnqueued() { batchTotal += 1 }
 
-    /// Called once a song leaves the run for good, successfully or not: a
-    /// failure that has given up is still one fewer song to wait for, and a bar
-    /// that stops short of its own total never disappears.
+    /// Called once a song leaves the run, successfully or not, so the bar can reach its total.
     private func noteBatchFinished() {
         batchCompleted = min(batchCompleted + 1, batchTotal)
     }
@@ -1581,10 +1191,8 @@ public final class DownloadManager: ObservableObject {
         !downloadQueue.isEmpty || !activeDownloads.isEmpty || !retryTasks.isEmpty
     }
 
-    /// Puts a track in the queue, or says why it didn't go in.
-    ///
-    /// `force` is for the re-download-at-new-quality pass, which is the one
-    /// caller with a legitimate reason to fetch a song that's already offline.
+    /// Queues a track, or returns why it didn't go in. `force` is for the requalify pass, the one
+    /// caller that refetches a song already offline.
     @discardableResult
     private func enqueueTrackDownload(_ track: Track, force: Bool = false) -> DownloadBlock? {
         if let block = blockReason(for: track) {
@@ -1596,8 +1204,7 @@ public final class DownloadManager: ObservableObject {
             case .alreadyLocal:
                 return block
             case .unavailable(let reason):
-                // Worth recording rather than dropping: the user asked, and
-                // "this song has no audio anywhere" is the answer.
+                // No audio anywhere is an answer: recorded, not dropped.
                 guard force else {
                     markFailed(track.id, message: reason.message(for: track.title))
                     return block
@@ -1617,12 +1224,7 @@ public final class DownloadManager: ObservableObject {
         return nil
     }
 
-    /// Fills every free slot, rather than starting exactly one download.
-    ///
-    /// The old version took one item per call, which was fine when the only
-    /// caller was "a download just finished" and wrong for every other one:
-    /// regaining Wi-Fi, or flipping the Wi-Fi-only switch, restarted a single
-    /// song and left the rest of the queue sitting there.
+    /// Fills every free slot, not just one; regaining Wi-Fi or flipping Wi-Fi-only must restart them all.
     private func processDownloadQueue() {
         guard hasSeenLibrary, isConnectedForDownload else { return }
 
@@ -1630,9 +1232,7 @@ public final class DownloadManager: ObservableObject {
             let trackID = downloadQueue.removeFirst()
             persistQueue()
 
-            // A restored queue can name songs that have since left the library.
-            // Dropping them is right — but keep draining, or one stale id stalls
-            // everything behind it.
+            // A restored queue can name songs that left the library: drop them and keep draining.
             guard let track = libraryService.track(id: trackID) else {
                 requalifying.remove(trackID)
                 continue
@@ -1650,8 +1250,7 @@ public final class DownloadManager: ObservableObject {
         downloadTasks[trackID] = Task {
             defer { finishDownload(trackID) }
 
-            // Tracked across the whole attempt so a failure part-way through
-            // doesn't leave a scratch file behind for every song in a batch.
+            // Held for the whole attempt so a failure doesn't leave a scratch file behind.
             var staged: URL?
             func discardStaging() {
                 if let staged { try? FileManager.default.removeItem(at: staged) }
@@ -1663,19 +1262,23 @@ public final class DownloadManager: ObservableObject {
                                                   ignoringOfflineCopy: requalifying.contains(trackID))
                 if source.isTemporary { staged = source.container ?? source.url }
 
-                // The fetch is the slow part, so this is where a stop lands
-                // nearly every time. Checked explicitly because the resolver and
-                // the URL session are not uniformly cancellation-aware, and a
-                // song adopted after the user pressed stop is the exact
-                // behaviour this is here to prevent.
+                // Stops mostly land during the fetch; checked explicitly because the resolver and URL session don't
+                // always honour cancellation.
                 try Task.checkCancellation()
+
+                // A rebuilt edit is filed with the imports, so a second copy in the offline store isn't needed.
+                if track.origin == .edit {
+                    localTrackIDs.insert(track.id)
+                    attempts.removeValue(forKey: track.id)
+                    clearFailure(track.id)
+                    return
+                }
 
                 try await OfflineStore.shared.adopt(source.url,
                                                     for: track.id,
                                                     quality: effectiveDownloadQuality)
 
-                // Adopting isn't interruptible, so a stop during it lands here
-                // instead: undo the copy rather than keep a file nobody asked for.
+                // Adopting isn't interruptible, so a stop during it lands here: undo the copy.
                 if Task.isCancelled {
                     OfflineStore.shared.remove(track.id)
                     discardStaging()
@@ -1687,13 +1290,8 @@ public final class DownloadManager: ObservableObject {
                 attempts.removeValue(forKey: track.id)
                 clearFailure(track.id)
 
-                // A file copy is a second, separate wish — honoured here only
-                // because the user asked for it in Settings.
-                //
-                // Exported from the source rather than from the offline copy:
-                // below High that copy has already been re-encoded, and
-                // encoding it again would stack a second lossy pass on top for
-                // no gain. From the source, both files are one encode deep.
+                // File copy, only because the user asked for it in Settings. Exported from the source, not the
+                // offline copy, so it's one encode deep rather than two.
                 if keepFileCopyOnDownload {
                     do {
                         try await ExportManager.shared.export(track: track,
@@ -1701,7 +1299,7 @@ public final class DownloadManager: ObservableObject {
                                                               quality: effectiveDownloadQuality)
                         exportedTrackIDs.insert(track.id)
                     } catch {
-                        MixLog.playback.error("[DownloadManager] ⚠️ Downloaded but couldn't write a file copy: \(error)")
+                        MixLog.playback.error("[DownloadManager] Downloaded but couldn't write a file copy: \(error)")
                     }
                 }
 
@@ -1709,10 +1307,9 @@ public final class DownloadManager: ObservableObject {
                 discardStaging()
                 source.supersededCacheEntry?()
 
-                MixLog.playback.debug("[DownloadManager] ✅ Downloaded for offline playback: \(track.title)")
+                MixLog.playback.debug("[DownloadManager] Downloaded for offline playback: \(track.title)")
             } catch is CancellationError {
-                // Asked to stop, not a failure. Marking it failed would light up
-                // the retry button for something the user deliberately called off.
+                // A stop, not a failure; marking it failed would show a retry button.
                 discardStaging()
             } catch {
                 discardStaging()
@@ -1724,24 +1321,21 @@ public final class DownloadManager: ObservableObject {
 
     // MARK: - Retry
 
-    /// Books another go, or gives up and says so.
-    ///
-    /// A resolver that returns nothing because YouTube rate-limited the third
-    /// request in a row is the single most common way a batch download loses
-    /// songs, and it's also the most likely thing to work ten seconds later.
+    /// Retries, or gives up and says so. A YouTube rate limit is the usual failure and often clears
+    /// seconds later.
     private func recordAttemptFailure(for track: Track, error: Error) {
         let attempt = (attempts[track.id] ?? 0) + 1
         attempts[track.id] = attempt
 
         guard attempt < Self.maxAttempts else {
-            MixLog.playback.error("[DownloadManager] ❌ Gave up on \(track.title) after \(attempt) attempts: \(error)")
+            MixLog.playback.error("[DownloadManager] Gave up on \(track.title) after \(attempt) attempts: \(error)")
             requalifying.remove(track.id)
             markFailed(track.id, message: error.localizedDescription)
             return
         }
 
         let delay = Self.retryDelay(afterAttempt: attempt)
-        MixLog.playback.error("[DownloadManager] ⚠️ \(track.title) failed (attempt \(attempt)), retrying: \(error)")
+        MixLog.playback.error("[DownloadManager] \(track.title) failed (attempt \(attempt)), retrying: \(error)")
 
         retryTasks[track.id]?.cancel()
         retryTasks[track.id] = Task { [weak self] in
@@ -1749,9 +1343,8 @@ public final class DownloadManager: ObservableObject {
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 guard let self, self.retryTasks.removeValue(forKey: track.id) != nil else { return }
-                // Straight onto the queue: the attempt count is what limits
-                // this, and re-running eligibility would refuse a requalifying
-                // track for still being downloaded.
+                // Straight onto the queue: the attempt count bounds this, and re-checking eligibility would refuse a
+                // requalifying track.
                 guard !self.downloadQueue.contains(track.id),
                       !self.downloadingTrackIDs.contains(track.id) else { return }
                 self.downloadQueue.append(track.id)
@@ -1773,11 +1366,7 @@ public final class DownloadManager: ObservableObject {
 
     // MARK: - Queue persistence
 
-    /// The queue outlives the launch that built it.
-    ///
-    /// Downloading a playlist over a slow connection routinely outlasts the
-    /// session — quitting used to silently abandon whatever hadn't started,
-    /// which reads as "it downloaded some of them".
+    /// The queue is persisted so a download that outlasts the session resumes on next launch.
     private func persistQueue() {
         UserDefaults.standard.set(downloadQueue.map(\.uuidString), forKey: queueKey)
     }
@@ -1791,18 +1380,14 @@ public final class DownloadManager: ObservableObject {
         let url: URL
         /// True for scratch files this app created and should clean up.
         let isTemporary: Bool
-        /// The staging directory to remove along with the file, when there is
-        /// one — the resolver may have left a `.part` or an info file beside it.
+        /// The staging directory to remove with the file, if any; the resolver may leave a `.part` beside it.
         var container: URL? = nil
-        /// Set when the bytes came from the playback cache, so the cache entry
-        /// can be dropped once the offline store has its own copy. Keeping both
-        /// is pure waste: `AudioLocator` reads the offline store first, so the
-        /// cached file could never be hit again.
+        /// Set when the bytes came from the playback cache, so that entry can be dropped once the offline
+        /// store has its own copy (`AudioLocator` reads the offline store first).
         var supersededCacheEntry: (() -> Void)? = nil
     }
 
-    /// Thrown rather than returned so a download that can't find a source
-    /// reaches the retry/failure path instead of quietly succeeding at nothing.
+    /// Thrown so a download with no source reaches the retry/failure path.
     private struct NoAudioSource: LocalizedError {
         let reason: UnavailableReason
         let title: String
@@ -1812,9 +1397,8 @@ public final class DownloadManager: ObservableObject {
     private func fetchAudio(for track: Track, ignoringOfflineCopy: Bool) async throws -> AudioSource {
         switch AudioLocator.locate(track, ignoringOfflineStore: ignoringOfflineCopy) {
 
-        // Something usable is already on disk — the offline store (when this
-        // isn't a requalify), the playback cache, the user's own import, or an
-        // exported copy. Reuse it rather than pulling the bytes down twice.
+        // Reuse anything usable on disk: the offline store (unless requalifying), the playback cache, an
+        // import, or an exported copy.
         case .ready(let url, .cached):
             let ref  = track.sourceRef
             let hash = track.file.fileHash
@@ -1830,13 +1414,16 @@ public final class DownloadManager: ObservableObject {
             return try await resolveAudio(for: track)
 
         case .remote:
-            // Supabase — triggers the progress publisher, lands in the cache.
+            // Supabase: drives the progress publisher and lands in the cache.
             let url = try await fileStorage.download(track: track, accessToken: "")
             return AudioSource(url: url, isTemporary: false)
 
+        case .unavailable(let reason) where track.origin == .edit:
+            guard let rebuild = editRebuilder else { throw NoAudioSource(reason: reason, title: track.title) }
+            return AudioSource(url: try await rebuild(track), isTemporary: false)
+
         case .unavailable(let reason):
-            // Nothing on disk and no remote key, but findable — the same shot
-            // playback gives it. See `resolverMightFind`.
+            // No file and no remote key, but findable; same as playback. See `resolverMightFind`.
             guard Self.resolverMightFind(reason) else {
                 throw NoAudioSource(reason: reason, title: track.title)
             }
@@ -1844,33 +1431,34 @@ public final class DownloadManager: ObservableObject {
         }
     }
 
-    /// Search for this song and pull down what comes back. The resolver is the
-    /// only thing that decides which upload is the right one.
+    /// Searches for this song and downloads the resolver's pick.
     private func resolveAudio(for track: Track) async throws -> AudioSource {
         let query = "\(track.artistName) \(track.title)".trimmingCharacters(in: .whitespaces)
 
-        // Staged in its own directory, then found by listing it. The
-        // resolvers name their output after the video they picked and
-        // ignore the `name:` they're handed, so the old code's
-        // `tempDir/<videoID>.m4a` was a guess at both the id *and* the
-        // container — and any download that came back as .opus or .webm
-        // "succeeded" onto a path with no file at it. That is the download
-        // that silently goes missing from a batch.
+        // Staged in its own directory and found by listing it: resolvers name the output after the video
+        // they picked and the container varies (.m4a, .opus, .webm).
         let staging = PlaybackCache.stagingDirectory
             .appendingPathComponent(track.id.uuidString, isDirectory: true)
         try? FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
 
         let ref = track.sourceRef
-        let res = try await trackResolver.download(
-            query: query,
-            name: track.id.uuidString,
-            to: staging,
-            expectedDuration: track.duration,
-            preferExplicit: track.isExplicit,
-            excluding: ref.flatMap { onlineCoordinator?.exclusions(for: $0) } ?? []
-        )
-        // Recorded so a later "Wrong version" on the downloaded copy has
-        // something to refuse.
+        // The upload this song already plays from, so the download matches what was heard
+        // (and a thumbs-up or "Go back" pick sticks).
+        let res: ResolvedAudio
+        if let pinned = ref.flatMap({ onlineCoordinator?.knownVideoID(forSourceRef: $0) }) {
+            res = try await trackResolver.download(videoID: pinned, fallbackQuery: query,
+                                                   name: track.id.uuidString, to: staging)
+        } else {
+            res = try await trackResolver.download(
+                query: query,
+                name: track.id.uuidString,
+                to: staging,
+                expectedDuration: track.duration,
+                preferExplicit: track.isExplicit,
+                excluding: ref.flatMap { onlineCoordinator?.exclusions(for: $0) } ?? []
+            )
+        }
+        // So a later "Wrong version" on the downloaded copy has something to refuse.
         if let ref { onlineCoordinator?.recordVideoID(res.videoID, for: ref) }
 
         let landed = FileManager.default.fileExists(atPath: res.fileURL.path(percentEncoded: false))
@@ -1882,10 +1470,8 @@ public final class DownloadManager: ObservableObject {
             throw NoAudioSource(reason: .needsInternet, title: track.title)
         }
 
-        // Deliberately *not* adopted into the playback cache on the way
-        // past. It's about to go into the offline store, and `AudioLocator`
-        // checks that first — so a cached copy would never be read and the
-        // song would occupy twice the disk it asked for, on every download.
+        // Not adopted into the playback cache: it's going into the offline store, which `AudioLocator`
+        // checks first, so a cached copy would just double the disk use.
         return AudioSource(url: landed, isTemporary: true, container: staging)
     }
 
@@ -1894,9 +1480,7 @@ public final class DownloadManager: ObservableObject {
         activeDownloads.remove(trackID)
         downloadingTrackIDs.remove(trackID)
         downloadProgress.removeValue(forKey: trackID)
-        // Not counted while a retry is still pending — the song hasn't left the
-        // run yet, and counting it here would march the bar past songs that are
-        // about to be attempted again.
+        // Not counted while a retry is pending; the song hasn't left the run yet.
         if retryTasks[trackID] == nil { noteBatchFinished() }
         processDownloadQueue()
         resetBatchIfIdle()
@@ -1905,19 +1489,12 @@ public final class DownloadManager: ObservableObject {
 
     // MARK: - Removal
 
-    /// Removes the offline copy. Leaves any file copy in the export folder
-    /// alone: that's a file in the user's own Music folder, and deleting it
-    /// behind their back for pressing "remove download" would be a betrayal of
-    /// two different intentions. `deleteFileCopy(for:)` does that explicitly.
+    /// Removes the offline copy. Any file copy in the export folder stays; `deleteFileCopy(for:)` does that.
     public func removeDownload(for trackID: UUID) {
         removeDownloads(for: [trackID])
     }
 
-    /// The same withdrawal for a whole selection, with the two costs that don't
-    /// belong per song — writing the stored queue and telling SwiftUI — hoisted
-    /// out of the loop. Deleting a large import calls this once per song, and
-    /// 2,100 defaults writes and 2,100 `objectWillChange` sends on the main
-    /// thread is most of why that froze the app.
+    /// `removeDownload` for a selection, with the queue write and change notification done once.
     public func removeDownloads(for trackIDs: Set<UUID>) {
         guard !trackIDs.isEmpty else { return }
         var queueChanged = false
@@ -1939,8 +1516,7 @@ public final class DownloadManager: ObservableObject {
         downloadQueue.removeAll(where: { $0 == trackID })
         downloadTasks.removeValue(forKey: trackID)?.cancel()
         activeDownloads.remove(trackID)
-        // Removing a song mid-run takes it out of the run, not out of the count
-        // — otherwise the bar's total outlives the work it was measuring.
+        // Removing a song mid-run takes it out of the run, and out of the count.
         if wasInRun { noteBatchFinished() }
         downloadingTrackIDs.remove(trackID)
         downloadProgress.removeValue(forKey: trackID)
@@ -1949,20 +1525,14 @@ public final class DownloadManager: ObservableObject {
         requalifying.remove(trackID)
         clearFailure(trackID)
 
-        // "Remove Download" is the user withdrawing the ask, so the claim goes
-        // with the file. Here rather than at the call sites, so every path that
-        // removes a copy — a row menu, a selection, a song leaving the library —
-        // clears it.
+        // "Remove Download" withdraws the claim with the file, on every removal path.
         manualOfflineIDs.remove(trackID)
 
         OfflineStore.shared.remove(trackID)
         offlineTrackIDs.remove(trackID)
 
-        // The purgeable cache too, or the song stays playable offline by
-        // accident until the OS gets round to reclaiming it. Routed through
-        // PlaybackCache rather than rebuilt from a remote key: an online track
-        // has no remote key at all, so the old code left its cached audio in
-        // place and "Remove Download" appeared to do nothing.
+        // The purgeable cache too, or the song stays playable offline until the OS reclaims it. Routed
+        // through PlaybackCache because online tracks have no remote key.
         if let ref = track.sourceRef, !ref.isEmpty {
             PlaybackCache.remove(forSourceRef: ref)
         }
@@ -1979,8 +1549,7 @@ public final class DownloadManager: ObservableObject {
         return queued
     }
 
-    /// Deletes the exported file copy, and only that — the song stays downloaded
-    /// if it was.
+    /// Deletes the exported file copy only; the song stays downloaded if it was.
     public func deleteFileCopy(for trackID: UUID) {
         guard let track = libraryService.track(id: trackID) else { return }
         ExportManager.shared.deleteExportedFile(for: track)
@@ -2009,12 +1578,7 @@ public final class DownloadManager: ObservableObject {
         objectWillChange.send()
     }
 
-    /// Cancel every task this manager is running — downloads in progress and
-    /// retries waiting to fire.
-    ///
-    /// One function rather than two because every caller wants both, and the
-    /// ones that only cancelled retries (an account switch, a sign-out) left
-    /// downloads running into whatever library came next.
+    /// Cancels running downloads and pending retries. One function because every caller needs both.
     private func cancelInFlightWork() {
         for task in downloadTasks.values { task.cancel() }
         downloadTasks.removeAll()

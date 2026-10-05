@@ -1,14 +1,4 @@
-// ForgotPasswordSheet.swift
-// Mixtape — Features/Auth
-//
-// One password-reset dialog for both platforms.
-//
-// There used to be two. The phone version was a 72pt glyph floating between a
-// pair of Spacers, under an empty navigation title, with "Cancel" filed under
-// `.confirmationAction`. The Mac version hand-built a 340pt panel with its own
-// "Close" text button in the top-right corner — the one place the guidelines
-// say a dismissing button never goes. Same field, same two states, two sets of
-// spacing and two chances to drift.
+// Password-reset dialog for both platforms.
 
 import SwiftUI
 

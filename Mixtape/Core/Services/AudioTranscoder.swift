@@ -1,28 +1,6 @@
-// AudioTranscoder.swift
-// Mixtape — Core/Services
-//
-// Re-encodes a song on its way into the offline store.
-//
-// Downloads used to land as whatever byte-for-byte file the source handed over
-// — typically a ~185 kbps MP3 from Supabase, or a 128 kbps AAC from the online
-// resolver. That's fine for sixteen songs and ruinous for six thousand: the
-// same library Spotify keeps offline in 10 GB was costing about 25 GB here.
-//
-// So a download now has a quality, and anything below `.high` is re-encoded to
-// AAC before it's filed. Two things follow from that choice:
-//
-//   • AAC, not Opus. Opus is the better codec at these bitrates by a wide
-//     margin, and the online resolver can even serve it natively — but nothing
-//     in AVFoundation decodes it, and the playback path is built on
-//     AVAudioEngine. Shipping a decoder to save a few hundred megabytes isn't
-//     the trade.
-//   • AVAssetReader/Writer, not ffmpeg. ffmpeg is already bundled, but it runs
-//     through `Process`, which doesn't exist on iOS. This encodes identically on
-//     both platforms with no binary to ship.
-//
-// This is a lossy→lossy re-encode. Nothing here pretends otherwise: `.high`
-// exists precisely so anyone who cares can opt out, and the original always
-// remains on the server to re-download from.
+// Re-encodes downloads to AAC for the offline store. AAC rather than Opus
+// because AVFoundation can't decode Opus. AVAssetWriter rather than ffmpeg
+// because iOS can't run Process.
 
 import Foundation
 import AVFoundation
@@ -33,7 +11,6 @@ import AudioToolbox
 /// How much disk a download is allowed to take.
 public enum DownloadQuality: String, CaseIterable, Identifiable, Sendable {
 
-    /// No re-encode — the file is filed exactly as it arrived.
     case high
     /// AAC-LC, 96 kbps.
     case normal
@@ -50,8 +27,6 @@ public enum DownloadQuality: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    /// One line of plain English for the pickers — the size/fidelity trade,
-    /// not the codec name.
     public var detail: String {
         switch self {
         case .high:   return "Original file, as the source served it."
@@ -60,10 +35,7 @@ public enum DownloadQuality: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    /// Target bit rate, or nil when the file is kept as it arrived.
-    ///
-    /// Roughly: High is whatever the source served (~4–5 MB a song), Normal
-    /// about half that, Low about a third.
+    /// Target bit rate, nil keeps the original.
     var bitRate: Int? {
         switch self {
         case .high:   return nil
@@ -72,11 +44,7 @@ public enum DownloadQuality: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    /// AAC-LC at 96 kbps, HE-AAC at 64.
-    ///
-    /// Plain AAC-LC starts to audibly fall apart below about 80 kbps stereo,
-    /// which is exactly the gap SBR was designed to cover — so `.low` switches
-    /// profile rather than just turning the same encoder down.
+    /// LC at 96k, HE-AAC at 64k since LC degrades below ~80k.
     var formatID: AudioFormatID? {
         switch self {
         case .high:   return nil
@@ -115,11 +83,7 @@ public enum AudioTranscoder {
         }
     }
 
-    /// Re-encodes `source` into `destination`, which is always an `.m4a`.
-    ///
-    /// Throws rather than falling back — the caller decides what a failed
-    /// re-encode means, and for a download it means "file the original instead",
-    /// not "the download failed".
+    /// Always writes an .m4a. Throws so the caller can fall back to the original.
     static func transcode(_ source: URL,
                           to destination: URL,
                           quality: DownloadQuality) async throws {
@@ -133,9 +97,7 @@ public enum AudioTranscoder {
             throw TranscodeError.noAudioTrack
         }
 
-        // Follow the source's shape instead of forcing 44.1 kHz stereo: upmixing
-        // a mono upload to two channels spends twice the bits on one channel of
-        // information.
+        // Keep the source's channel count.
         var channels   = 2
         var sampleRate = 44_100.0
         if let description = try await audio.load(.formatDescriptions).first,
@@ -143,8 +105,7 @@ public enum AudioTranscoder {
             if asbd.mChannelsPerFrame > 0 { channels   = Int(asbd.mChannelsPerFrame) }
             if asbd.mSampleRate      > 0 { sampleRate = asbd.mSampleRate }
         }
-        // Beyond stereo there's no channel layout worth guessing at, and a
-        // surround upload would otherwise fail configuration outright.
+        // Cap at stereo.
         channels = min(channels, 2)
 
         let reader = try AVAssetReader(asset: asset)
@@ -190,21 +151,15 @@ public enum AudioTranscoder {
         try await pump(reader: reader, writer: writer, input: input, output: output)
     }
 
-    /// Feeds decoded samples from the reader into the encoder until the source
-    /// runs out, then finalises the file.
     private static func pump(reader: AVAssetReader,
                              writer: AVAssetWriter,
                              input:  AVAssetWriterInput,
                              output: AVAssetReaderTrackOutput) async throws {
 
         let queue = DispatchQueue(label: "mix.transcode")
-        // None of these four is Sendable, but from here on they're only touched
-        // from `queue` and the `finishWriting` handler, one after the other.
+        // Only touched from `queue` and the finish handler, in order.
         nonisolated(unsafe) let reader = reader, writer = writer, input = input, output = output
-        // `requestMediaDataWhenReady` calls back repeatedly and stops once the
-        // input is marked finished, so in practice the flag flips once — but
-        // resuming a continuation twice is a crash rather than a warning, and
-        // the callback and the `finishWriting` handler run on different threads.
+        // Guards against resuming the continuation twice.
         let resumed = OneShot()
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
@@ -215,10 +170,7 @@ public enum AudioTranscoder {
                     guard let buffer = output.copyNextSampleBuffer() else {
                         input.markAsFinished()
 
-                        // No more samples means either the source ended or the
-                        // read gave out part-way. A truncated song that still
-                        // looks like a finished download is the worse outcome,
-                        // so a failed read is an error rather than a short file.
+                        // Treat a failed read as an error, not a short file.
                         if reader.status == .failed {
                             guard resumed.claim() else { return }
                             writer.cancelWriting()
@@ -253,8 +205,6 @@ public enum AudioTranscoder {
         }
     }
 
-    /// One-shot latch guarding the continuation. A small class rather than a
-    /// captured `var` so every closure sees the same value.
     private final class OneShot: @unchecked Sendable {
         private let lock = NSLock()
         private var value = false

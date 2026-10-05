@@ -1,13 +1,5 @@
-// LocalFilesSettingsGroup.swift
-// Mixtape — Features/Settings
-//
-// The folders Mixtape looks in, and nothing more.
-//
-// Worth being clear about what this is not: it is not the export folder. Mixtape
-// writes to the export folder, and scanning a folder Mixtape writes to is how a
-// song deleted on the phone used to come back on the Mac. A watched folder is
-// one Mixtape only ever reads, so everything found in it is the user's own file,
-// put there by them.
+// The folders Mixtape reads from. Not the export folder: Mixtape only ever reads
+// these, so everything in them is the user's own file.
 
 import SwiftUI
 

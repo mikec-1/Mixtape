@@ -1,14 +1,4 @@
-// MacRightPanelView.swift
-// Mixtape — Mac/App
-//
-// The right-hand column's chrome: one tab bar and one close button around the
-// three panels that column can show — Now Playing (track info), Queue, and
-// Recently played.
-//
-// They used to be three unrelated bodies, one of which carried its own
-// segmented picker, and none of which had a way to close the column except the
-// Esc key. Sharing the chrome means switching between them is a tab away
-// (Spotify's arrangement) and the header looks the same whichever one is up.
+// Right column chrome: one tab bar and close button around Now Playing, Queue and Recently Played.
 
 #if os(macOS)
 import SwiftUI
@@ -29,8 +19,7 @@ struct MacRightPanelView: View {
     private var content: some View {
         switch appState.rightPanel {
         case .nowPlaying:
-            // The inspector follows the playing song and only falls back to the
-            // track the panel was opened with, so either is enough to show it.
+            // Follows the playing song, falling back to the track the panel opened with.
             if let track = engine.queue.currentTrack ?? appState.inspectorTrack {
                 MacTrackInspector(fallbackTrack: track)
             } else {
@@ -48,9 +37,7 @@ struct MacRightPanelView: View {
 
 // MARK: - Tab bar
 
-/// Underlined text tabs plus a close button, sitting directly on the column's
-/// background — no bar, no material, nothing that would cut a rectangle out of
-/// the window-wide wash behind it.
+/// Underlined text tabs plus close, drawn straight on the column so the window wash shows through.
 private struct MacPanelTabBar: View {
 
     @EnvironmentObject private var appState: MacAppState
@@ -89,8 +76,7 @@ private struct MacPanelTabBar: View {
         .mixAnimation(.easeOut(duration: 0.18), value: appState.rightPanel)
     }
 
-    /// Every tab is a lateral move — the column stays open. Now Playing needs a
-    /// track to show, so it opens on whatever the inspector would display.
+    /// Tabs keep the column open. Now Playing opens on whatever the inspector would show.
     private func select(_ mode: RightPanelMode) {
         switch mode {
         case .nowPlaying:
@@ -117,21 +103,14 @@ private struct PanelTab: View {
         Button(action: action) {
             VStack(spacing: 6) {
                 Text(title)
-                    // One weight for all three. Selection is the underline's
-                    // job — bolding the selected tab as well made "Now Playing"
-                    // read as a heading with two links after it rather than as
-                    // one of three equal tabs.
+                    // One weight for all; the underline marks selection.
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(color)
                     .lineLimit(1)
-                    // Deliberately no `minimumScaleFactor`: it only ever fired
-                    // on the longest label, so "Now Playing" rendered smaller
-                    // than the other two and — scaled glyphs sitting inside an
-                    // unshrunk line box — visibly lower as well.
+                    // No `minimumScaleFactor`: it shrank and lowered only "Now Playing".
                     .fixedSize(horizontal: true, vertical: false)
 
-                // The moving underline is one shape handed between tabs, so it
-                // slides across instead of blinking out and in.
+                // One underline shape shared between tabs, so it slides.
                 Group {
                     if isSelected {
                         Capsule()
@@ -158,8 +137,7 @@ private struct PanelTab: View {
 
 // MARK: - Shared empty state
 
-/// Centred icon + line, shared by all three panels so an empty Queue and an
-/// empty history don't look like two different apps.
+/// Centred icon + line, shared by all three panels' empty states.
 struct MacPanelEmptyState: View {
     let icon:    String
     let message: String

@@ -1,33 +1,12 @@
-// QueueService.swift
-// Mixtape — Core/Services
-//
-// Manages the active play queue, current position, shuffle, and repeat mode.
-// PlaybackEngine owns a QueueService and drives it forward/backward.
-// Views observe QueueService directly for UI state (current track, shuffle badge, etc.)
-//
-// # The three lanes
-//
-// The queue is one flat list — that is what `advance()` walks and what the
-// player bar reads — but every row belongs to one of three lanes, and the lanes
-// are always in this order after the playing row:
-//
-//     [ now playing ][ manual ][ context ][ recommendation ]
-//
-//   * `manual`         — songs the user put there by hand ("Add to Queue",
-//                        "Play Next"). They play first, and nothing the app
-//                        does on its own may reorder or displace them.
-//   * `context`        — the playlist / album / artist / search results that
-//                        was playing when the user pressed play. Shuffle acts
-//                        on this lane and this lane only.
-//   * `recommendation` — the top-up the app adds once the context has run out,
-//                        so the music keeps going. Shuffle doesn't suppress it
-//                        (a shuffled playlist still ends), but repeat does —
-//                        repeat is its own answer to "what plays next".
-//
-// That ordering *is* the feature: it's what lets the queue show "Next in queue"
-// above "Next up: <Playlist>" above "Next up: recommended songs", the way
-// every other music player does. Every insertion point below is chosen to keep
-// it true, so no caller has to think about it.
+// The play queue, position, shuffle and repeat. PlaybackEngine drives it; views
+// observe it directly.
+// One flat list, but every row after the playing one belongs to a lane, always
+// in this order:
+// [ now playing ][ manual ][ context ][ recommendation ]
+// - manual: "Add to Queue" / "Play Next". Plays first, never reordered by the app.
+// - context: the list the user pressed play on. Shuffle only touches this lane.
+// - recommendation: autoplay top-up once context runs out. Repeat suppresses it.
+// Every insertion below keeps that order.
 
 import Foundation
 import Combine
@@ -41,8 +20,7 @@ public enum RepeatMode: String, CaseIterable {
         switch self { case .off: return .all; case .all: return .one; case .one: return .off }
     }
 
-    /// Spoken name for the transport button, which otherwise shows the same
-    /// glyph for "off" and "all" and reads as nothing at all.
+    /// VoiceOver name; "off" and "all" share a glyph.
     public var accessibilityLabel: String {
         switch self {
         case .off: return "Repeat off"
@@ -62,8 +40,7 @@ public enum RepeatMode: String, CaseIterable {
 
 // MARK: - Lanes
 
-/// Why a row is in the queue. See the file header — the ordering of these cases
-/// is the ordering of the queue.
+/// Why a row is queued. Case order is queue order.
 public enum QueueOrigin: Int, Comparable, Sendable {
     /// The user asked for this song specifically.
     case manual = 0
@@ -77,18 +54,12 @@ public enum QueueOrigin: Int, Comparable, Sendable {
     }
 }
 
-/// Where the context lane came from, so the queue can say "Next up: Liked Songs"
-/// rather than the anonymous "Next in queue".
-///
-/// A bare playlist id was too narrow: albums, artists and search results fill
-/// the queue exactly the same way and had nothing to show for it. The playlist
-/// case still carries its id because playing state elsewhere (the sidebar's
-/// "this playlist is playing" dot) keys off it.
+/// Where the context lane came from, for "Next up: Liked Songs". Playlists keep
+/// their id for the sidebar's playing indicator.
 public enum QueueSource: Equatable, Sendable {
     case none
     case playlist(id: UUID, name: String)
-    /// An album, artist, search or mix — anything that already knows its own
-    /// display name and has no playlist id to match against.
+    /// Album, artist, search or mix: just a display name.
     case named(String)
 
     public var displayName: String? {
@@ -126,44 +97,21 @@ public final class QueueService: ObservableObject {
     // MARK: - Published State
 
     @Published public private(set) var queue:            [Track]     = []
-    /// One id per row of `queue`, in the same order.
-    ///
-    /// `Track.id` is a content hash of title + artist, so the same song queued
-    /// twice is the *same* id twice and nothing can tell the two rows apart:
-    /// SwiftUI drew the second as a blank gap, clicking it played the first, and
-    /// dragging it moved the first. These ids identify a row rather than a song,
-    /// which is what queueing a song three times in a row needs.
-    ///
-    /// Kept exactly in step with `queue` by every mutation below — `alignEntryIDs()`
-    /// is the backstop.
+    /// One id per row of `queue`. `Track.id` is a content hash, so a song queued
+    /// twice needs row ids to tell the copies apart. `alignEntryIDs()` is the backstop.
     @Published public private(set) var entryIDs:         [UUID]      = []
-    /// Which lane each row belongs to, keyed by row id.
-    ///
-    /// Keyed by row rather than by track: queueing a song you already had coming
-    /// up marks *that* row, not the other one. A row with no entry here is
-    /// context — that is the harmless default for anything restored or mirrored
-    /// without lane information.
+    /// Lane per row id. Missing means context (restored or mirrored rows).
     @Published public private(set) var origins:          [UUID: QueueOrigin] = [:]
     @Published public private(set) var currentIndex:     Int         = -1
     @Published public private(set) var shuffleEnabled:   Bool        = false
     @Published public private(set) var repeatMode:       RepeatMode  = .off
-    /// The last row of the repeating group — the song after which "Repeat queue"
-    /// loops back to the top.
-    ///
-    /// Repeat means "the group as it stood when repeat was switched on", so a
-    /// song queued afterwards doesn't silently join the loop and there is a way
-    /// to line something up to play *after* it. The boundary is held against a
-    /// row id, so rows can be dragged in or out of the group. Nil whenever
-    /// repeat isn't `.all`.
+    /// Last row of the "Repeat queue" group. Songs queued after repeat was turned
+    /// on play after the loop. Held by row id so drags work. Nil unless `.all`.
     @Published public private(set) var repeatBoundaryID: UUID?       = nil
-    /// The list the current playback session came from — named, so the queue can
-    /// say where its upcoming songs are from.
+    /// The list this session came from.
     @Published public private(set) var source:           QueueSource = .none
 
-    /// The playlist the currently playing track originated from, or nil when
-    /// playback started from something that isn't a playlist. Kept because the
-    /// sidebar, the playlists grid and the suggestion service all ask this exact
-    /// question.
+    /// The playlist playback started from, or nil.
     public var sourcePlaylistID: UUID? { source.playlistID }
 
     /// Whether a playlist has sides. Set by AppDependencies.
@@ -210,19 +158,14 @@ public final class QueueService: ObservableObject {
         isAutoReverse ? "arrow.left.arrow.right" : repeatMode.systemImage
     }
 
-    /// Where the repeating group ends, as a position in the current queue.
-    ///
-    /// Nil when repeat isn't `.all`, and also when the row that marked the
-    /// boundary is gone (removed, or a new list replaced the queue) — callers
-    /// treat that as "the whole queue", which is what repeat meant before.
+    /// Boundary position in the current queue. Nil when repeat isn't `.all` or the
+    /// row is gone; callers treat nil as the whole queue.
     public var repeatBoundaryIndex: Int? {
         guard repeatMode == .all, let id = repeatBoundaryID else { return nil }
         return entryIDs.firstIndex(of: id)
     }
 
-    /// True for a row that plays only once repeat is switched off — it sits
-    /// below the boundary. Used by the queue panels to draw the divider and the
-    /// "after repeat" tail.
+    /// Rows below the boundary, which play once repeat is off.
     public func isAfterRepeatGroup(index: Int) -> Bool {
         guard let boundary = repeatBoundaryIndex else { return false }
         return index > boundary
@@ -230,20 +173,12 @@ public final class QueueService: ObservableObject {
 
     // MARK: - Private
 
-    /// The context lane's canonical, unshuffled order, as row ids.
-    ///
-    /// Only the context lane: shuffle reorders the playlist the user pressed
-    /// play on and leaves their own queued songs exactly where they put them,
-    /// so the pre-shuffle order of anything else is not something to remember.
-    /// Ids the queue no longer holds are pruned lazily by `contextOrderIDs`'s
-    /// readers.
+    /// The context lane's unshuffled order as row ids. Stale ids are pruned lazily.
     private var contextOrderIDs: [UUID] = []
 
     // MARK: - Derived
 
-    /// The queue as rows. Each carries its own identity and its position, which
-    /// is what the queue lists key off and what click-to-play and drag-to-reorder
-    /// name — never the track id, which two rows can share.
+    /// A queue row with its own id and position. Lists key off this, never the track id.
     public struct Entry: Identifiable, Hashable, Sendable {
         public let id:     UUID
         public let index:  Int
@@ -266,8 +201,7 @@ public final class QueueService: ObservableObject {
         entryIDs.indices.contains(index) ? entryIDs[index] : nil
     }
 
-    /// The lane a row belongs to. Context is the default for rows that were
-    /// never tagged — a restored session, an online mirror pushed without lanes.
+    /// Untagged rows are context.
     public func origin(at index: Int) -> QueueOrigin {
         guard let id = entryID(at: index) else { return .context }
         return origins[id] ?? .context
@@ -291,11 +225,8 @@ public final class QueueService: ObservableObject {
 
     // MARK: - Sections
 
-    /// One block of the upcoming queue, with the heading it is shown under.
-    ///
-    /// Derived on every read rather than stored: the lanes live on the rows, and
-    /// two views hand-rolling the same grouping is how the Mac panel and the iOS
-    /// sheet would drift apart. Both read this.
+    /// A block of the upcoming queue with its heading. Derived on read so the Mac
+    /// panel and iOS sheet can't drift.
     public struct Section: Identifiable, Sendable {
         public let origin: QueueOrigin
         public let title:  String
@@ -303,9 +234,7 @@ public final class QueueService: ObservableObject {
         public var id: QueueOrigin { origin }
     }
 
-    /// Everything after the currently playing row — and the whole queue when
-    /// nothing is playing yet, which is a real state ("Add to Queue" before
-    /// pressing play).
+    /// Everything after the playing row, or the whole queue if nothing's playing yet.
     public var upcomingRows: [Entry] {
         let rows  = entries
         let start = currentIndex + 1
@@ -313,8 +242,7 @@ public final class QueueService: ObservableObject {
         return Array(rows[start...])
     }
 
-    /// The upcoming queue split into its lanes, in order, skipping any lane
-    /// that has no rows.
+    /// Upcoming rows split into non-empty lanes.
     public var upcomingSections: [Section] {
         let rows = upcomingRows
         guard !rows.isEmpty else { return [] }
@@ -325,18 +253,8 @@ public final class QueueService: ObservableObject {
         }
     }
 
-    /// The heading a lane is shown under.
-    ///
-    /// Every section names its origin — "Next up: Liked Songs" is the difference
-    /// between a list of songs and a list you recognise — and they all share the
-    /// one shape, so the panel reads as three answers to the same question:
-    ///
-    ///     Next in queue
-    ///     Next up: Road Trip
-    ///     Next up: recommended songs
-    ///
-    /// The bare fallback is for a queue with no list behind it at all: one built
-    /// by hand, or restored from a session whose playlist has since been deleted.
+    /// Section heading for a lane: "Next in queue", "Next up: <list>", "Next up:
+    /// recommended songs". The bare fallback is for queues with no source list.
     public func title(for lane: QueueOrigin) -> String {
         switch lane {
         case .manual:         return "Next in queue"
@@ -345,53 +263,30 @@ public final class QueueService: ObservableObject {
         }
     }
 
-    /// How many context-lane rows are still ahead of the current one.
-    ///
-    /// The suggestion service tops the queue up only when this reaches zero —
-    /// recommendations belong *after* the playlist has run out, not spliced in
-    /// beside it.
+    /// Context rows still ahead. Suggestions only top up when this hits zero.
     public var remainingContextCount: Int {
         upcomingRows.reduce(0) { $0 + ($1.origin == .context ? 1 : 0) }
     }
 
-    /// How many recommendation rows are queued ahead — the depth the suggestion
-    /// service keeps topped up once it has taken over.
+    /// Recommendation rows ahead, the depth the suggestion service maintains.
     public var remainingRecommendationCount: Int {
         upcomingRows.reduce(0) { $0 + ($1.origin == .recommendation ? 1 : 0) }
     }
 
     // MARK: - Queue Loading
 
-    /// Replace the queue with `tracks` and start at `track`.
-    ///
-    /// Everything handed over is context by definition — it is the list the user
-    /// pressed play on. Resets the source; callers that know where the list came
-    /// from name it afterwards via `setSource(_:)`.
-    ///
-    /// `startIndex` names the row to start on when the caller knows it — a click
-    /// on the second copy of a song in the queue has to start *that* row, and a
-    /// search by track id can only ever find the first. Nil means "find the
-    /// song", which is right for every caller that is handing over a list rather
-    /// than pointing at a row in one.
+    /// Replaces the queue with `tracks`, all context, starting at `track`. Resets
+    /// the source; callers name it via `setSource(_:)`. `startIndex` picks a specific
+    /// row (e.g. the second copy of a song); nil searches for the song.
     public func play(track: Track, in tracks: [Track], startIndex: Int? = nil) {
         source = .none
-        // Songs the user queued by hand are not part of the list being replaced
-        // — they were asked for, and pressing play somewhere else is not a
-        // request to forget them. They are re-inserted at the head of the new
-        // queue below, in order, so they still play before the new list does.
+        // Manually queued songs survive: they're re-inserted at the head of the new queue.
         alignEntryIDs()
         let carriedManual = upcomingSlots(in: .manual).map { queue[$0] }
         // A new list is a new session; an earlier "clear queue" doesn't carry.
         autoQueuePausedForID = nil
-        // Where the clicked row sits in the list handed over.
-        //
-        // The last step used to be `?? 0`, and that one character was a bug with
-        // a very confusing face: when the song couldn't be found in its own
-        // list, the queue silently started at the top of the playlist instead —
-        // click the second song, hear the first, with nothing on screen to say
-        // why. Falling back to a *different song* is never the right answer to
-        // "I couldn't find the one you asked for", so the miss now carries the
-        // clicked track into the queue itself.
+        // Find the clicked row. Never fall back to a different song; if it's missing,
+        // the clicked track goes into the queue itself.
         var list  = tracks
         var start = 0
         if let index = startIndex, tracks.indices.contains(index) {
@@ -399,10 +294,7 @@ public final class QueueService: ObservableObject {
         } else if let index = tracks.firstIndex(where: { $0.id == track.id }) {
             start = index
         } else if let index = tracks.firstIndex(where: { Self.isSameSong($0, track) }) {
-            // Same song, different row id — a re-import, or a list rebuilt from
-            // the library while the click came from somewhere else. It's still
-            // the song that was asked for, and its neighbours are still the
-            // context the user is looking at.
+            // Same song under a different id (re-import, rebuilt list).
             start = index
         } else {
             list  = [track] + tracks
@@ -410,16 +302,11 @@ public final class QueueService: ObservableObject {
         }
 
         let ids = list.map { _ in UUID() }
-        // A new list is all context: whatever was queued by hand belonged to the
-        // queue this one replaces.
         origins         = Dictionary(uniqueKeysWithValues: ids.map { ($0, QueueOrigin.context) })
         contextOrderIDs = ids
         if shuffleEnabled, !list.isEmpty {
-            // Pressing play with shuffle already on shuffles the *whole* list,
-            // not just the part after the song that was clicked: that song
-            // leads and the rest of the playlist follows in a random order.
-            // (`reshuffleContext` only ever touches what is still upcoming,
-            // which is the right rule for the button but not for a new list.)
+            // Shuffle on: the clicked song leads and the whole rest of the list is
+            // shuffled, not just what's after it.
             var rest = Array(list.indices)
             rest.remove(at: start)
             rest.shuffle()
@@ -439,9 +326,7 @@ public final class QueueService: ObservableObject {
         repeatBoundaryID = repeatMode == .all ? entryIDs.last : nil
     }
 
-    /// "Clear added songs" — drop only what the user queued by hand, leaving the
-    /// list they are playing from alone. The mirror image of `clearUpcoming`,
-    /// which is the other half people mean by "clear the queue".
+    /// "Clear added songs": drops only the manual lane. Counterpart to `clearUpcoming`.
     public func clearManualQueue() {
         alignEntryIDs()
         for slot in upcomingSlots(in: .manual).reversed() {
@@ -451,20 +336,15 @@ public final class QueueService: ObservableObject {
         pruneToLiveRows()
     }
 
-    /// Whether there is anything for `clearManualQueue` to do — the button that
-    /// calls it hides itself otherwise.
     public var hasManualQueue: Bool { !upcomingSlots(in: .manual).isEmpty }
 
-    /// Whether two rows are the same song wearing different ids. Title and
-    /// credited artist only: everything else (album, duration, file) can
-    /// legitimately differ between two rows for one song.
+    /// Same song by title and artist; other fields can differ.
     private static func isSameSong(_ lhs: Track, _ rhs: Track) -> Bool {
         lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedSame
         && lhs.artistName.localizedCaseInsensitiveCompare(rhs.artistName) == .orderedSame
     }
 
-    /// Wipe the queue entirely — called when the current track is deleted from the library
-    /// so the mini-player returns to a "Nothing playing" state.
+    /// Empties the queue, used when the playing track is deleted from the library.
     public func clearCurrentTrack() {
         queue                = []
         entryIDs             = []
@@ -482,26 +362,15 @@ public final class QueueService: ObservableObject {
         self.source = source
     }
 
-    /// Mirror an online Discover session into the queue purely for display, so the
-    /// Queue panel can show its sections for online playback. Actual playback /
-    /// navigation is driven by OnlinePlaybackCoordinator (which downloads each
-    /// track on demand), not by this queue — so this does NOT touch shuffle,
-    /// repeat, or trigger any loading. `index` is the currently-playing position,
-    /// or -1 when nothing from the session is playing yet — a queue that has been
-    /// filled but not started is a real state, and clamping it to 0 would claim
-    /// the first song was playing.
-    ///
-    /// `lanes` arrives by position and is the coordinator's own record of which
-    /// of its slots the user queued by hand; the coordinator maintains the lane
-    /// ordering on its side, because during a session *it* is the queue.
+    /// Mirrors an online Discover session into the queue for display only.
+    /// OnlinePlaybackCoordinator drives playback, so this doesn't touch shuffle, repeat
+    /// or loading. `index` is -1 when nothing has started. `lanes` is the
+    /// coordinator's per-slot lane record.
     public func setOnlineDisplayQueue(_ tracks: [Track],
                                       currentIndex index: Int,
                                       lanes: [QueueOrigin] = [],
                                       source: QueueSource = .none) {
-        // Row ids are carried over where the same song is still there in the same
-        // order, so a push that only appends doesn't re-identify every row the
-        // panel is already showing (which would drop its animations and rebuild
-        // rows that never changed).
+        // Reuse row ids where the order lines up, so an append doesn't rebuild every row.
         let ids = mixMainActivity("queue/publish-online ▸ carry-ids") {
             carriedEntryIDs(for: tracks)
         }
@@ -515,20 +384,13 @@ public final class QueueService: ObservableObject {
                                          .map { ids[$0] }
         }
         currentIndex    = tracks.isEmpty || index < 0 ? -1 : min(index, tracks.count - 1)
-        // Named like every other list: a Discover session is an origin too, and
-        // an unnamed one is the only section in the panel that can't say where
-        // its songs came from.
         self.source     = source
     }
 
     // MARK: - Session Snapshot
 
-    /// The queue, small enough to write to defaults and rebuild on next launch.
-    ///
-    /// Track *ids* rather than tracks: a Track carries its artwork, and the whole
-    /// queue's worth of covers has no business in UserDefaults. Row ids are not
-    /// carried either — they only have to be unique within a session, and the
-    /// restore mints fresh ones.
+    /// A saveable queue for relaunch. Stores track ids, not tracks (no artwork in
+    /// UserDefaults). Row ids are minted fresh on restore.
     public struct Snapshot: Codable, Sendable {
         public var trackIDs:     [UUID]
         /// One lane per id, in the same order.
@@ -549,12 +411,8 @@ public final class QueueService: ObservableObject {
         )
     }
 
-    /// Rebuild a saved queue, dropping any song that is no longer in the library.
-    ///
-    /// `tracks` is the library keyed by id — the caller already has it, and a
-    /// lookup per row beats a linear search per row on a queue the size of All
-    /// Songs. Returns the track that was playing, or nil when the snapshot has
-    /// nothing left to restore.
+    /// Rebuilds a saved queue from the library (keyed by id), dropping deleted
+    /// songs. Returns the playing track, or nil if nothing is left.
     @discardableResult
     public func restore(_ snapshot: Snapshot, from tracks: [UUID: Track]) -> Track? {
         var restored: [Track]        = []
@@ -575,8 +433,7 @@ public final class QueueService: ObservableObject {
         entryIDs        = ids
         origins         = Dictionary(uniqueKeysWithValues: zip(ids, lanes))
         contextOrderIDs = ids
-        // A song that has since been deleted can be the one that was playing;
-        // the queue then starts at the top rather than claiming nothing is in it.
+        // If the playing song was deleted, start at the top.
         currentIndex    = index >= 0 ? index : 0
         if let id = snapshot.playlistID {
             source = .playlist(id: id, name: snapshot.sourceName ?? "")
@@ -589,9 +446,7 @@ public final class QueueService: ObservableObject {
         return currentTrack
     }
 
-    /// Restore a minimal single-track queue (used for resume-on-launch).
-    /// Sets up the queue with just `track` and points currentIndex at it,
-    /// without altering shuffle/repeat. PlaybackEngine drives the actual load.
+    /// Single-track queue for resume-on-launch. Leaves shuffle and repeat alone.
     public func restoreSession(track: Track) {
         let id          = UUID()
         origins         = [id: .context]
@@ -599,16 +454,16 @@ public final class QueueService: ObservableObject {
         queue           = [track]
         entryIDs        = [id]
         currentIndex    = 0
+        // A mirrored or restored song isn't playing from the old list.
+        source          = .none
     }
 
     // MARK: - Navigation
 
-    /// The track `advance()` *would* return, without mutating queue state.
-    /// Used by the crossfade engine to pre-load the upcoming track.
+    /// What `advance()` would return, without mutating. Used for crossfade preload.
     public func peekNext() -> Track? {
         guard !queue.isEmpty else { return nil }
-        // Songs queued before anything played: the first row is next, whatever
-        // the repeat mode (`.one` would otherwise read `queue[-1]`).
+        // Nothing started yet: the first row is next (avoids `queue[-1]` for `.one`).
         guard currentIndex >= 0 else { return queue[0] }
         switch repeatMode {
         case .one:
@@ -642,15 +497,12 @@ public final class QueueService: ObservableObject {
 
     /// Go back one step. Returns the track to play.
     public func previous() -> Track? {
-        // Nothing started yet ("Add to Queue" before pressing play) — there is
-        // no previous, and `queue[-1]` below would crash.
+        // Nothing started yet: no previous.
         guard !queue.isEmpty, currentIndex >= 0 else { return nil }
         if currentIndex > 0 {
             currentIndex -= 1
         } else if repeatMode == .all {
-            // Back from the first song lands on the last song of the *group*,
-            // not the last row in the queue — anything past the boundary isn't
-            // part of the loop.
+            // Wrap to the end of the repeat group, not the queue.
             currentIndex = repeatBoundaryIndex ?? queue.count - 1
         }
         return queue[currentIndex]
@@ -662,13 +514,8 @@ public final class QueueService: ObservableObject {
     /// the host's queue instead (returns true when it took them).
     public var manualRedirect: (([Track]) -> Bool)?
 
-    /// The first upcoming position that isn't in `lane` or an earlier one — i.e.
-    /// where a new row of `lane` has to go to keep the lanes in order.
-    ///
-    /// This is the whole reason "Add to Queue" now behaves: it used to append to
-    /// the very end of the list, so a song added while a 40-song playlist was
-    /// playing went *behind all forty*. It belongs at the end of the run of
-    /// songs the user has already queued, which is what this finds.
+    /// Where a new row of `lane` goes to keep lanes in order, e.g. "Add to Queue"
+    /// lands after the other manual rows, not behind the whole playlist.
     private func insertionIndex(for lane: QueueOrigin) -> Int {
         let start = max(currentIndex + 1, 0)
         var i = min(start, queue.count)
@@ -676,10 +523,7 @@ public final class QueueService: ObservableObject {
         return i
     }
 
-    /// Insert `track` at the front of the queue ("Play Next") — it plays before
-    /// anything else waiting, including songs queued earlier.
-    /// `manual` marks it as the user's own choice. Everything that reaches this
-    /// is a menu item, so it defaults to true.
+    /// "Play Next": plays before anything else waiting.
     public func insertNext(_ track: Track, manual: Bool = true) {
         insertNext(contentsOf: [track], manual: manual)
     }
@@ -691,17 +535,12 @@ public final class QueueService: ObservableObject {
                lane: manual ? .manual : .context)
     }
 
-    /// Add `track` to the queue ("Add to Queue") — after anything the user has
-    /// already queued, and before the rest of the playlist. A song already in the
-    /// queue is added again rather than ignored: queueing the same song twice is
-    /// a thing people mean to do.
+    /// "Add to Queue": after other manual rows, before the playlist. Duplicates allowed.
     public func append(_ track: Track, manual: Bool = true) {
         append(contentsOf: [track], manual: manual)
     }
 
-    /// Add a whole playlist or mix to the queue, as one change rather than one
-    /// per song — the list republishes once, so the Queue panel rebuilds once
-    /// instead of two dozen times.
+    /// Appends many as one change so the queue republishes once.
     public func append(contentsOf tracks: [Track], manual: Bool = true) {
         append(contentsOf: tracks, lane: manual ? .manual : .recommendation)
     }
@@ -713,8 +552,7 @@ public final class QueueService: ObservableObject {
         insert(tracks, at: insertionIndex(for: lane), lane: lane)
     }
 
-    /// Shared insertion: splice rows in at `index`, tag them, and keep the
-    /// context lane's canonical order in step.
+    /// Splices rows in at `index`, tags them, and updates the context order.
     private func insert(_ tracks: [Track], at index: Int, lane: QueueOrigin) {
         guard !tracks.isEmpty else { return }
         alignEntryIDs()
@@ -723,9 +561,7 @@ public final class QueueService: ObservableObject {
         queue.insert(contentsOf: tracks, at: at)
         entryIDs.insert(contentsOf: ids, at: at)
         for id in ids { origins[id] = lane }
-        // Context rows join the canonical order at the matching place, so that
-        // turning shuffle off later puts them back where they were added rather
-        // than at the end.
+        // Context rows join the canonical order in place, so unshuffling keeps them there.
         if lane == .context {
             let before = entryIDs[..<at].filter { (origins[$0] ?? .context) == .context }
             let cut    = before.isEmpty ? 0
@@ -734,36 +570,22 @@ public final class QueueService: ObservableObject {
         }
     }
 
-    /// Fill in cover art that arrived after the row was already queued.
-    ///
-    /// Queueing a whole mix deliberately does not wait on artwork downloads —
-    /// the songs have to land the instant the menu item is clicked — so the
-    /// covers arrive a moment later and patch themselves in here. Applied only
-    /// where the slot is still artwork-less, so a real cover is never
-    /// overwritten.
-    public func fillArtwork(_ data: Data, forTrackID id: UUID) {
-        for i in queue.indices where queue[i].id == id && queue[i].artworkData == nil {
+    /// Patches in artwork that arrived after queueing. Only fills empty slots unless `replacing`.
+    public func fillArtwork(_ data: Data, forTrackID id: UUID, replacing: Bool = false) {
+        for i in queue.indices where queue[i].id == id && (replacing || queue[i].artworkData == nil) {
             queue[i].artworkData = data
         }
     }
 
-    /// The song that was playing when the user last cleared the queue.
-    ///
-    /// Clearing is an instruction to stop lining songs up, so the auto-queue
-    /// has to hear it: it watches the queue shrink and would otherwise refill
-    /// the emptied list within the second, which reads as "clear queue does
-    /// nothing". It stays paused only for this song — playing anything else is
-    /// a new session, and suggestions come back on their own.
+    /// The song playing when the queue was last cleared. Autoplay stays paused for
+    /// it so the cleared queue isn't refilled; a new song resumes it.
     @Published public private(set) var autoQueuePausedForID: UUID? = nil
 
     /// Stop the auto-queue topping the list up again until something else plays.
     public func pauseAutoQueue() { autoQueuePausedForID = currentTrack?.id }
 
-    /// Drop everything after the current song ("Clear queue").
-    ///
-    /// Deliberately leaves the playing song alone: clearing the queue is not
-    /// "stop the music", in this app or in the one people are used to. With
-    /// nothing playing there is nothing to keep, so the whole list goes.
+    /// "Clear queue": drops everything after the playing song. With nothing
+    /// playing, clears it all.
     public func clearUpcoming() {
         pauseAutoQueue()
         alignEntryIDs()
@@ -776,11 +598,7 @@ public final class QueueService: ObservableObject {
         pruneToLiveRows()
     }
 
-    /// Remove a single row from the queue.
-    ///
-    /// Refuses the currently-playing row — removing what you are listening to is
-    /// a playback command, not a queue edit, and the callers (a row's "Remove
-    /// from queue") never offer it there.
+    /// Removes one row. Refuses the playing row.
     @discardableResult
     public func remove(at index: Int) -> Bool {
         alignEntryIDs()
@@ -792,16 +610,9 @@ public final class QueueService: ObservableObject {
         return true
     }
 
-    /// Reorder the queue, moving the item at `source` to `destination`.
-    /// `destination` uses SwiftUI `onMove` / `Array.move(fromOffsets:toOffset:)`
-    /// semantics: it's the insertion index *before* removal, and may equal
-    /// `queue.count` to move an item to the very end.
-    ///
-    /// Dragging a row across a lane boundary *retags* it: dropping a song into
-    /// the middle of the playlist run makes it part of the playlist run. The
-    /// alternative — keeping the old tag — would draw a "Next in queue" row
-    /// inside the "Next up: …" section, which is a list that contradicts its
-    /// own headings.
+    /// Moves a row, with SwiftUI `onMove` index semantics (`destination` is
+    /// pre-removal and may equal `queue.count`). Rows dragged across a lane boundary
+    /// take the new lane.
     public func moveQueueItem(from source: Int, to destination: Int) {
         guard queue.indices.contains(source) else { return }
         guard destination >= 0, destination <= queue.count else { return }
@@ -810,17 +621,12 @@ public final class QueueService: ObservableObject {
 
         alignEntryIDs()
 
-        // Identify the currently-playing *row* so we can re-find it after the
-        // move. By row and not by song: with the same song queued twice, the
-        // first copy is not necessarily the one playing.
+        // By row id, since a song may be queued twice.
         let playingID = entryID(at: currentIndex)
         let moved     = queue[source]
         let movedID   = entryIDs[source]
 
-        // Manual equivalent of Array.move(fromOffsets:toOffset:) — that helper
-        // lives in SwiftUI, which this service deliberately doesn't import.
-        // For a downward move the removal shifts later indices left by one, so
-        // the effective insertion index is destination - 1.
+        // `Array.move(fromOffsets:toOffset:)` is SwiftUI-only, so do it by hand.
         let target = destination > source ? destination - 1 : destination
         queue.remove(at: source)
         entryIDs.remove(at: source)
@@ -836,48 +642,30 @@ public final class QueueService: ObservableObject {
         rebuildContextOrder()
     }
 
-    /// Give a just-dropped row the lane of the place it landed in.
-    ///
-    /// Read off its neighbours rather than off pixel positions: the row above it
-    /// (skipping the playing row) is the lane it joined, except at the very top
-    /// of the upcoming list, where the row *below* decides — a song dropped
-    /// above everything is the next thing the user wants to hear, which is the
-    /// manual lane.
+    /// Gives a dropped row the lane of its neighbours: the row above (skipping the
+    /// playing row), or at the very top the row below.
     private func retagAfterMove(rowID: UUID) {
         guard let index = entryIDs.firstIndex(of: rowID) else { return }
         guard index > currentIndex else {
-            // Dropped into the history above the playing song. It plays only if
-            // the user scrubs back; treat it as context and leave it alone.
+            // Dropped above the playing song: treat as context.
             origins[rowID] = .context
             return
         }
         let above = index - 1 > currentIndex ? origin(at: index - 1) : nil
         let below = index + 1 < queue.count  ? origin(at: index + 1) : nil
-        // Between two rows of the same lane there is no ambiguity; at a boundary
-        // the row above wins, because a drop lands *after* what it was dropped
-        // onto. With nothing above, the lane below is the one being joined.
+        // At a boundary the row above wins; with nothing above, the one below.
         origins[rowID] = above ?? below ?? .manual
     }
 
     // MARK: - Shuffle
 
-    /// Shuffle acts on the context lane — or, when that lane is spent and the
-    /// queue is running on recommendations, on those.
-    ///
-    /// The user's own queued songs are not part of what shuffle means — they
-    /// asked for those, in that order — and the recommendations are already
-    /// arbitrary. So the playlist's rows are reordered *within the positions the
-    /// playlist already occupies*, and every other row stays exactly where it is.
+    /// Shuffles the context lane in place (or recommendations once context is
+    /// spent). Manual rows never move.
     public func toggleShuffle() {
         setShuffle(!shuffleEnabled)
     }
 
-    /// Put shuffle into a known state rather than flipping it.
-    ///
-    /// A list whose header says "always shuffle" has to *set* the mode when it
-    /// starts playing, not toggle it — toggling turns shuffle off for the list
-    /// that asked for it whenever the previous queue happened to be shuffled
-    /// already.
+    /// Sets shuffle explicitly. A list header's "always shuffle" must set it, not toggle.
     public func setShuffle(_ on: Bool) {
         guard on != shuffleEnabled else { return }
         shuffleEnabled = on
@@ -886,13 +674,11 @@ public final class QueueService: ObservableObject {
     }
 
     /// Reorder the upcoming context rows at random, in place.
-    private func reshuffleContext() {
+    func reshuffleContext() {
         reorderUpcoming(in: shuffleLane) { $0.shuffled() }
     }
 
-    /// The lane shuffle acts on: the chosen list, or — once it has run out and
-    /// only recommendations are left — those. Pressing shuffle on a station
-    /// that has nothing but recommendations ahead of it did nothing at all.
+    /// Context, or recommendations once only those are left.
     private var shuffleLane: QueueOrigin {
         upcomingSlots(in: .context).count > 1 ? .context : .recommendation
     }
@@ -907,12 +693,8 @@ public final class QueueService: ObservableObject {
 
     // MARK: - Smart shuffle
 
-    /// The rows a smart shuffle mixed into the list.
-    ///
-    /// They are tagged `.context`, not `.recommendation`: the lane order is what
-    /// lets them sit *between* the list's own songs, and a recommendation row can
-    /// only ever go after every context row there is. Tracked here so switching
-    /// smart shuffle — or shuffle — off takes back out exactly the rows it added.
+    /// Rows smart shuffle mixed in. Tagged `.context` so they sit between the
+    /// list's songs; tracked so turning it off removes exactly these.
     @Published public private(set) var smartRowIDs: Set<UUID> = []
 
     /// Mix `tracks` in, one after every `every` of the list's own upcoming rows.
@@ -938,9 +720,7 @@ public final class QueueService: ObservableObject {
     public func removeSmartRows() {
         guard !smartRowIDs.isEmpty else { return }
         alignEntryIDs()
-        // `remove(at:)` refuses the playing row, which is the behaviour wanted
-        // here too: a song you are listening to isn't yanked out from under you.
-        // It also prunes `smartRowIDs` as each row goes.
+        // `remove(at:)` skips the playing row and prunes `smartRowIDs`.
         for slot in entryIDs.indices.reversed() where smartRowIDs.contains(entryIDs[slot]) {
             remove(at: slot)
         }
@@ -953,8 +733,7 @@ public final class QueueService: ObservableObject {
         return (start..<queue.count).filter { origin(at: $0) == lane }
     }
 
-    /// Apply `transform` to the ids of the upcoming rows of `lane` and write
-    /// them back into the same slots, leaving every other row untouched.
+    /// Transforms the ids of `lane`'s upcoming rows and writes them back into the same slots.
     private func reorderUpcoming(in lane: QueueOrigin, _ transform: ([UUID]) -> [UUID]) {
         let slots = upcomingSlots(in: lane)
         guard slots.count > 1 else { return }
@@ -973,17 +752,13 @@ public final class QueueService: ObservableObject {
         setRepeat(repeatMode.next)
     }
 
-    /// Set the repeat mode, capturing (or clearing) the group boundary with it.
-    ///
-    /// Switching to "Repeat queue" fixes the group at whatever is queued right
-    /// then; every other mode has no group at all.
+    /// Sets repeat mode. `.all` fixes the group at what's queued now.
     public func setRepeat(_ mode: RepeatMode) {
         repeatMode = mode
         repeatBoundaryID = mode == .all ? entryIDs.last : nil
     }
 
-    /// Move the end of the repeating group to `rowID` — dragging the divider, or
-    /// a row's "repeat up to here". Ignores ids that aren't in the queue.
+    /// Moves the repeat group's end to `rowID`. Ignores unknown ids.
     public func setRepeatBoundary(rowID: UUID?) {
         guard repeatMode == .all else { return }
         guard let rowID else { repeatBoundaryID = entryIDs.last; return }
@@ -993,8 +768,7 @@ public final class QueueService: ObservableObject {
 
     // MARK: - Private
 
-    /// Drop lane tags and canonical-order entries for rows the queue no longer
-    /// holds — otherwise both grow without bound across a long session.
+    /// Drops tags and order entries for rows no longer queued.
     private func pruneToLiveRows() {
         let live = Set(entryIDs)
         origins  = origins.filter { live.contains($0.key) }
@@ -1002,22 +776,9 @@ public final class QueueService: ObservableObject {
         if !smartRowIDs.isSubset(of: live) { smartRowIDs.formIntersection(live) }
     }
 
-    /// Bring the canonical context order back in line with the queue after a
-    /// drag — which may have changed both the order *and*, via `retagAfterMove`,
-    /// which rows are in the context lane at all.
-    ///
-    /// With shuffle off the queue's order simply *is* the canonical order: the
-    /// user has just said what they want, and a remembered order that
-    /// contradicts it would undo their edit the moment shuffle was switched on
-    /// and off again.
-    ///
-    /// With shuffle on the remembered order has to survive — that is the order
-    /// switching shuffle off restores — so only its *membership* is reconciled.
-    /// Both halves matter: a row dragged out of the context lane that stayed in
-    /// this list would drag a song that is no longer part of the playlist back
-    /// into it, and a row dragged *into* the lane that was missing from this
-    /// list would rank last and jump to the end of the playlist the moment
-    /// shuffle was switched off.
+    /// Syncs the canonical context order after a drag. Shuffle off: queue order
+    /// becomes canonical. Shuffle on: keep the remembered order but fix membership,
+    /// adding rows that joined the lane and dropping ones that left.
     private func rebuildContextOrder() {
         pruneToLiveRows()
         let contextIDs = entryIDs.filter { (origins[$0] ?? .context) == .context }
@@ -1029,18 +790,14 @@ public final class QueueService: ObservableObject {
         contextOrderIDs.removeAll { !live.contains($0) }
         let known = Set(contextOrderIDs)
         for (i, id) in contextIDs.enumerated() where !known.contains(id) {
-            // Land it just behind whichever context row precedes it in the
-            // queue right now, rather than at the end.
+            // Insert after the preceding context row, not at the end.
             let after = contextIDs[..<i].last { contextOrderIDs.contains($0) }
             let at    = after.flatMap { contextOrderIDs.firstIndex(of: $0).map { $0 + 1 } } ?? 0
             contextOrderIDs.insert(id, at: min(at, contextOrderIDs.count))
         }
     }
 
-    /// Row ids for a wholesale replacement of the queue, reusing the id of the
-    /// row a song already had where the order lines up. Greedy and order-
-    /// preserving: an append keeps every existing id, an insert keeps the ids
-    /// before it, and anything genuinely new gets a fresh one.
+    /// Row ids for a replacement queue, reusing existing ids where order matches.
     private func carriedEntryIDs(for tracks: [Track]) -> [UUID] {
         var cursor = 0
         return tracks.map { track in
@@ -1053,10 +810,7 @@ public final class QueueService: ObservableObject {
         }
     }
 
-    /// Backstop for the one invariant everything here depends on: one row id per
-    /// row. Nothing should be able to break it — every mutation above maintains
-    /// both arrays — but a mismatch would silently misidentify every row after
-    /// the gap, so it is repaired rather than trusted.
+    /// Repairs `entryIDs` if it ever drifts from `queue`.
     private func alignEntryIDs() {
         guard entryIDs.count != queue.count else { return }
         if entryIDs.count > queue.count {
@@ -1066,8 +820,7 @@ public final class QueueService: ObservableObject {
         }
     }
 
-    /// `entryIDs`, repaired if it has somehow drifted — used by `entries`, which
-    /// is a read and so cannot mutate state.
+    /// Read-only version of `alignEntryIDs()`.
     private func alignedEntryIDs() -> [UUID] {
         guard entryIDs.count != queue.count else { return entryIDs }
         var ids = Array(entryIDs.prefix(queue.count))

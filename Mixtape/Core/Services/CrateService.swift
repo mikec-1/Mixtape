@@ -75,6 +75,15 @@ public final class CrateService: ObservableObject {
         return crate
     }
 
+    /// A crate someone sent. Opening the same one twice finds the first copy.
+    public func adopt(named name: String, items: [CrateItem]) -> Crate {
+        let ids = items.map(\.identity)
+        if let same = crates.first(where: { $0.name == name && $0.items.map(\.identity) == ids }) { return same }
+        let crate = create(named: name)
+        update(crate.id) { $0.items = items }
+        return self.crate(id: crate.id) ?? crate
+    }
+
     public func rename(_ id: UUID, to name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }

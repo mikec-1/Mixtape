@@ -1,36 +1,20 @@
-// LibraryChrome.swift
-// Mixtape — Features/Library
-//
-// The furniture around the library list: the header, the sort/layout bar, and
-// the grid cell that the list rows turn into.
-//
-// Split out of `LibraryView` because that file is the *content* of four
-// sections and was already long. Everything here is chrome — it is the same on
-// every section, and none of it knows what it is sitting above.
-//
-// Why a hand-built header instead of `navigationTitle`
-// ----------------------------------------------------
-// The large-title bar gives a title and a toolbar, and that is all. "Your
-// Library" wants the avatar on the same line as the title, at title weight,
-// with the search and add controls balanced against it — and it wants the
-// filter pills to scroll away underneath rather than collapse the title into a
-// small one. That is a header, not a navigation bar, so it is drawn as one and
-// the navigation bar is hidden.
+// The chrome around the library list: header, sort/layout bar and grid cell.
+// Same on every section.
+// The header is hand-built rather than `navigationTitle` so the avatar sits on
+// the title line and the filter pills scroll away without collapsing the title.
 
 import SwiftUI
 
 // MARK: - Header
 
-/// Avatar, title, search, add — the top line of the library.
+/// Avatar, title, search, add.
 struct LibraryHeader: View {
 
     @Binding var isSearching: Bool
     @Binding var searchText:  String
     let onAdd: () -> Void
 
-    /// So the field takes the keyboard the moment the magnifying glass is
-    /// tapped. A search box that appears and then waits to be tapped again is a
-    /// second tap for no reason.
+    /// Focuses the field as soon as search opens.
     @FocusState private var searchFocused: Bool
 
     var body: some View {
@@ -47,9 +31,7 @@ struct LibraryHeader: View {
                 Button {
                     withMixAnimation(.easeInOut(duration: 0.2)) {
                         isSearching.toggle()
-                        // Closing the field clears it. Leaving a query behind an
-                        // invisible control is how a library ends up looking
-                        // half-empty with nothing on screen to explain it.
+                        // Closing search clears it, so the list never looks filtered with no visible query.
                         if !isSearching { searchText = "" }
                     }
                     if isSearching { searchFocused = true }
@@ -59,6 +41,16 @@ struct LibraryHeader: View {
                         .foregroundStyle(Color.mixTextPrimary)
                 }
                 .accessibilityLabel(isSearching ? "Close search" : "Search library")
+
+                InboxButton()
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Color.mixTextPrimary)
+                    .buttonStyle(.plain)
+
+                MessagesButton()
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Color.mixTextPrimary)
+                    .buttonStyle(.plain)
 
                 Button(action: onAdd) {
                     Image(systemName: "plus")
@@ -119,29 +111,22 @@ private struct LibrarySearchField: View {
 
 // MARK: - Sort / layout bar
 
-/// The "Recents ⌄" control on the left and the grid/list toggle on the right.
-///
-/// A menu rather than a segmented control: the sort is a setting you change
-/// rarely and read constantly, so the row's job is mostly to *say* what the
-/// order currently is. The label is the current value for that reason.
+/// "Recents" sort menu on the left, grid/list toggle on the right. The label
+/// shows the current order.
 struct LibrarySortBar: View {
 
     @Binding var order:  LibrarySortOrder
     @Binding var layout: LibraryLayout
     /// Hidden on sections that have no meaningful second layout.
     var showsLayoutToggle: Bool = true
-    /// Drives the list's drag-to-reorder mode. Absent — or non-nil but with
-    /// `canArrange` false — leaves the control out entirely, because dragging
-    /// only means something in the custom order.
+    /// Drives drag-to-reorder. Nil, or `canArrange` false, hides the control.
     var arranging: Binding<Bool>? = nil
     var canArrange: Bool = false
 
     var body: some View {
         HStack {
             Menu {
-                // Flat: a titled picker inside a menu renders as a "Sort by ▸"
-                // submenu, which puts every order two clicks deep to name the
-                // one thing this menu could be offering. See `MacSidebarView`.
+                // Unlabelled so the options aren't nested in a "Sort by" submenu. See `MacSidebarView`.
                 Picker("", selection: $order) {
                     ForEach(LibrarySortOrder.allCases) { option in
                         Text(option.rawValue).tag(option)
@@ -196,10 +181,8 @@ struct LibrarySortBar: View {
 
 // MARK: - Playlist descriptor
 
-/// The grey line under a playlist's name — "Playlist • mike", "Mix • Mixtape".
-///
-/// One place rather than two, because the row and the grid cell say the same
-/// thing about the same playlist and only differ in where they put it.
+/// The grey line under a playlist name ("Playlist • mike", "Mix • Mixtape"),
+/// shared by row and grid cell.
 enum PlaylistDescriptor {
 
     static func kind(_ playlist: Playlist) -> String {
@@ -212,9 +195,7 @@ enum PlaylistDescriptor {
         }
     }
 
-    /// "Playlist • mike". The owner is dropped rather than guessed when the
-    /// playlist has no byline — an unattributed playlist is the user's own, and
-    /// naming them to themselves on every row is noise.
+    /// "Playlist • mike". No owner for unattributed playlists (the user's own).
     static func line(_ playlist: Playlist) -> String {
         guard let owner = playlist.ownerName, !owner.isEmpty else { return kind(playlist) }
         return "\(kind(playlist)) • \(owner)"
@@ -251,7 +232,7 @@ struct PlaylistGridCell: View {
                         .foregroundStyle(Color.mixPrimary)
                         .rotationEffect(.degrees(45))
                 }
-                DownloadStateBadge(ids: playlist.trackIDs, downloads: downloads, size: 10)
+                DownloadStateBadge(ids: playlist.trackIDs, downloads: downloads, size: 10, showsProgress: downloads.isPlaylistOffline(playlist.id))
                 Text(PlaylistDescriptor.line(playlist))
                     .font(.mixCaption)
                     .foregroundStyle(Color.mixTextSecondary)

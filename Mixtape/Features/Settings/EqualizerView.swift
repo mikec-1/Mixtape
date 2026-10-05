@@ -1,13 +1,6 @@
-// EqualizerView.swift
-// Mixtape — Features/Settings
-//
-// Reusable cross-platform graphic-EQ UI: an enable toggle, a preset picker,
-// and a vertical gain slider per band. Binds live to AudioEqualizer so moving
-// a slider is heard immediately and persists across relaunches.
-//
-// The vertical sliders are drawn with a custom gesture-driven control rather
-// than a rotated `Slider`, so layout and hit-testing behave identically on
-// iOS and macOS.
+// Cross-platform graphic EQ: enable toggle, preset picker and a vertical slider per band.
+// Binds live to AudioEqualizer. The sliders are a custom drag control rather than a rotated
+// `Slider`, so layout and hit-testing match on iOS and macOS.
 
 import SwiftUI
 
@@ -15,9 +8,8 @@ public struct EqualizerView: View {
 
     @ObservedObject private var equalizer: AudioEqualizer
 
-    /// `true` when something else already supplies a title and margins — the
-    /// `MixSheet` on iOS. Inline in macOS Settings it's a card and draws its own
-    /// heading, padding and background.
+    /// True inside `MixSheet` on iOS, which supplies the title and margins.
+    /// Inline in macOS Settings it's a card with its own heading and background.
     private let isEmbedded: Bool
 
     public init(equalizer: AudioEqualizer, isEmbedded: Bool = false) {
@@ -39,9 +31,7 @@ public struct EqualizerView: View {
 
     // MARK: - Header (title + enable toggle)
 
-    /// Embedded, the sheet's own title says "Equalizer" — repeating it here is
-    /// what made these sheets read as two headers stacked on each other. The
-    /// switch still needs a label, so it gets the one it's actually for.
+    /// Embedded, the sheet already says "Equalizer", so the switch gets a plain label.
     private var header: some View {
         HStack {
             if isEmbedded {
@@ -159,18 +149,15 @@ public struct EqualizerView: View {
 
 // MARK: - Custom vertical band slider
 
-/// A vertical, gesture-driven slider with a centre (0 dB) reference line.
-/// Cross-platform: relies only on DragGesture and GeometryReader.
+/// Vertical drag slider with a 0 dB centre line. Only DragGesture and GeometryReader, so it works on both platforms.
 private struct EQBandSlider: View {
     @Binding var value: Float
     let range: ClosedRange<Float>
     let enabled: Bool
-    /// Spoken name of the band, e.g. "1k hertz". The visible label under the
-    /// slider is a two-character abbreviation, which VoiceOver reads as noise.
+    /// Spoken band name, e.g. "1k hertz". The visible label is a two-letter abbreviation.
     let label: String
 
-    /// One press of an increment/decrement gesture, in dB. Matches the
-    /// granularity the readout shows, so every step changes what is spoken.
+    /// One accessibility increment in dB, matching the readout.
     private let step: Float = 1
 
     var body: some View {
@@ -196,10 +183,7 @@ private struct EQBandSlider: View {
                 // Active fill between centre and knob
                 fillSegment(height: height, knobY: knobY)
 
-                // Knob
-                // 20pt rather than 16: the drag area is the whole column, but
-                // the knob is also the only thing saying where the value sits,
-                // and 16pt of it was under the size a fingertip can place.
+                // Knob. 20pt so a fingertip can place it.
                 Circle()
                     .fill(enabled ? Color.mixPrimary : Color.mixTextTertiary)
                     .frame(width: 20, height: 20)
@@ -219,9 +203,7 @@ private struct EQBandSlider: View {
             .allowsHitTesting(enabled)
         }
         .frame(maxWidth: .infinity)
-        // A gesture-driven shape is invisible to VoiceOver on its own: without
-        // this the equaliser was ten unlabelled blanks with no way to change a
-        // value. `.adjustable` gives it the swipe-up/down that a real Slider has.
+        // Gives VoiceOver a label and the swipe up/down of a real Slider.
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(label)
         .accessibilityValue(gainDescription)

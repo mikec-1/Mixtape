@@ -1,11 +1,5 @@
-// SupabaseAuthService.swift
-// Mixtape — Core/Services
-//
-// Auth service backed by Supabase.
-//
-// Session persistence is handled automatically by the supabase-swift SDK:
-// it stores the refresh token in the Keychain and silently refreshes JWTs.
-// This service observes the authStateChanges stream.
+// Auth service backed by Supabase. The SDK keeps the refresh token in the Keychain
+// and refreshes JWTs; this observes authStateChanges.
 
 import Foundation
 import Supabase
@@ -25,53 +19,46 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
 
     @Published private(set) public var authState: AuthState = .loading {
         didSet {
-            // Scope per-account EQ to the signed-in user so settings don't leak
-            // between accounts on a shared Mac.
+            // Scope EQ to the signed-in user so settings don't leak between accounts.
             if case .authenticated(let user) = authState {
                 AudioEqualizer.currentUserID = user.id.uuidString
-                // The account's playlist order travels with it, so a phone and
-                // a Mac signed into the same account read the same list the
-                // same way. See `PlaylistSortSyncService`.
+                // Account-wide preferences follow the user across devices.
                 PlaylistSortSyncService.shared.adoptRemote(user.playlistSortOrder)
                 PlaylistTrackSortService.shared.adoptRemote(user.playlistTrackSorts)
                 SpotifyImportLedger.shared?.adoptRemote(user.spotifyImports)
                 SavedAlbumsService.shared.adoptRemote(user.savedAlbums)
                 CrateService.shared.adoptRemote(user.crates)
+                ThemeManager.shared.adoptRemoteBackdrop(user.backdrop)
                 SpotifyFollowService.shared?.adoptRemote(user.spotifyLinks)
+                PlaylistMetadataService.shared.adoptRemoteShowsAllSongs(user.showsAllSongs)
+                PlaylistMetadataService.shared.adoptRemoteImportDestination(user.importsTo)
+                Analytics.adoptRemote(user.analyticsOptIn)
             } else {
                 AudioEqualizer.currentUserID = nil
             }
         }
     }
 
-    /// True while the app is running on a cached session because the token
-    /// could not be refreshed. The user is *signed in* — there is a refresh
-    /// token in the Keychain and music on the disk — there is simply no server
-    /// to confirm it with. Conflating that with "signed out" is what used to
-    /// bounce a plane passenger to the login screen. See `enterOffline`.
+    /// Running on a cached session because the token couldn't be refreshed. Still signed in,
+    /// just no server to confirm with. See `enterOffline`.
     @Published private(set) public var isOffline: Bool = false
 
-    /// True when the user has clicked a password-reset link and must set a new password
-    /// before being allowed into the main app. The Supabase session is alive (for the
-    /// updatePassword call) but authState is kept .unauthenticated until the update completes.
+    /// Set by a password-reset link. The session is live for updatePassword, but authState
+    /// stays .unauthenticated until the new password is set.
     @Published public private(set) var isAwaitingPasswordReset: Bool = false
 
-    /// True after signUp() when Supabase requires email confirmation.
-    /// Cleared automatically when the confirmation deep link fires.
+    /// Set after signUp() when email confirmation is required. Cleared by the confirmation link.
     @Published public private(set) var pendingEmailConfirmation: Bool = false
 
-    /// True after a *social* sign-in (Apple / Google) when the user still has the
-    /// auto-generated `user_xxxxxxxx` username assigned by the DB trigger and should
-    /// be invited (once, non-blocking) to pick a real one. Observed by RootView.
+    /// Set after a social sign-in while the user still has the trigger's `user_xxxxxxxx`
+    /// username. RootView shows a one-time, skippable prompt.
     @Published public private(set) var pendingUsernameSelection: Bool = false
 
-    /// A suggested username derived from the provider profile (e.g. Apple full name),
-    /// used to pre-fill the username prompt. nil when nothing usable was provided.
+    /// Username suggestion from the provider profile, or nil.
     public private(set) var suggestedUsername: String?
     /// The provider's name as given ("Mike Smith"), to pre-fill the display name.
     public private(set) var suggestedDisplayName: String?
-    /// The prompt is only asking for a display name: accounts from before
-    /// display names existed, which already have a real username.
+    /// Asks only for a display name (older accounts that already have a real username).
     @Published public private(set) var promptNameOnly = false
     private var checkedDisplayName = false
 
@@ -90,11 +77,7 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
 
     // MARK: - Private
 
-    // Held as a provider rather than a value: building the SupabaseClient costs
-    // ~1.3 s and, taken eagerly in `AppDependencies.init`, that whole second sat
-    // on the main thread before the first frame. `@autoclosure` keeps every call
-    // site written exactly as before while moving the work to first real use —
-    // which is a network call, and so already off the launch path.
+    // Building the client is slow, so it's created on first use instead of at launch.
     private let clientProvider: () -> SupabaseClient
     private lazy var client: SupabaseClient = clientProvider()
     private var listenerTask: Task<Void, Never>?
@@ -130,16 +113,13 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
         switch event {
 
         case .passwordRecovery:
-            // User clicked a password-reset link.
-            // Store the session token so updatePassword() can authenticate, but
-            // keep authState as .unauthenticated so RootView doesn't enter the app.
+            // Keep the session for updatePassword() but stay .unauthenticated so RootView doesn't enter the app.
             accessToken = session?.accessToken
             isAwaitingPasswordReset = true
             authState = .unauthenticated
 
         case .signedOut:
-            // The one event that really means signed out. Everything else that
-            // arrives without a session is "couldn't ask", not "no".
+            // The only event that means signed out. A missing session elsewhere means "couldn't ask".
             Self.clearCachedUser()
             accessToken = nil
             isOffline = false
@@ -153,14 +133,13 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
             suggestedDisplayName = nil
 
         default:
-            // .initialSession, .signedIn, .tokenRefreshed, .userUpdated, .mfaChallengeVerified …
             if let session {
                 accessToken = session.accessToken
                 isOffline = false
                 cache(makeUser(from: session))
                 pendingEmailConfirmation = false        // confirmed (or confirmation not required)
                 if event == .userUpdated {
-                    // Password update complete — clear the gate and admit the user.
+                    // Password updated, admit the user.
                     isAwaitingPasswordReset = false
                     authState = .authenticated(makeUser(from: session))
                 } else if !isAwaitingPasswordReset {
@@ -169,9 +148,7 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
                         Task { await checkDisplayNamePrompt() }
                     }
                 }
-                // If isAwaitingPasswordReset is still true (a follow-on token event fired
-                // after .passwordRecovery), we deliberately do NOT authenticate —
-                // the user must set a new password before entering the app.
+                // A token event after .passwordRecovery must not authenticate before the password is set.
             } else if !isAwaitingPasswordReset {
                 // Don't wipe auth state while waiting for password update
                 accessToken = nil
@@ -191,8 +168,7 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
 
     private static let cachedUserKey = "mix.cachedUser"
     private static let lastOnlineAuthKey = "mix.lastOnlineAuth"
-    /// How long a device may run on a cached session before it has to prove
-    /// itself online again. The user asked for a week.
+    /// How long a device may run on a cached session before going back online.
     private static let offlineGrace: TimeInterval = 7 * 24 * 60 * 60
 
     private func cache(_ user: AppUser) {
@@ -206,9 +182,8 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
         UserDefaults.standard.removeObject(forKey: lastOnlineAuthKey)
     }
 
-    /// Enters the app on the last known user when the token could not be
-    /// refreshed. Returns false — leaving the caller to show the login screen —
-    /// when there is no cached user or the week is up.
+    /// Enters the app on the last known user when the token couldn't be refreshed.
+    /// False (show login) when there's no cached user or the grace period is up.
     @discardableResult
     private func enterOffline() -> Bool {
         guard !isAwaitingPasswordReset,
@@ -222,10 +197,8 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
         return true
     }
 
-    /// Asks the server again. Called when the network comes back: the SDK's own
-    /// refresh timer was set (or cancelled) while there was nothing to talk to,
-    /// so it is not guaranteed to try on its own. A success arrives as a normal
-    /// `.tokenRefreshed` event and clears `isOffline` through `handleEvent`.
+    /// Called when the network returns; the SDK's refresh timer may not retry on its own.
+    /// Success arrives as `.tokenRefreshed` and clears `isOffline`.
     public func retryOnlineAuth() async {
         guard isOffline else { return }
         _ = try? await client.auth.refreshSession()
@@ -233,8 +206,7 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
 
     // MARK: - Session Restore
 
-    /// Waits for the SDK to fire its initial auth event (max 5 s),
-    /// then returns. authState will be .authenticated or .unauthenticated.
+    /// Waits up to 5s for the SDK's initial auth event.
     public func restoreSession() async {
         guard !didReceiveInitialEvent else { return }
 
@@ -268,27 +240,9 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
 
     // MARK: Social Sign-In
 
-    /// Signs in with Google.
-    ///
-    /// This drives the flow through the SDK's `launchFlow` overload rather than
-    /// its `ASWebAuthenticationSession` convenience, because we need two things
-    /// that overload doesn't give us: our own presentation anchor, and sight of
-    /// the callback URL before it is exchanged.
-    ///
-    /// The anchor matters because the SDK's fallback is a bare
-    /// `ASPresentationAnchor()` — an `NSWindow` on macOS, which works, and on
-    /// iOS a `UIWindow` with no scene attached, which can present nothing.
-    ///
-    /// The session is deliberately *not* ephemeral. An ephemeral one shares no
-    /// cookies with the browser, which on iOS means Google's account chooser is
-    /// always empty and on macOS means the system opens a private window rather
-    /// than the browser the user already has signed in. It was ephemeral once,
-    /// to guard against a replayed `mixtape://auth-callback?code=…`, but the two
-    /// real causes of `flow_state_not_found` were both found and fixed at the
-    /// source since: `RootView.onOpenURL` redeeming the same code a second time
-    /// (it now ignores `auth-callback`), and a stray `#` glued onto the code by
-    /// a GoTrue Site-URL fallback (`cleanedCallback(_:)`). So the flag was only
-    /// costing the account chooser. `SpotifyAuth` has always used `false` here.
+    /// Signs in with Google via `launchFlow`, to supply our own presentation anchor (the SDK's
+    /// default can't present on iOS) and clean the callback before it's exchanged.
+    /// The session isn't ephemeral so Google's account chooser and the signed-in browser are used.
     public func signInWithGoogle() async throws {
         do {
             let anchor = OAuthPresentationAnchorProvider()
@@ -318,15 +272,13 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
             await reconcileProfileAvatar()
             await checkUsernamePrompt()
         } catch {
-            MixLog.auth.error("❌ Google sign-in failed: \(error) — \(error.localizedDescription)")
+            MixLog.auth.error("Google sign-in failed: \(error), \(error.localizedDescription)")
             throw map(error)
         }
     }
 
-    /// Google overwrites `user_metadata.avatar_url` with the Google photo on each
-    /// sign-in, which would shadow a custom avatar the user uploaded. The custom
-    /// avatar lives in `profiles.avatar_url` (untouched by OAuth), so if one is
-    /// set we re-assert it into auth metadata. Best-effort; failures are ignored.
+    /// Google overwrites `avatar_url` in auth metadata on each sign-in. If the user uploaded
+    /// one to `profiles.avatar_url`, write it back. Best-effort.
     private func reconcileProfileAvatar() async {
         guard let userID = client.auth.currentUser?.id,
               let custom = try? await fetchProfileAvatarURL(userID: userID),
@@ -354,21 +306,15 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
         return rows.first?.avatar_url
     }
 
-    /// After a social sign-in, raises `pendingUsernameSelection` unless the user
-    /// has already completed the prompt once (tracked by a `username_chosen` flag
-    /// in their auth metadata). Deterministic — doesn't depend on guessing the
-    /// trigger-assigned username. Best-effort; failures are silently ignored.
+    /// After a social sign-in, raises `pendingUsernameSelection` unless `username_chosen`
+    /// is set in auth metadata. Best-effort.
     private func checkUsernamePrompt() async {
         let metadata = client.auth.currentUser?.userMetadata ?? [:]
 
-        // Already chosen (or explicitly skipped) — don't nag again.
         if case .bool(true)? = metadata["username_chosen"] { return }
 
-        // The metadata flag is only written on the social path. An account that
-        // signed up by email (then later signs in with Google to the SAME
-        // account) already has a real username in `profiles` but no flag — so
-        // treat any non-auto-generated username as already chosen and skip the
-        // prompt (persisting the flag so we don't re-query next time).
+        // Email accounts later signed in with Google have a real username but no flag.
+        // Treat those as chosen and write the flag.
         if let userID = client.auth.currentUser?.id,
            let existing = try? await fetchProfileUsername(userID: userID),
            !isAutoGeneratedUsername(existing) {
@@ -397,9 +343,8 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
         pendingUsernameSelection = true
     }
 
-    /// Once per account: asks someone who has a real username but never set a
-    /// display name for one, pre-filled with the username. Skipping or saving
-    /// writes `display_name_chosen`, so it never asks again.
+    /// Once per account: asks users with a username but no display name for one.
+    /// Saving or skipping writes `display_name_chosen`.
     private func checkDisplayNamePrompt() async {
         guard !checkedDisplayName, !pendingUsernameSelection,
               let userID = client.auth.currentUser?.id else { return }
@@ -432,16 +377,12 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
         return rows.first?.username
     }
 
-    /// True for the DB trigger's placeholder username (`user_` + 8 hex chars),
-    /// i.e. a username the user has NOT chosen yet.
+    /// The trigger's placeholder username (`user_` + 8 hex chars).
     private func isAutoGeneratedUsername(_ name: String) -> Bool {
         name.range(of: "^user_[0-9a-f]{8}$", options: [.regularExpression, .caseInsensitive]) != nil
     }
 
-    /// Completes a social sign-up: sets the chosen username and, optionally, a
-    /// password so the user can also sign in with email next time. The account
-    /// already has a verified email (from Google), so attaching a password simply
-    /// adds an email/password credential to the same account. Then clears the prompt.
+    /// Finishes a social sign-up: sets the username and optionally a password for email sign-in.
     public func chooseUsername(_ name: String, displayName: String = "", password: String? = nil) async throws {
         try await updateUsername(name)
         if !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -467,8 +408,7 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
         suggestedDisplayName = nil
     }
 
-    /// Dismisses the username prompt (Skip / swipe-down) and remembers the choice so
-    /// it isn't shown again, keeping the auto-assigned username.
+    /// Skips the username prompt for good, keeping the auto-assigned username.
     public func dismissUsernamePrompt() {
         Task { try? await client.auth.update(user: UserAttributes(data: [
             "username_chosen": .bool(true), "display_name_chosen": .bool(true)
@@ -502,8 +442,7 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
         }
     }
 
-    /// Signs up a new user.
-    /// Returns `true` when Supabase requires email confirmation before the session is active.
+    /// Returns `true` when email confirmation is required before the session is active.
     @discardableResult
     public func signUp(email: String, password: String, username: String, displayName: String) async throws -> Bool {
         let cleanUsername = username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -518,8 +457,7 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
                     "display_name": AnyJSON.string(name.isEmpty ? cleanUsername : name)
                 ]
             )
-            // session == nil means Supabase has "Email Confirmations" enabled
-            // and the user must click the link before they're signed in.
+            // No session means email confirmation is enabled.
             let requiresConfirmation = (response.session == nil)
             if requiresConfirmation {
                 pendingEmailConfirmation = true
@@ -530,9 +468,7 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
         }
     }
 
-    /// This device only unless `everywhere`. The SDK's own default is global,
-    /// which made signing out here — or revoking one device from the web —
-    /// sign out every device on the account.
+    /// This device only unless `everywhere`. The SDK defaults to global.
     public func signOut(everywhere: Bool = false) async throws {
         do {
             try await client.auth.signOut(scope: everywhere ? .global : .local)
@@ -565,8 +501,7 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
         }
     }
 
-    /// Updates the current user's password. Requires a live recovery session
-    /// (obtained by handling a password-reset deep link).
+    /// Needs a live recovery session from a password-reset link.
     public func updatePassword(_ newPassword: String) async throws {
         do {
             try await client.auth.update(user: UserAttributes(password: newPassword))
@@ -578,8 +513,7 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
 
     // MARK: - Account Management
 
-    /// Updates the current user's email. Supabase sends a confirmation link to
-    /// the new (and possibly old) address; the change takes effect on confirm.
+    /// Supabase emails a confirmation link; the change applies on confirm.
     public func updateEmail(_ newEmail: String) async throws {
         let cleaned = newEmail.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
@@ -589,8 +523,7 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
         }
     }
 
-    /// Updates the current user's username in both the `profiles` table and the
-    /// auth user metadata. Throws `.usernameTaken` if another account owns it.
+    /// Updates the username in `profiles` and auth metadata. Throws `.usernameTaken` if it's in use.
     public func updateUsername(_ newUsername: String) async throws {
         let cleaned = newUsername.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
 
@@ -613,9 +546,7 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
                 .eq("id", value: userID)
                 .execute()
 
-            // Mirror the change into auth metadata; the resulting .userUpdated
-            // event refreshes authState. A display name that was only ever a
-            // copy of the old handle moves with it; a chosen one stays put.
+            // A display name that was just a copy of the old handle moves with it.
             var data: [String: AnyJSON] = ["username": .string(cleaned)]
             if currentUser?.displayName.lowercased() == currentUsername {
                 data["display_name"] = .string(cleaned)
@@ -650,9 +581,7 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
 
     private static let avatarsBucket = "avatars"
 
-    /// Uploads image data to `avatars/<userID>/avatar.<ext>` (upsert) and returns
-    /// the bucket's public URL. A cache-busting query item is appended so clients
-    /// pick up a freshly-replaced avatar instead of a stale cached copy.
+    /// Uploads to `avatars/<userID>/avatar.<ext>` and returns the public URL with a cache-buster.
     public func uploadAvatar(_ data: Data, fileExtension: String) async throws -> URL {
         guard let userID = currentUser?.id else { throw AuthError.sessionExpired }
 
@@ -681,8 +610,7 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
         }
     }
 
-    /// Persists the avatar URL onto the `profiles` row and into auth metadata.
-    /// Passing nil clears the avatar. The `.userUpdated` event refreshes authState.
+    /// Saves the avatar URL to `profiles` and auth metadata. Nil clears it.
     public func updateAvatarURL(_ url: URL?) async throws {
         guard let userID = currentUser?.id else { throw AuthError.sessionExpired }
 
@@ -701,10 +629,7 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
         }
     }
 
-    /// Stores the chosen playlist sort order on the account. Silent on failure
-    /// by design: the local choice has already taken effect, and a sort order
-    /// is not worth an error dialog over a flaky network — the next change (or
-    /// the next sign-in on this device) pushes it again.
+    /// Saves the playlist sort order on the account. Silent on failure; the next change pushes again.
     public func updatePlaylistSortOrder(_ raw: String) async {
         guard currentUser != nil else { return }
         _ = try? await client.auth.update(user: UserAttributes(data: [
@@ -712,8 +637,7 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
         ]))
     }
 
-    /// Stores the per-playlist track sorts on the account. Silent on failure
-    /// for the same reason as `updatePlaylistSortOrder`.
+    /// Per-playlist track sorts. Silent on failure.
     public func updatePlaylistTrackSorts(_ raw: String) async {
         guard currentUser != nil else { return }
         _ = try? await client.auth.update(user: UserAttributes(data: [
@@ -721,8 +645,7 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
         ]))
     }
 
-    /// Stores the Spotify import ledger on the account. Silent on failure for
-    /// the same reason as `updatePlaylistSortOrder`.
+    /// Spotify import ledger. Silent on failure.
     public func updateSpotifyImports(_ raw: String) async {
         guard currentUser != nil else { return }
         _ = try? await client.auth.update(user: UserAttributes(data: [
@@ -738,6 +661,14 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
         ]))
     }
 
+    /// Background colour. Silent on failure.
+    public func updateBackdrop(_ raw: String) async {
+        guard currentUser != nil else { return }
+        _ = try? await client.auth.update(user: UserAttributes(data: [
+            "backdrop": .string(raw)
+        ]))
+    }
+
     /// Crates. Silent on failure.
     public func updateCrates(_ raw: String) async {
         guard currentUser != nil else { return }
@@ -746,8 +677,31 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
         ]))
     }
 
-    /// Stores the Spotify playlist links on the account. Silent on failure,
-    /// like the rest.
+    /// Show All Songs. Silent on failure.
+    public func updateShowsAllSongs(_ on: Bool) async {
+        guard currentUser != nil else { return }
+        _ = try? await client.auth.update(user: UserAttributes(data: [
+            "show_all_songs": .bool(on)
+        ]))
+    }
+
+    /// Where imported songs go. Silent on failure.
+    public func updateImportDestination(_ raw: String) async {
+        guard currentUser != nil else { return }
+        _ = try? await client.auth.update(user: UserAttributes(data: [
+            "imports_to": .string(raw)
+        ]))
+    }
+
+    /// Help Improve Mixtape. Silent on failure.
+    public func updateAnalyticsOptIn(_ on: Bool) async {
+        guard currentUser != nil else { return }
+        _ = try? await client.auth.update(user: UserAttributes(data: [
+            "analytics_opt_in": .bool(on)
+        ]))
+    }
+
+    /// Spotify playlist links. Silent on failure.
     public func updateSpotifyLinks(_ raw: String) async {
         guard currentUser != nil else { return }
         _ = try? await client.auth.update(user: UserAttributes(data: [
@@ -766,15 +720,14 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
 
     // MARK: - Discovery
 
-    /// Prefix, case-insensitive username search against the (publicly-readable)
-    /// `profiles` table. Excludes the current user from the results.
+    /// Case-insensitive username prefix search on `profiles`, excluding the current user.
     public func searchUsers(matching query: String, limit: Int = 25) async throws -> [UserProfile] {
         // Commas and brackets are PostgREST's own syntax inside `or`.
         let cleaned = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             .filter { !",()\"".contains($0) }
         guard !cleaned.isEmpty else { return [] }
 
-        // Escape LIKE wildcards so a literal % or _ in the query isn't treated as a pattern.
+        // Escape LIKE wildcards.
         let escaped = cleaned
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "%", with: "\\%")
@@ -810,8 +763,7 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
         }
     }
 
-    /// Changes the password after re-authenticating with the current password.
-    /// Separate from `updatePassword(_:)` (the reset-link recovery flow).
+    /// Re-authenticates first. `updatePassword(_:)` is the reset-link flow.
     public func changePassword(currentPassword: String, newPassword: String) async throws {
         guard newPassword.count >= 8 else { throw AuthError.weakPassword }
 
@@ -828,9 +780,8 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
         }
     }
 
-    /// Handles a deep link URL opened by the OS (email confirmation or password reset).
-    /// Calls supabase.auth.session(from:) which exchanges the URL tokens, fires an
-    /// authStateChanges event, and updates authState automatically.
+    /// Handles an email confirmation or password-reset deep link. The resulting
+    /// authStateChanges event updates authState.
     public func handleDeepLink(_ url: URL) async {
         do {
             try await client.auth.session(from: url)
@@ -882,6 +833,10 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
             if case .string(let raw) = session.user.userMetadata["spotify_links"], !raw.isEmpty { return raw }
             return nil
         }()
+        let backdrop: String? = {
+            if case .string(let raw) = session.user.userMetadata["backdrop"], !raw.isEmpty { return raw }
+            return nil
+        }()
         return AppUser(
             id:          session.user.id,
             email:       session.user.email ?? "",
@@ -897,7 +852,20 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
             spotifyImports: spotifyImports,
             savedAlbums: savedAlbums,
             crates: crates,
-            spotifyLinks: spotifyLinks
+            spotifyLinks: spotifyLinks,
+            backdrop: backdrop,
+            showsAllSongs: {
+                if case .bool(let on) = session.user.userMetadata["show_all_songs"] { return on }
+                return nil
+            }(),
+            importsTo: {
+                if case .string(let raw) = session.user.userMetadata["imports_to"] { return raw }
+                return nil
+            }(),
+            analyticsOptIn: {
+                if case .bool(let on) = session.user.userMetadata["analytics_opt_in"] { return on }
+                return nil
+            }()
         )
     }
 
@@ -933,24 +901,9 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
 
 extension SupabaseAuthService {
 
-    /// Rebuilds the OAuth callback into the shape the SDK expects.
-    ///
-    /// GoTrue does not always redirect to the `redirectTo` we asked for. When
-    /// the project's redirect allow-list does not contain our scheme it falls
-    /// back to the Site URL, and what comes back looks like this:
-    ///
-    ///     mixtape:?code=e322d496-2929-47b4-b416-002a140c49d8%23
-    ///
-    /// Two things are wrong. There is no `auth-callback` host, and `%23` — a
-    /// `#` — is glued to the end of the code, because an empty fragment was
-    /// appended to a URL with no path to hang it on and landed inside the
-    /// query instead. `URLComponents` faithfully decodes that trailing hash as
-    /// part of the value, so the SDK posts a code the server never issued and
-    /// the exchange fails with `flow_state_not_found` — the code itself being
-    /// perfectly valid one character earlier.
-    ///
-    /// So trim the code back to the credential and put the callback into
-    /// canonical form. A well-formed callback passes through untouched.
+    /// Normalises the OAuth callback. When GoTrue falls back to the Site URL it returns
+    /// `mixtape:?code=...%23`: no `auth-callback` host and a `#` glued to the code, which
+    /// fails with `flow_state_not_found`. Well-formed callbacks pass through.
     static func cleanedCallback(_ url: URL) -> URL {
         guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
               let raw = components.queryItems?.first(where: { $0.name == "code" })?.value
@@ -973,10 +926,7 @@ extension SupabaseAuthService {
 
 // MARK: - OAuth Presentation Anchor
 
-/// Supplies the window the OAuth sheet is presented from.
-///
-/// See the note in `signInWithGoogle()`: the SDK's default anchor is an
-/// unattached window, which iOS refuses to present from.
+/// Window the OAuth sheet is presented from. iOS won't present from the SDK's default.
 @MainActor
 private final class OAuthPresentationAnchorProvider: NSObject,
                                                      ASWebAuthenticationPresentationContextProviding {
@@ -998,8 +948,7 @@ private final class OAuthPresentationAnchorProvider: NSObject,
     }
 }
 
-/// `ASWebAuthenticationSession` promises a URL or an error; this covers the
-/// case its contract says cannot happen, so the continuation can never leak.
+/// Covers the "no URL and no error" case so the continuation never leaks.
 private struct AuthErrorMissingCallback: LocalizedError {
     var errorDescription: String? { "Sign-in returned no result." }
 }

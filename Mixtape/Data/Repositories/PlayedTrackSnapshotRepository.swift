@@ -1,9 +1,5 @@
-// PlayedTrackSnapshotRepository.swift
-// Mixtape
-//
-// CRUD for PlayedTrackSnapshotEntity — snapshots of played Discover tracks that
-// aren't in the library, so "Recently played" and stats can resolve them after a
-// relaunch (they have no TrackEntity). Bounded so it can't grow forever.
+// Snapshots of played Discover songs that aren't in the library, so Recently
+// Played and stats can resolve them after a relaunch. Bounded.
 
 import Foundation
 import SwiftData
@@ -11,8 +7,7 @@ import SwiftData
 @MainActor
 public final class PlayedTrackSnapshotRepository {
 
-    /// Never stored: the context belongs to whichever account's store is open
-    /// right now. See `ModelStore`.
+    /// Not stored: belongs to the open account's store. See `ModelStore`.
     private var context: ModelContext { ModelStore.shared.context }
     private let limit = 2_000
 
@@ -56,17 +51,13 @@ public final class PlayedTrackSnapshotRepository {
         return map
     }
 
-    /// Drops the snapshot for one id.
-    ///
-    /// A Discover song the user deletes has to lose this too: the snapshot is
-    /// what "Recently played" resolves against after a relaunch, so leaving it
-    /// behind brings the deleted song back on the next launch.
+    /// Drops one snapshot. Deleted Discover songs must lose theirs, or they come back
+    /// in Recently Played on the next launch.
     public func delete(id: UUID) throws {
         try delete(ids: [id])
     }
 
-    /// One fetch for a whole selection: a bulk library delete calls this once
-    /// per song otherwise.
+    /// One fetch for a whole selection.
     public func delete(ids: Set<UUID>) throws {
         guard !ids.isEmpty else { return }
         var deleted = false
@@ -79,9 +70,7 @@ public final class PlayedTrackSnapshotRepository {
         try context.save()
     }
 
-    /// Drops every snapshot. These outlive the library on purpose — a Discover
-    /// track never had a TrackEntity to delete — which is exactly why wiping the
-    /// library alone leaves stats resolving names that aren't in it any more.
+    /// Drops every snapshot. These aren't tied to library rows, so a library wipe must clear them too.
     public func deleteAll() throws {
         try context.delete(model: PlayedTrackSnapshotEntity.self)
         try context.save()
@@ -99,9 +88,8 @@ public final class PlayedTrackSnapshotRepository {
 }
 
 extension PlayedTrackSnapshotEntity {
-    /// Reconstruct a display/replayable `Track`. A history snapshot only ever
-    /// exists for a Discover play, so the row is `.online` and carries the key
-    /// that resolves it again.
+    /// A playable `Track`. Snapshots only exist for Discover plays, so it's `.online`
+    /// with the key that resolves it.
     func asTrack(deviceID: String) -> Track {
         var provenance = FileProvenance.onlinePlaceholder(sourceRef: sourceKey)
         provenance.fileHash = sourceKey

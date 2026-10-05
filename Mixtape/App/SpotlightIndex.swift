@@ -1,14 +1,11 @@
-// SpotlightIndex.swift
-// Library songs and artists in system search, with their covers. A song hit
-// plays the song; an artist hit opens the artist's Discover page.
+// Library songs and artists in Spotlight.
 
 import Foundation
 import CoreSpotlight
 import UniformTypeIdentifiers
 
 extension Notification.Name {
-    /// Spotlight picked an artist; the root view opens their Discover page.
-    /// The name waits in `SpotlightIndex.pendingArtist` for a cold launch.
+    /// Artist hit from Spotlight. Stored in pendingArtist for a cold launch.
     static let mixSpotlightArtist = Notification.Name("mix.spotlightArtist")
 }
 
@@ -22,9 +19,8 @@ nonisolated enum SpotlightIndex {
     }
 
     private static let artistPrefix = "artist:"
-    /// What's in the index, carried across launches so a launch only moves
-    /// the difference instead of re-reading every cover. Lost with Caches,
-    /// which just means one full rebuild. Bump the name to force one.
+    /// What's already indexed, so launches only apply the difference.
+    /// Bump the name to force a full rebuild.
     private static let ledger = URL.cachesDirectory.appending(path: "spotlight-index.v2.txt")
 
     @MainActor private static var indexed: Set<String>?
@@ -64,8 +60,7 @@ nonisolated enum SpotlightIndex {
 
         let todo = wanted.values.filter { !done.contains($0.key) }
         for start in stride(from: 0, to: todo.count, by: 40) where !Task.isCancelled {
-            // Blobs are read on the main actor (the store's models live there),
-            // forty at a time with a breather between, and shrunk off it.
+            // Read on the main actor in chunks of 40, downsampled off it.
             let chunk = todo[start..<min(start + 40, todo.count)].map { entry in
                 var e = entry
                 e.thumbnail = ArtworkProvider.shared.uncachedData(for: e.ref)
@@ -103,9 +98,7 @@ nonisolated enum SpotlightIndex {
 
     // MARK: - Opening a hit
 
-    /// Both `RootView.onContinueUserActivity` and the Mac app delegate land
-    /// here — macOS only reliably delivers to the delegate — so a second
-    /// delivery of the same hit is dropped rather than played twice.
+    /// Both RootView and the Mac app delegate get these, so drop a repeat.
     @MainActor private static var lastOpened: (key: String, at: Date)?
 
     @MainActor @discardableResult
@@ -131,7 +124,6 @@ nonisolated enum SpotlightIndex {
         return true
     }
 
-    /// The artist a Spotlight hit asked for, once — for the root view to open.
     @MainActor static func takePendingArtist() -> String? {
         defer { pendingArtist = nil }
         return pendingArtist

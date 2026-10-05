@@ -1,14 +1,4 @@
-// AudioEqualizer.swift
-// Mixtape — Core/Services
-//
-// Owns the AVAudioUnitEQ node that sits in PlaybackEngine's audio graph
-// (playerNode -> eqNode -> mainMixerNode). Exposes a 10-band graphic EQ
-// with built-in presets and UserDefaults persistence so a SwiftUI view can
-// bind sliders to band gains and hear changes live.
-//
-// The node is created up-front and handed to PlaybackEngine for insertion
-// into the AVAudioEngine graph. Gain/enabled changes are applied to the live
-// node immediately.
+// The 10-band EQ node in PlaybackEngine's graph, with presets and persistence.
 
 import AVFoundation
 import Combine
@@ -44,8 +34,7 @@ public enum EqualizerPreset: String, CaseIterable, Identifiable {
 
     public var id: String { rawValue }
 
-    /// Per-band gains in dB, aligned to `AudioEqualizer.frequencies`.
-    /// `custom` returns nil — it represents a user-edited curve, not a fixed one.
+    /// Nil for custom.
     public var gains: [Float]? {
         switch self {
         //                32    64   125   250   500    1k    2k    4k    8k   16k
@@ -90,9 +79,7 @@ public final class AudioEqualizer: ObservableObject {
     /// Allowed gain range per band, in dB.
     public static let gainRange: ClosedRange<Float> = -12...12
 
-    /// The account whose EQ settings are active. Set by the auth layer on
-    /// sign-in / account switch / sign-out so each account keeps its own EQ
-    /// instead of sharing one global curve. `nil` → a shared "guest" scope.
+    /// Active account for EQ settings. Nil is the guest scope.
     nonisolated(unsafe) public static var currentUserID: String? {
         didSet {
             guard oldValue != currentUserID else { return }
@@ -110,14 +97,7 @@ public final class AudioEqualizer: ObservableObject {
 
     // MARK: - The live node (inserted into PlaybackEngine's graph)
 
-    /// The AVAudioUnitEQ node. Created once, on first use; PlaybackEngine
-    /// attaches & connects it.
-    ///
-    /// Lazy because building it was 946 ms of a cold iOS launch — instantiating
-    /// an AVAudioUnit pulls in the audio component registry, and none of that is
-    /// needed until either something plays or the user opens the EQ. It is built
-    /// with the persisted curve already applied, so nothing has to remember to
-    /// push state into it afterwards.
+    /// Lazy because creating an AVAudioUnit is slow at launch. Built with the saved curve.
     public lazy var node: AVAudioUnitEQ = {
         let eq = AVAudioUnitEQ(numberOfBands: Self.frequencies.count)
         eq.globalGain = 0
@@ -140,12 +120,7 @@ public final class AudioEqualizer: ObservableObject {
         return eq
     }()
 
-    /// Whether `node` has actually been created.
-    ///
-    /// Every write to the node is guarded on this. Touching `node` to push a
-    /// value into it would build the very thing the laziness exists to defer —
-    /// and it would be pointless, because a node built later reads the current
-    /// `isEnabled` / `gains` on the way up.
+    /// Guards writes so they don't force the lazy node into existence.
     private var nodeBuilt = false
 
     /// Applies `body` to the node only if there is one.
@@ -163,7 +138,6 @@ public final class AudioEqualizer: ObservableObject {
         }
     }
 
-    /// Per-band gains in dB, aligned to `frequencies`. Editing a value live-updates the node.
     @Published public private(set) var gains: [Float]
 
     /// The currently selected preset. `.custom` once the user moves a slider.
@@ -256,7 +230,6 @@ public final class AudioEqualizer: ObservableObject {
     /// Apply a built-in preset, setting all band gains at once.
     public func apply(_ preset: EqualizerPreset) {
         guard let presetGains = preset.gains else {
-            // `.custom` has no fixed curve — just record the selection.
             self.preset = .custom
             return
         }

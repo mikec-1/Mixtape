@@ -1,29 +1,9 @@
-// OfflineStore.swift
-// Mixtape — Core/Services
-//
-// Where deliberately downloaded audio lives.
-//
-// This is the Spotify-style store: press Download and the song lands here, in
-// the app's own container, and plays without a network. It is deliberately NOT
-// the same place as either of the two stores that already existed:
-//
-//   • Library/Caches/OnlineCache — the transient prefetch cache. It's in the
-//     purgeable caches domain and capped by an LRU budget, so the OS or the
-//     coordinator may delete a file at any moment. Fine for "the next song",
-//     useless for "the flight tomorrow".
-//   • The user's export folder (ExportManager) — real files, named for humans,
-//     living in Music or wherever they chose. That's a *file copy*, an entirely
-//     separate wish from "keep this playable offline".
-//
-// Application Support is neither purgeable nor user-visible, which is exactly
-// what a download wants to be. It also sits outside the online cache's budget,
-// so a download can never be evicted to make room for a prefetch.
-//
-// The directory is the only source of truth. There's no index to drift out of
-// sync with the files: a download is a file named `<trackID>.<ext>`, and asking
-// what's downloaded means listing the folder. Downloads are also, on purpose,
-// device-local — never synced through Supabase, because what's on this disk is
-// a fact about this disk.
+// Where downloaded audio lives, for offline playback.
+// Separate from the OnlineCache (purgeable, LRU-capped prefetch) and the user's export
+// folder (human-named file copies). Application Support isn't purgeable or user-visible,
+// and sits outside the online cache's budget, so downloads are never evicted.
+// The directory is the source of truth: a download is `<trackID>.<ext>`. Downloads are
+// device-local and never synced.
 
 import Foundation
 import Combine
@@ -31,11 +11,7 @@ import OSLog
 
 // MARK: - Paths
 
-/// The store's filesystem layout, reachable from any actor.
-///
-/// Split out from `OfflineStore` because the playback path resolves file URLs
-/// off the main thread, and the store itself is main-actor bound so its
-/// published state stays safe to read from view bodies.
+/// The store's file layout, usable from any actor (playback resolves URLs off the main thread).
 public nonisolated enum OfflineStorePaths {
 
     /// `Application Support/Mixtape/Offline`, created on first use.
@@ -50,8 +26,7 @@ public nonisolated enum OfflineStorePaths {
 
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 
-        // Downloads are re-downloadable and can run to gigabytes; there's no
-        // reason to push them through iCloud backups.
+        // Downloads can be gigabytes and are re-downloadable, so skip iCloud backup.
         var resources = URLResourceValues()
         resources.isExcludedFromBackup = true
         try? dir.setResourceValues(resources)
@@ -59,11 +34,8 @@ public nonisolated enum OfflineStorePaths {
         return dir
     }()
 
-    /// Copies (or moves) `source` in as this track's offline file and returns
-    /// where it landed.
-    ///
-    /// Nonisolated on purpose: a song is tens of megabytes, and copying that on
-    /// the main actor is a visible stall in a scrolling list.
+    /// Copies (or moves) `source` in as this track's offline file. Nonisolated so a large copy
+    /// doesn't stall the main actor.
     static func install(_ source: URL, for trackID: UUID, moving: Bool) throws -> URL {
         let ext = source.pathExtension.isEmpty ? "m4a" : source.pathExtension.lowercased()
         let destination = directory.appendingPathComponent("\(trackID.uuidString).\(ext)")
@@ -81,14 +53,8 @@ public nonisolated enum OfflineStorePaths {
         return destination
     }
 
-    /// Brings `source` in at `quality`, re-encoding it first when the setting
-    /// asks for something smaller than the file that arrived.
-    ///
-    /// A failed re-encode is not a failed download. The original goes in
-    /// instead, so the song still plays offline — just larger than asked for.
-    /// Losing the download outright because one file upset the encoder would be
-    /// the worse trade, and the alternative — a half-written .m4a that looks
-    /// like a finished download — is worse still.
+    /// Installs `source` at `quality`, re-encoding first when a smaller file was asked for.
+    /// A failed re-encode installs the original instead.
     static func install(_ source: URL,
                         for trackID: UUID,
                         moving: Bool,
@@ -113,22 +79,18 @@ public nonisolated enum OfflineStorePaths {
         do {
             try await AudioTranscoder.transcode(source, to: scratch, quality: quality)
         } catch {
-            MixLog.playback.error("[OfflineStore] ⚠️ Couldn't re-encode \(trackID) at \(quality.rawValue), keeping the original: \(error)")
+            MixLog.playback.error("[OfflineStore] Couldn't re-encode \(trackID) at \(quality.rawValue), keeping the original: \(error)")
             return try await keepOriginal()
         }
 
-        // A re-encode that came out no smaller is pure loss — worse audio *and*
-        // the same disk. That happens whenever the source is already at or below
-        // the target rate, which is routine for the online resolver's 128 kbps
-        // AAC once someone picks Normal.
+        // A re-encode that isn't smaller (source already at or below the target rate) is discarded.
         let before = (try? source.resourceValues(forKeys:  [.fileSizeKey]).fileSize) ?? 0
         let after  = (try? scratch.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         guard after > 0, before == 0 || after < before else {
             return try await keepOriginal()
         }
 
-        // The scratch file is ours, so it moves rather than copies. `moving`
-        // describes the caller's file, which we've finished reading by now.
+        // The scratch file is ours, so move it.
         let destination = try await Task.detached(priority: .utility) {
             try install(scratch, for: trackID, moving: true)
         }.value
@@ -136,10 +98,7 @@ public nonisolated enum OfflineStorePaths {
         return destination
     }
 
-    /// The downloaded file for this track, or nil if it isn't downloaded.
-    ///
-    /// Matches on the filename stem rather than guessing extensions, so a
-    /// download keeps whatever container it arrived in.
+    /// The downloaded file for this track, or nil. Matches on the filename stem so any container works.
     public static func fileURL(for trackID: UUID) -> URL? {
         let stem = trackID.uuidString
         let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
@@ -157,8 +116,7 @@ public final class OfflineStore: ObservableObject {
 
     public static let shared = OfflineStore()
 
-    /// Cached directory listing, keyed by track. Nil means "not read yet";
-    /// every mutation drops it so the next read goes back to the filesystem.
+    /// Cached directory listing. Nil means not read yet; every mutation drops it.
     private var cachedMap: [UUID: URL]?
 
     private init() {}
@@ -173,8 +131,7 @@ public final class OfflineStore: ObservableObject {
 
     public var count: Int { map().count }
 
-    /// Total bytes on disk. Fine for a Settings row — it stats a listing it
-    /// already has — but not something to call from inside a row body.
+    /// Total bytes on disk. Fine for Settings, too slow for a row body.
     public var totalBytes: Int64 {
         map().values.reduce(into: Int64(0)) { total, url in
             let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize
@@ -184,19 +141,9 @@ public final class OfflineStore: ObservableObject {
 
     // MARK: - Writes
 
-    /// Takes `source` into the store as this track's offline copy.
-    ///
-    /// Copies rather than moves by default: callers hand us files that other
-    /// parts of the app still own (the online cache, the Supabase download
-    /// cache), and moving one out from under them breaks playback of the very
-    /// track just downloaded.
-    /// The copy itself runs off the main actor, so a download finishing never
-    /// stutters whatever the user is scrolling.
-    ///
-    /// `quality` decides whether the file is re-encoded on the way in. It
-    /// defaults to `.high` — keep what arrived — so that callers who aren't the
-    /// download worker (and have no business applying someone's storage setting)
-    /// don't have to think about it.
+    /// Stores `source` as this track's offline copy, off the main actor. Copies by default
+    /// since the online cache and download cache still own their files.
+    /// `quality` defaults to `.high` (keep as-is); only the download worker applies the setting.
     @discardableResult
     public func adopt(_ source: URL,
                       for trackID: UUID,
@@ -238,8 +185,7 @@ public final class OfflineStore: ObservableObject {
 
         var built: [UUID: URL] = [:]
         for url in contents {
-            // A stray file that isn't named after a track is left alone rather
-            // than deleted — it isn't ours to throw away.
+            // Files not named after a track aren't ours to delete.
             guard let id = UUID(uuidString: url.deletingPathExtension().lastPathComponent) else { continue }
             built[id] = url
         }

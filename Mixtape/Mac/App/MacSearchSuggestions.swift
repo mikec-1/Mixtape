@@ -1,14 +1,5 @@
-// MacSearchSuggestions.swift
-// Mixtape — Mac/App
-//
-// The type-ahead panel under the search field.
-//
-// It is hosted by MacRootView rather than by MacTopBar, even though it belongs
-// to the field. SwiftUI paints a VStack's children in order, so an overlay on
-// the top bar would be drawn *under* the split view sitting below it — the panel
-// would be clipped to the height of the bar. Attaching it to the VStack itself
-// puts it last in the paint order while keeping it inside the zoom transform,
-// so it scales with ⌘+/⌘− and lines up with the field at every scale.
+// Type-ahead panel under the search field. Drawn by MacRootView, not MacTopBar, so it paints
+// over the split view and stays inside the zoom transform.
 
 #if os(macOS)
 import SwiftUI
@@ -35,9 +26,7 @@ struct MacSearchSuggestions: View {
                 .padding(.bottom, 4)
             }
 
-            // Scrolls rather than growing: the panel hangs over the content and
-            // a list long enough to reach the player bar can't be dismissed by
-            // clicking past it.
+            // Scrolls rather than growing past the player bar.
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(store.rows.enumerated()), id: \.element.id) { index, suggestion in
@@ -45,10 +34,7 @@ struct MacSearchSuggestions: View {
                     suggestion: suggestion,
                     isHighlighted: store.highlighted == index,
                     onHover: { hovering in
-                        // Pointer and keyboard drive the same highlight, so the two
-                        // can never show two selected rows at once. Moving off a row
-                        // leaves it lit rather than clearing — otherwise Return after
-                        // a stray mouse twitch would do nothing.
+                        // Pointer and keyboard share one highlight. Leaving a row keeps it lit so Return still works.
                         if hovering { store.highlighted = index }
                     },
                     onTap: { onPick(suggestion) },
@@ -76,12 +62,7 @@ struct MacSearchSuggestions: View {
 
 // MARK: - Activation
 
-/// What picking a row does.
-///
-/// Shared by the click handler and by Return on the keyboard-highlighted row, so
-/// the two can't drift apart. Everything except `.term` opens the entity
-/// directly — that is the whole point of the dropdown, and the reason
-/// `SearchSuggestion` carries Deezer ids rather than just display text.
+/// Shared by click and Return. Everything but `.term` opens the entity directly.
 @MainActor
 func activateSuggestion(_ suggestion: SearchSuggestion,
                         appState: MacAppState,
@@ -90,24 +71,16 @@ func activateSuggestion(_ suggestion: SearchSuggestion,
 
     switch suggestion.kind {
     case .term:
-        // Nothing behind it — put the completion in the field and let the search
-        // that is already watching the text run it. `accept` rather than
-        // `dismiss` because that write is indistinguishable from typing, and
-        // would otherwise reopen the panel on the term just picked from it.
+        // `accept` rather than `dismiss`: this write looks like typing and would reopen the panel.
         appState.searchText = suggestion.title
         SearchSuggestionsStore.shared.accept(suggestion.title)
-        // Picking a term is the same decision as pressing Return, so it does the
-        // same two things: shows the results (un-parking the query if the panel
-        // was reopened on a parked one — where the write above can be a no-op,
-        // the text never having changed), and unwinds whatever Discover page was
-        // drilled into, which is not where the term just picked belongs.
+        // Picking a term = pressing Return: show the results and unwind Discover.
         appState.showSearchResults()
         DiscoverSessionStore.shared.commitSearch()
 
     case .artist:
         guard let artist = suggestion.onlineArtist else { return }
-        // Opening a page is worth nothing if something is drawn over the column
-        // it opens in — fullscreen lyrics, a profile, the account page.
+        // Clear anything drawn over the column the page opens in.
         appState.showSearchResults()
         DiscoverSessionStore.shared.path.append(.artist(artist))
 
@@ -116,8 +89,7 @@ func activateSuggestion(_ suggestion: SearchSuggestion,
         appState.showSearchResults()
         DiscoverSessionStore.shared.path.append(.album(album))
 
-    // Playing something doesn't move you: lyrics stay up and follow the new
-    // song, which is the reason they were open.
+    // Playing doesn't navigate; lyrics stay up and follow the new song.
     case .track:
         guard let track = suggestion.onlineTrack else { return }
         Task { await deps.onlineCoordinator.play(track) }
@@ -132,8 +104,7 @@ private struct SuggestionRow: View {
     let isHighlighted: Bool
     let onHover: (Bool) -> Void
     let onTap: () -> Void
-    /// Nil for live results: the ✕ removes a *past* search, and there is
-    /// nothing to remove a result you are looking at right now from.
+    /// Nil for live results; only past searches can be removed.
     let onRemove: (() -> Void)?
 
     @State private var hovering = false
@@ -145,9 +116,7 @@ private struct SuggestionRow: View {
             thumbnail
 
             VStack(alignment: .leading, spacing: 1) {
-                // The rating belongs to the title, not to the row: it is part
-                // of what the song is called, the same place it sits on every
-                // track list in the app.
+                // The rating sits with the title, as on every track list.
                 HStack(spacing: 6) {
                     Text(suggestion.title)
                         .font(.system(size: 13, weight: .medium))
@@ -174,9 +143,7 @@ private struct SuggestionRow: View {
 
             Spacer(minLength: 8)
 
-            // "You have this song" — the reason the row is at the top of the
-            // list. Songs only: an artist is never something you own, so a tick
-            // beside their name was answering a question nobody asked.
+            // "You have this song". Songs only.
             if suggestion.inLibrary, showsLibraryTick {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 11, weight: .semibold))
@@ -184,9 +151,7 @@ private struct SuggestionRow: View {
                     .help("Already in your library")
             }
 
-            // Drop this row from the recents. On hover only — it is a
-            // destructive-ish control on a list you are reading, and a column
-            // of crosses would compete with the rows themselves.
+            // Remove from recents, on hover only.
             if let onRemove {
                 Button(action: onRemove) {
                     Image(systemName: "xmark")
@@ -203,8 +168,7 @@ private struct SuggestionRow: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
         .background {
-            // The highlight is the only colour in the panel, because it is the
-            // only thing here that is state rather than content.
+            // The highlight is the only colour: it's the only state here.
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(isHighlighted ? Color.mixSurface2 : Color.clear)
                 .padding(.horizontal, 4)
@@ -217,8 +181,7 @@ private struct SuggestionRow: View {
         .onTapGesture(perform: onTap)
     }
 
-    /// Albums and songs are things the library can hold; artists and plain
-    /// terms are not.
+    /// Only albums and songs can be in the library.
     private var showsLibraryTick: Bool {
         switch suggestion.kind {
         case .track, .album: return true
@@ -228,9 +191,7 @@ private struct SuggestionRow: View {
 
     @ViewBuilder
     private var thumbnail: some View {
-        // A term completion has no artwork to show — a grey square where the
-        // other rows have covers would read as a picture that failed to load,
-        // so it gets the search glyph at the same size instead.
+        // Terms have no artwork; use the search glyph instead of a grey square.
         if case .term = suggestion.kind {
             Image(systemName: suggestion.placeholderIcon)
                 .font(.system(size: 13, weight: .medium))

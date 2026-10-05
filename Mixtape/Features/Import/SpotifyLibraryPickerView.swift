@@ -1,23 +1,7 @@
-// SpotifyLibraryPickerView.swift
-// Mixtape — Features/Import
-//
-// Bring a Spotify library across, in whole or in part.
-//
-// The link importer next door answers "I want this playlist" and asks for a URL,
-// which is the right shape for one playlist and the wrong shape for forty: nobody
-// is going to Share → Copy Link forty times. This lists what the account actually
-// holds — playlists, Liked Songs, saved albums — and lets someone tick what they
-// want.
-//
-// Everything under the hood is the single-playlist importer already used here:
-// same de-dup against the existing library, same online tracks that resolve audio
-// on first play. What's new is the listing, the selection, and running the import
-// as one job that survives an individual playlist failing.
-//
-// The flow itself lives in `SpotifyLibraryPickerModel`, and the pieces below are
-// shared with the Spotify connection in Settings, which shows the same chooser
-// inline in the main window. This file is the sheet host — still reachable, and
-// still the shape iOS's Add Music sheet wants.
+// Import a Spotify library in whole or in part: playlists, Liked Songs and saved
+// albums, ticked from a list. Uses the single-playlist importer underneath, run
+// as one job that survives individual failures. Logic lives in
+// `SpotifyLibraryPickerModel`; this is the sheet host (also used on iOS).
 
 import SwiftUI
 
@@ -43,8 +27,7 @@ public struct SpotifyLibraryPickerView: View {
 
     @Environment(\.dismiss) private var dismiss
 
-    /// Stopping a run rolls it back, so it needs the same "are you sure" the
-    /// Settings page gives it rather than acting on one tap.
+    /// Stopping rolls back, so confirm first.
     @State private var confirmStopImport = false
 
     // MARK: - Body
@@ -53,23 +36,20 @@ public struct SpotifyLibraryPickerView: View {
         MixSheet(title: "Import from Spotify",
                  subtitle: subtitle,
                  size: .large,
-                 // The list scrolls itself; letting the sheet scroll too would
-                 // nest one scroll view inside another.
+                 // The list scrolls itself.
                  scroll: false,
                  primary: primaryAction,
                  showsCancel: model.phase != .migrating) {
             content
         }
         .onDisappear {
-            // Closing the sheet stops the run. The alternative is a job that
-            // goes on writing to someone's library with nothing on screen to
-            // say so, and no way to stop it.
+            // Closing the sheet stops the run, so nothing writes to the library unseen.
             model.cancelMigration()
         }
         .task(id: auth.isAuthorized) {
             await model.loadIfNeeded()
         }
-        .confirmationDialog("Stop importing?",
+        .mixConfirmationDialog("Stop importing?",
                             isPresented: $confirmStopImport,
                             titleVisibility: .visible) {
             Button("Stop and Remove", role: .destructive) { model.cancelMigration() }
@@ -103,9 +83,7 @@ public struct SpotifyLibraryPickerView: View {
     @ViewBuilder
     private var content: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Above the switch, not inside the status pane: the listing that
-            // needs explaining is the one you're looking at while choosing —
-            // playlists present, Liked Songs and albums quietly absent.
+            // Above the list, since it explains what's missing from it.
             if auth.needsReauthorization, auth.isAuthorized {
                 MixSheetStatus(
                     kind: .failure,
@@ -132,8 +110,7 @@ public struct SpotifyLibraryPickerView: View {
 
     // MARK: - Footer
 
-    /// One button carrying the whole flow, the way the link importer does:
-    /// connect, then import, then close.
+    /// One button for the whole flow: connect, import, close.
     private var primaryAction: MixSheetAction {
         if !auth.isAuthorized {
             return MixSheetAction("Connect Spotify", isBusy: model.isConnecting) { model.connect() }
@@ -149,9 +126,7 @@ public struct SpotifyLibraryPickerView: View {
             return MixSheetAction("Try Again") { Task { await model.load() } }
 
         case .choosing:
-            // The *new* songs, not every song in the selection: re-importing
-            // Liked Songs brings over what Spotify has gained, so offering to
-            // "Import 2263 Songs" beside a "9 new" badge was a lie.
+            // New songs only, to match the "9 new" badges.
             let songs = model.selectedNewSongCount
             let title = model.selection.isEmpty || songs == 0
                 ? "Import"
@@ -168,10 +143,8 @@ public struct SpotifyLibraryPickerView: View {
 }
 
 // MARK: - Chooser
-//
-// The listing itself: filter, select-all, and one row per thing that can be
-// brought across. Shared by the sheet above and the Settings page, which is why
-// it owns no chrome of its own.
+// The listing: filter, select-all and one row per item. Shared with Settings,
+// so it has no chrome of its own.
 
 struct SpotifyLibraryChooser: View {
 
@@ -184,16 +157,10 @@ struct SpotifyLibraryChooser: View {
                 selectAllButton
             }
 
-            // Above the list, beside the thing it applies to. It used to sit at
-            // the very bottom, under the scroll view, where it read as small
-            // print — and it is a decision about what the import *is*, not a
-            // footnote to it.
+            // Above the list since it changes what the import is.
             if model.canFollow { keepInSyncToggle }
 
-            // A part of the library that didn't load. Said out loud, because
-            // the alternative is a list that looks complete and isn't — and the
-            // usual cause is a rate limit, which fixes itself with time rather
-            // than with another import.
+            // Sections that failed to load, usually a rate limit that clears with time.
             ForEach(model.warnings, id: \.self) { warning in
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -242,12 +209,7 @@ struct SpotifyLibraryChooser: View {
         }
     }
 
-    /// The opt-in that turns a one-off import into a standing mirror.
-    ///
-    /// Given a card of its own so it reads at the same weight as the import
-    /// button it changes the meaning of. The second line is the part people
-    /// need before saying yes: a mirrored playlist is Spotify's to change, not
-    /// theirs.
+    /// The mirror opt-in, as its own card. The second line says a mirror is Spotify's to change.
     private var keepInSyncToggle: some View {
         Toggle(isOn: $model.keepInSync) {
             VStack(alignment: .leading, spacing: 2) {
@@ -280,9 +242,7 @@ struct SpotifyLibraryChooser: View {
         )
     }
 
-    /// Said once, under the list, rather than as a warning per row: the badges
-    /// have already made the point, and this is only the arithmetic of what is
-    /// ticked right now.
+    /// One note under the list rather than a warning per row.
     private var alreadyImportedNote: String? {
         let repeats = model.selectedAlreadyImported
         guard !repeats.isEmpty else { return nil }
@@ -316,12 +276,8 @@ struct SpotifyLibraryChooser: View {
         .background(Color.mixBackground)
     }
 
-    /// What the ledger knows about this row, in as few words as it takes.
-    ///
-    /// Two states rather than one, because "you have this" and "you have this,
-    /// and there are twelve more songs in it now" lead to opposite decisions.
-    /// Neither stops the row being ticked — a re-import matches on recording
-    /// and adds only what's missing.
+    /// What the ledger knows about this row: imported, or imported with new songs
+    /// since. Neither blocks ticking; re-imports only add what's missing.
     @ViewBuilder
     private func importedBadge(for item: SpotifyLibraryItem) -> some View {
         switch model.importState(for: item) {
@@ -411,9 +367,7 @@ struct SpotifyLibraryChooser: View {
         .buttonStyle(.plain).mixHandCursor()
     }
 
-    /// The cover, or something that stands in for one. Liked Songs has no image
-    /// on Spotify's side — the gradient you see in their app is drawn, not
-    /// served — so it gets drawn here too rather than showing a grey square.
+    /// The cover or a stand-in. Liked Songs has no image on Spotify, so draw the gradient.
     @ViewBuilder
     private func cover(for item: SpotifyLibraryItem) -> some View {
         let shape = RoundedRectangle(cornerRadius: 4, style: .continuous)
@@ -445,9 +399,7 @@ struct SpotifyLibraryChooser: View {
 }
 
 // MARK: - Status
-//
-// Every state that isn't "here's your library, choose" — each one a status row
-// rather than its own full-height page.
+// Every state other than the chooser, as a status row.
 
 struct SpotifyLibraryStatus: View {
 
@@ -482,19 +434,14 @@ struct SpotifyLibraryStatus: View {
         }
     }
 
-    /// Two levels at once: which item out of how many, and how far into it.
-    ///
-    /// One bar for the whole job would barely move for minutes; one bar per
-    /// playlist would restart constantly and never say how much is left. Both
-    /// numbers together are the only honest answer.
+    /// Two bars: the current item, and the whole job.
     @ViewBuilder
     private var migrationStatus: some View {
         let done  = model.progress?.songsCompleted ?? 0
         let total = model.progress?.songsTotal ?? 0
         let index = model.progress?.itemIndex ?? 0
         let count = model.progress?.itemCount ?? model.selection.count
-        // Reading a big Liked Songs takes as long as importing it, and saying
-        // which one is happening is the difference between slow and stuck.
+        // Say whether it's reading or importing, so slow doesn't look stuck.
         let verb: String = {
             switch model.progress?.phase {
             case .fetching: return "read"
@@ -503,10 +450,7 @@ struct SpotifyLibraryStatus: View {
         }()
         let isFinishing = model.progress?.phase == .finishing
 
-        // Overall is the whole job counted in songs — every song across every
-        // selected item — which is a different measurement from the bar above,
-        // not a rescaling of it. It used to be `(index - 1) / count`, an
-        // item-counter that for one Liked Songs was 0 until it was 1.
+        // Overall = songs across every selected item.
         let overallDone  = model.progress?.overallCompleted ?? 0
         let overallTotal = model.progress?.overallTotal ?? 0
         let overall = overallTotal > 0
@@ -524,13 +468,7 @@ struct SpotifyLibraryStatus: View {
             progress: total > 0 ? Double(done) / Double(total) : nil
         )
 
-        // Overall progress sits underneath because it's the one that answers
-        // "how long is this going to take", and it moves slowly enough to be
-        // worth reading rather than watching.
-        //
-        // Only for more than one item: importing a single Liked Songs makes the
-        // whole job and the current item the same thing, and two identical bars
-        // stacked on each other is worse than one.
+        // Overall bar only for multiple items; for one it would duplicate the first.
         if count > 1 {
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 8) {
@@ -561,9 +499,7 @@ struct SpotifyLibraryStatus: View {
                 title: result.wasCancelled
                     ? "Import stopped"
                     : "Imported \(result.importedCount) item\(result.importedCount == 1 ? "" : "s")",
-                // A stopped run is rolled back, so there is no partial count to
-                // report — saying "0 imported" would read as a failure rather
-                // than the undo the user asked for.
+                // A stopped run is rolled back, so there's no count to report.
                 detail: result.wasCancelled
                     ? "Nothing was added. Any songs brought over before you stopped have been removed again."
                     : changeSummary(songs: songs)
@@ -598,10 +534,7 @@ struct SpotifyLibraryStatus: View {
 }
 
 private extension SpotifyLibraryStatus {
-    /// "+9 −2 since last time" when we can tell, plain counts when we can't.
-    ///
-    /// Removals matter as much as additions and the net count hides them: nine
-    /// added and two taken away reads as seven, which describes neither.
+    /// "+9 −2 since last time" when known, plain counts otherwise.
     func changeSummary(songs: Int) -> String {
         let change = model.lastChange
         guard change.removed > 0 else {

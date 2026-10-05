@@ -1,20 +1,8 @@
-// TrackListTools.swift
-// Mixtape — SharedUI/Components
-//
-// Filtering and ordering for a list of songs, plus the small control pair that
-// drives them.
-//
-// A playlist is the one page in the app where the list can be long enough that
-// you know the song is in there and still can't find it. The hero already
-// carries everything you can *do* to a playlist — play, shuffle, keep offline,
-// the overflow menu — all of it clustered on the left, so these two sit at the
-// far end of the same row instead of adding a third thing to that clump.
-//
-// The model lives here rather than in the view because both platforms and both
-// list implementations need it: iOS filters a SwiftUI `List`, macOS hands the
-// finished array to an AppKit table whose own column headers write back into
-// the same `TrackSort` (see `NativeTrackTable.sort`), so a header click and this
-// menu can never disagree about what the list is sorted by.
+// Filtering and sorting for a list of songs, plus the search/sort controls
+// that sit at the far end of a hero's action row.
+// Shared by both platforms: iOS filters a SwiftUI `List`; macOS passes the array
+// to an AppKit table whose column headers write into the same `TrackSort`
+// (see `NativeTrackTable.sort`), so header clicks and this menu always agree.
 
 import SwiftUI
 
@@ -22,9 +10,7 @@ import SwiftUI
 
 /// What a list of songs is ordered by.
 enum TrackSortField: String, CaseIterable, Identifiable, Hashable {
-    /// The order the list itself is in — the playlist's own running order.
-    /// Always the default: a playlist someone sequenced is sequenced for a
-    /// reason, and a sort that outlives the visit would quietly throw that away.
+    /// The playlist's own running order. Always the default; sorts don't outlive the visit.
     case listOrder
     case title
     case artist
@@ -34,8 +20,7 @@ enum TrackSortField: String, CaseIterable, Identifiable, Hashable {
 
     var id: String { rawValue }
 
-    /// Every field except `listOrder`, which is named by the page — "Playlist
-    /// Order" on a playlist, and something else anywhere this is reused.
+    /// All fields except `listOrder`, which the page names ("Playlist Order").
     static var sortableFields: [TrackSortField] {
         allCases.filter { $0 != .listOrder }
     }
@@ -51,9 +36,8 @@ enum TrackSortField: String, CaseIterable, Identifiable, Hashable {
         }
     }
 
-    /// The `NSSortDescriptor` key the Mac table's matching column header uses.
-    /// Nil for `listOrder`: no column expresses "the order it was already in",
-    /// which is why picking it clears the table's descriptors outright.
+    /// The Mac table column's `NSSortDescriptor` key. Nil for `listOrder`, which
+    /// clears the table's descriptors.
     var sortDescriptorKey: String? {
         switch self {
         case .listOrder: return nil
@@ -76,14 +60,12 @@ struct TrackSort: Equatable {
     var field: TrackSortField = .listOrder
     var ascending: Bool = true
 
-    /// Which way round a field starts. Names read A→Z, but "date added" almost
-    /// always means "what did I add lately", so that one starts newest-first.
+    /// Starting direction: names A-Z, date added newest first.
     static func naturalDirection(for field: TrackSortField) -> Bool {
         field == .dateAdded ? false : true
     }
 
-    /// Picking the field you're already on flips the direction instead — the
-    /// same thing clicking a column header twice does.
+    /// Picking the current field flips direction, like clicking a column header twice.
     mutating func select(_ field: TrackSortField) {
         if self.field == field {
             ascending.toggle()
@@ -98,20 +80,10 @@ struct TrackSort: Equatable {
 
 // MARK: - Memoising the derived list
 
-/// One playlist page's cache of "the rows actually on screen".
-///
-/// `visibleTracks` is read many times per body evaluation — by the list, by the
-/// Play button, by the empty state, by the count in the header — and each read
-/// used to walk the playlist's ids through the library, filter, and sort, on a
-/// list that routinely runs to a few thousand rows. SwiftUI re-evaluates a body
-/// for reasons that have nothing to do with any of those inputs.
-///
-/// So the answer is kept, along with the four things it depends on, and rebuilt
-/// only when one of them actually moved. `LibraryService.revision` stands in for
-/// the track data itself — see its comment for why the arrays aren't compared.
-///
-/// A reference type held in `@State`, so the cache survives the struct being
-/// rebuilt, which is the whole point.
+/// Caches a playlist page's visible rows. `visibleTracks` is read many times per
+/// body (list, Play, empty state, header count) on lists of thousands of rows,
+/// so it's rebuilt only when an input changes. `LibraryService.revision` stands in
+/// for the track data. A class in `@State` so it survives struct rebuilds.
 @MainActor
 final class TrackListMemo {
 
@@ -127,10 +99,8 @@ final class TrackListMemo {
     private(set) var visible: [Track] = []
     private(set) var playable: [Track] = []
 
-    /// Recomputes only if something it depends on changed.
-    ///
-    /// `resolve` is the id→Track lookup, passed in rather than held, so this
-    /// keeps no reference to the library and can't go stale behind its own key.
+    /// Recomputes only if an input changed. `resolve` is passed in, not held, so
+    /// this keeps no reference to the library.
     func update(revision: UInt64,
                 ids: [UUID],
                 query: String,
@@ -151,10 +121,7 @@ final class TrackListMemo {
 
 extension Array where Element == Track {
 
-    /// Rows matching `query` across title, artist and album.
-    ///
-    /// Folded rather than lowercased: "beyonce" has to find "Beyoncé", or the
-    /// field is only useful to people who know how to type the song's name.
+    /// Rows matching `query` in title, artist or album. Folded, so "beyonce" finds "Beyoncé".
     func matching(query: String) -> [Track] {
         let needle = query.folded
         guard !needle.isEmpty else { return self }
@@ -165,12 +132,7 @@ extension Array where Element == Track {
         }
     }
 
-    /// Sorted by `sort`, decorating first so each row's sort key is built once.
-    ///
-    /// `folded` is not a cheap accessor — it allocates and walks the string
-    /// three times. Calling it inside the comparator meant roughly `2n log n`
-    /// folds for every sort, and this runs on 2200-row playlists from a view
-    /// body. Building the key once per row makes it `n`.
+    /// Sorted by `sort`. Keys are built once per row (`folded` isn't cheap).
     func sorted(by sort: TrackSort) -> [Track] {
         guard sort.field != .listOrder else {
             return sort.ascending ? self : reversed()
@@ -194,7 +156,7 @@ extension Array where Element == Track {
         return sort.ascending ? ordered : ordered.reversed()
     }
 
-    /// Decorate–sort–undecorate: `key` is evaluated once per element.
+    /// Decorate-sort-undecorate: `key` is evaluated once per element.
     private func sortedByKey<K: Comparable>(_ key: (Track) -> K) -> [Track] {
         map { (key($0), $0) }
             .sorted { $0.0 < $1.0 }
@@ -203,8 +165,7 @@ extension Array where Element == Track {
 }
 
 private extension String {
-    /// Case-, accent- and width-insensitive, the same fold the library's own
-    /// matching uses (see `LibraryTrackIndex`).
+    /// Case-, accent- and width-insensitive; same fold as `LibraryTrackIndex`.
     var folded: String {
         folding(options: [.diacriticInsensitive, .caseInsensitive, .widthInsensitive],
                 locale: nil)
@@ -214,12 +175,8 @@ private extension String {
 
 // MARK: - The controls
 
-/// The search field and sort menu that belong at the trailing end of a hero's
-/// action row.
-///
-/// The field starts collapsed as a single disc. A search box that is always
-/// open is a box that is usually empty, and an empty box on a page whose whole
-/// left side is already controls reads as one more thing to ignore.
+/// Search field and sort menu for the end of a hero's action row. The field
+/// starts collapsed to a single button.
 struct TrackListTools: View {
 
     @Binding var query: String
@@ -228,9 +185,7 @@ struct TrackListTools: View {
     /// What the list's own order is called here.
     var listOrderTitle: String = "Custom Order"
 
-    /// Placeholder for the field. Worth naming the list — "Search in Road Trip"
-    /// says which songs are being searched, which matters on a page you reached
-    /// from a search of everything.
+    /// Field placeholder; naming the list ("Search in Road Trip") helps.
     var searchPrompt: String = "Search"
 
     @State private var isSearchOpen = false
@@ -277,9 +232,7 @@ struct TrackListTools: View {
             }
             .padding(.horizontal, 12)
             .frame(height: 34)
-            // A fixed field on the Mac, where the hero row has room to spare;
-            // on iOS it takes what's left of the row, which is the only way it
-            // ends up wide enough to read what you typed.
+            // Fixed width on the Mac; on iOS it takes the rest of the row.
             #if os(macOS)
             .frame(width: 200)
             #else
@@ -291,23 +244,17 @@ struct TrackListTools: View {
             #if os(macOS)
             .onExitCommand { closeSearch() }
             #endif
-            // Losing focus with nothing typed means it was opened by accident;
-            // a field with a query in it stays, because the list it produced is
-            // still on screen and the query is the only thing explaining why.
+            // Losing focus while empty closes it; a field with a query stays open.
             .onChange(of: isFieldFocused) { _, focused in
                 if !focused, query.isEmpty { isSearchOpen = false }
             }
-            // Hands ⌘⌫ back to the field, where it clears the line. Without it
-            // the app's delete shortcut takes the event and offers to delete
-            // whichever song is selected behind the search.
+            // Hands ⌘⌫ to the field (clear line) instead of the app's delete shortcut.
             .mixEditingFocus(isFieldFocused)
             .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .trailing)))
         } else {
             Button {
                 isSearchOpen = true
-                // A hop, because the field doesn't exist yet: focus assigned in
-                // the same update as the view it points at is dropped, and the
-                // magnifier opens an empty box the caret never lands in.
+                // Next runloop: focus set in the same update as the view appears is dropped.
                 DispatchQueue.main.async { isFieldFocused = true }
             } label: {
                 HeroCircleLabel(systemImage: MixtapeIcons.search,
@@ -347,15 +294,8 @@ struct TrackListTools: View {
                 }
             }
 
-            // Offered for the list's own order too. This used to be hidden
-            // there on the grounds that a sequenced playlist backwards is a
-            // curiosity — but the playlist people most want flipped is the one
-            // they've been appending to for a year, where the newest songs are
-            // buried at the bottom and "reverse" is the only way to see them.
-            //
-            // Named for the order rather than the axis: "ascending" describes a
-            // comparison, and there's no comparison behind a running order —
-            // what someone wants there is the record played back to front.
+            // Offered for list order too (seeing the newest additions of a long playlist).
+            // Named for the order ("reverse") rather than ascending/descending.
             Divider()
             Button {
                 sort.ascending.toggle()
@@ -366,8 +306,7 @@ struct TrackListTools: View {
             sortLabel
         }
         #if os(macOS)
-        // Left alone, a Menu draws a bordered pop-up button with a chevron,
-        // which is the wrong shape beside the hero's discs.
+        // Otherwise a Menu draws a bordered pop-up with a chevron.
         .menuStyle(.button)
         .buttonStyle(.plain).mixHandCursor()
         .menuIndicator(.hidden)
@@ -376,8 +315,7 @@ struct TrackListTools: View {
         .help("Sort this playlist")
     }
 
-    /// What flipping the direction would give you — the state you'd land in
-    /// rather than the one you're in, which is what the arrow beside it means.
+    /// The state you'd land in, which is what the arrow means.
     private var directionTitle: String {
         switch (sort.field, sort.ascending) {
         case (.listOrder, true):  return "Reverse Order"
@@ -387,8 +325,7 @@ struct TrackListTools: View {
         }
     }
 
-    /// A checkmark drawn as part of the title, because a `Menu`'s buttons don't
-    /// carry `Toggle`'s state and an unmarked list can't say what's active.
+    /// Checkmark in the title; Menu buttons can't show `Toggle` state.
     private func label(_ title: String, checked: Bool) -> some View {
         HStack {
             Text(title)
@@ -398,14 +335,10 @@ struct TrackListTools: View {
         }
     }
 
-    /// Names the current order rather than showing a bare glyph: the whole point
-    /// of the control is that you can tell at a glance the list isn't in the
-    /// order the playlist is in.
+    /// Names the current order so a re-sorted list is obvious.
     private var sortLabel: some View {
         HStack(spacing: 6) {
-            // Neutral two-way glyph while the list is as the page left it, a
-            // definite direction once it isn't — otherwise a reversed playlist
-            // reads "Playlist Order" while showing anything but.
+            // Neutral glyph for the default order, a direction otherwise.
             Image(systemName: sort.isDefault
                   ? "arrow.up.arrow.down"
                   : (sort.ascending ? "arrow.up" : "arrow.down"))

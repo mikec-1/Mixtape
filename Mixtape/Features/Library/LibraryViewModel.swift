@@ -1,15 +1,9 @@
-// LibraryViewModel.swift
-// Mixtape — Features/Library
-
 import Foundation
 import SwiftUI
 import Combine
 
 public enum LibrarySection: String, CaseIterable, Identifiable {
     case playlists  = "Playlists"
-    /// Smart playlists used to hang off a permanent row above the playlist
-    /// list. They're a kind of playlist, not a feature announcement, so they
-    /// get a chip like every other shelf in the library.
     case smart      = "Smart"
     case albums     = "Albums"
 
@@ -24,16 +18,12 @@ public enum LibrarySection: String, CaseIterable, Identifiable {
     }
 }
 
-/// How the library list is ordered. Mirrors Spotify's own set, minus the ones
-/// that need data Mixtape doesn't keep.
+/// Library sort orders. Spotify's set, minus ones needing data we don't keep.
 public enum LibrarySortOrder: String, CaseIterable, Identifiable {
-    /// The arrangement the user dragged themselves, shared with the Mac sidebar
-    /// and carried between devices on `Playlist.sortIndex`. The default: a list
-    /// somebody has arranged by hand should stay arranged until they say
-    /// otherwise, and an untouched library falls back to recents anyway.
+    /// The user's drag order, synced via `Playlist.sortIndex`. The default; an
+    /// untouched library falls back to recents.
     case manual         = "Custom Order"
-    /// Most recently touched first — the reason the control can read "Recents"
-    /// rather than "Sort".
+    /// Most recently touched first.
     case recents        = "Recents"
     case recentlyAdded  = "Recently Added"
     case alphabetical   = "Alphabetical"
@@ -42,24 +32,17 @@ public enum LibrarySortOrder: String, CaseIterable, Identifiable {
 
     public var id: String { rawValue }
 
-    /// The one place this sort actually gets applied, so every screen that
-    /// shows a playlist list — iOS's `LibraryViewModel`, the macOS sidebar,
-    /// and the macOS Playlists overview — can never disagree about what a
-    /// given order means. Always partitions pinned ahead of unpinned after
-    /// sorting: a pin is an override of the sort, not a sort key, so letting
-    /// the sort move a pinned playlist would make the pin mean nothing in
-    /// three of the four orders.
+    /// The single implementation of each order, so iOS Library, the Mac sidebar and
+    /// the Mac Playlists page agree. Pins always go first after sorting.
     @MainActor public func sorted(_ playlists: [Playlist]) -> [Playlist] {
-        // Every browse list — Mac sidebar, Mac Playlists, iOS Library — orders
-        // through here, which is the whole reason the All Songs setting is
-        // applied here too. See `PlaylistMetadataService.showsAllSongs`.
+        // Every browse list goes through here, so the All Songs setting is applied here.
+        // See `PlaylistMetadataService.showsAllSongs`.
         let playlists = PlaylistMetadataService.shared.showsAllSongs
             ? playlists : playlists.filter { !$0.isAllSongs }
         let sorted: [Playlist]
         switch self {
         case .manual:
-            // `library.playlists` is already in the shared order — see
-            // `LibraryService.refreshPlaylistsBody()`.
+            // Already in the shared order. See `LibraryService.refreshPlaylistsBody()`.
             sorted = playlists
         case .recents:
             sorted = playlists.sorted { Self.recency($0) > Self.recency($1) }
@@ -92,9 +75,8 @@ extension LibrarySortOrder {
         max(p.dateModified, PlaylistMetadataService.shared.playlistLastPlayedDates[p.id] ?? .distantPast)
     }
 
-    /// Playlists, albums and smart playlists interleaved by this order. Pins
-    /// stay on top; Custom Order has nowhere to put albums, so they follow
-    /// by recency.
+    /// Playlists, albums and smart playlists in one list by this order. Pins stay on
+    /// top; in Custom Order albums follow by recency.
     @MainActor public func mixed(_ playlists: [Playlist], albums: [Album], smart: [SmartPlaylist]) -> [LibraryItem] {
         let meta = PlaylistMetadataService.shared, saved = SavedAlbumsService.shared
         let ordered = sorted(playlists)
@@ -144,14 +126,11 @@ public final class LibraryViewModel: ObservableObject {
 
     // MARK: - Published State
 
-    /// Nil is Spotify's unfiltered library: playlists, saved albums and smart
-    /// playlists in one list. A chip narrows it; tapping it again clears it.
+    /// Nil is the unfiltered library. A chip narrows it; tapping again clears it.
     @Published public var selectedSection: LibrarySection? = nil
 
-    /// The Downloaded filter. Not a section: it cuts across all of them, so
-    /// Playlists/Albums/Artists stay browsable and each one lists only what is
-    /// wholly on this device. Mirrored onto the service, which is where the
-    /// song lists read it from.
+    /// The Downloaded filter. Applies across sections, listing only what's fully on
+    /// this device. Mirrored onto the service for the song lists.
     @Published public var downloadedOnly: Bool = false {
         didSet {
             guard downloadedOnly != oldValue else { return }
@@ -168,16 +147,12 @@ public final class LibraryViewModel: ObservableObject {
 
     // MARK: - Search, sort, layout
 
-    /// Whether the search field is showing. Separate from `searchText` being
-    /// empty, so the field can be open and blank.
+    /// Whether search is open, separate from `searchText` so it can be open and blank.
     @Published public var isSearching = false
     @Published public var searchText  = ""
 
-    /// Remembered across launches: both of these are a statement about how this
-    /// person likes to read their library, not about this visit to the tab.
-    /// A mirror of `PlaylistSortSyncService.shared.sortOrder`, which owns the
-    /// value, persists it and carries it to the Mac — this stays a `@Published`
-    /// here only so the screens that bind to it keep working unchanged.
+    /// Mirrors `PlaylistSortSyncService.shared.sortOrder`, which owns and syncs it.
+    /// Kept `@Published` for the existing bindings.
     @Published public var sortOrder: LibrarySortOrder = .manual {
         didSet {
             guard sortOrder != oldValue else { return }
@@ -190,20 +165,14 @@ public final class LibraryViewModel: ObservableObject {
 
     private static let layoutKey = "library.layout"
 
-    /// The playlists to draw: filtered by the query, then ordered — with pins
-    /// held at the top of whatever order is chosen.
-    ///
-    /// A pin is not a sort key, it is an override of one. Letting the sort move
-    /// a pinned playlist would make the pin mean nothing in three of the four
-    /// orders, which is not what the user asked for when they pinned it.
+    /// Playlists to draw: filtered by the query, then sorted, with pins on top.
     public var visiblePlaylists: [Playlist] {
         let matched = playlists.filter { matches($0.name) || matches($0.ownerName ?? "") }
         return sortOrder.sorted(downloaded(matched, ids: \.trackIDs))
     }
 
-    /// The filter, applied to anything that is a bag of song ids. Whole thing
-    /// or nothing: a half-downloaded playlist opened offline is a list of grey
-    /// rows, which is not what "Downloaded" offered.
+    /// Downloaded filter for anything holding song ids. All or nothing: a
+    /// half-downloaded playlist offline is mostly grey rows.
     private func downloaded<T>(_ items: [T], ids: (T) -> [UUID]) -> [T] {
         guard downloadedOnly else { return items }
         let have = libraryService.offlinePlayableIDs()
@@ -213,18 +182,13 @@ public final class LibraryViewModel: ObservableObject {
         }
     }
 
-    /// Whether the playlist list can be dragged into a new order right now.
-    ///
-    /// Only in `.manual`, and only unfiltered: a drop inside a filtered list is
-    /// a statement about rows that aren't on screen, and there's no honest way
-    /// to guess where the hidden ones were meant to land.
+    /// Drag-reorder only in `.manual` and unfiltered, since hidden rows would have no position.
     public var canReorderPlaylists: Bool {
         sortOrder == .manual
             && searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    /// Only albums the user added — a song in the library no longer lists
-    /// its album. See `SavedAlbumsService`.
+    /// Only albums the user saved. See `SavedAlbumsService`.
     public var visibleAlbums: [Album] {
         let saved = SavedAlbumsService.shared
         let list = downloaded(albums.filter { saved.isSaved($0) && (matches($0.title) || matches($0.artistName)) },
@@ -239,8 +203,7 @@ public final class LibraryViewModel: ObservableObject {
         downloaded(smart.filter { matches($0.name) }, ids: ids)
     }
 
-    /// Empty query matches everything, so every caller can filter
-    /// unconditionally instead of branching on whether search is open.
+    /// Empty query matches everything, so callers can filter unconditionally.
     private func matches(_ field: String) -> Bool {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return true }
@@ -278,14 +241,8 @@ public final class LibraryViewModel: ObservableObject {
 
     // MARK: - Actions
 
-    /// Puts the library on screen.
-    ///
-    /// `loadForDisplay`, not `refresh`: this runs from the view's `.task`, so it
-    /// fires every time the Library tab comes back, and a full re-read there
-    /// cost a second of main-thread time to arrive at the values the bindings
-    /// below were already publishing. It also publishes the playlists before the
-    /// expensive pass, so the list this screen opens on is not held behind a
-    /// read it doesn't depend on.
+    /// Shows the library. Uses `loadForDisplay`, not `refresh`, since this runs every
+    /// time the tab appears. Playlists publish before the expensive pass.
     public func load() async {
         await libraryService.loadForDisplay()
     }
@@ -293,16 +250,14 @@ public final class LibraryViewModel: ObservableObject {
     // MARK: - Private
 
     private func bindLibraryService() {
-        // Republished on the offline flag too: the same array resolves to a
-        // shorter list once songs that aren't on the device are hidden.
+        // Also republished on the offline flag, which hides songs not on the device.
         libraryService.$tracks
             .combineLatest(libraryService.$downloadedOnly)
             .map { [weak libraryService] _, _ in libraryService?.displayTracks ?? [] }
             .receive(on: RunLoop.main)
             .assign(to: &$tracks)
 
-        // The service switches the filter on when the network goes; this keeps
-        // the chip in step with it.
+        // Keeps the chip in step when the service turns the filter on offline.
         libraryService.$downloadedOnly
             .removeDuplicates()
             .receive(on: RunLoop.main)

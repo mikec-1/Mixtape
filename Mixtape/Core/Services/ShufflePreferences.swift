@@ -1,24 +1,6 @@
-// ShufflePreferences.swift
-// Mixtape — Core/Services
-//
-// Remembers, per playlist / album / artist, whether pressing Play on its header
-// starts shuffled.
-//
-// The header's shuffle button used to be bound straight to
-// `QueueService.shuffleEnabled` — one app-wide flag — so toggling it in one
-// playlist lit the button up in every other one, and the state had nothing to do
-// with the list you were looking at. The two controls answer different
-// questions and only look alike:
-//
-//   * the **player bar's** shuffle button is the live queue's mode: what is
-//     happening to the songs that are playing right now.
-//   * a **header's** shuffle button is a property of that list: "this one always
-//     shuffles when I play it". It outlives the queue, and every list has its
-//     own.
-//
-// Pressing Play applies the stored choice to the queue; changing the queue's
-// mode from the player bar afterwards is a one-off and deliberately does *not*
-// write back here.
+// Per-list "always shuffle" for playlist, album and artist headers. Separate
+// from the player bar's shuffle, which is the live queue's mode and never
+// writes back here.
 
 import Foundation
 import Combine
@@ -28,9 +10,7 @@ public final class ShufflePreferences: ObservableObject {
 
     public static let shared = ShufflePreferences()
 
-    /// Identifies a list independently of the type that draws it, so playlists,
-    /// albums and artists can share one store without colliding: an album and a
-    /// playlist that happen to share a name are still two different lists.
+    /// List identity across types, so an album and playlist with the same name don't collide.
     public enum Key: Hashable {
         case playlist(UUID)
         case album(UUID)
@@ -40,9 +20,7 @@ public final class ShufflePreferences: ObservableObject {
             switch self {
             case .playlist(let id): return "playlist:\(id.uuidString)"
             case .album(let id):    return "album:\(id.uuidString)"
-            // Artists have no stable id of their own here — the library builds
-            // them from the credited name — so the name *is* the identity,
-            // case-folded so "ARTIK & ASTI" and "Artik & Asti" are one artist.
+            // Artists are identified by case-folded name.
             case .artist(let name): return "artist:\(name.lowercased())"
             }
         }
@@ -51,9 +29,7 @@ public final class ShufflePreferences: ObservableObject {
     private let defaultsKey = "mixtape.shufflesOnPlay"
     private let defaults: UserDefaults
 
-    /// Only the lists that shuffle are stored. The overwhelming majority don't,
-    /// and a set of the exceptions stays small no matter how big the library
-    /// gets — where a dictionary of every list would grow forever.
+    /// Only lists that shuffle are stored, so the set stays small.
     @Published private var shuffling: Set<String>
 
     init(defaults: UserDefaults = .standard) {

@@ -1,50 +1,42 @@
-// AppUser.swift
-// Mixtape — Core Domain Models
-//
-// Represents the authenticated user of the app.
-// The access/refresh token is managed by AuthService (never stored here).
+// The signed-in user. Tokens live in AuthService, not here.
 
 import Foundation
 
 public struct AppUser: Identifiable, Codable, Hashable, Sendable {
 
     // MARK: Identity
-    /// Local UUID — mirrors the Supabase `auth.users.id` after first sign-in.
+    /// Matches Supabase auth.users.id.
     public let id: UUID
     /// The user's email address (used for auth and display).
     public var email: String
-    /// Display name shown in the UI — free-form, not unique.
+    /// Free-form, not unique.
     public var displayName: String
-    /// The unique @handle, from `user_metadata.username`. Optional so a user
-    /// cached before it existed still decodes.
+    /// Unique handle from user_metadata.username.
     public var username: String?
     /// Remote URL of a profile avatar image (optional; set via account settings).
     public var avatarURL: URL?
-    /// Role read from Supabase `user_metadata.role`. "developer" grants access to dev tools.
+    /// From user_metadata.role. "developer" unlocks dev tools.
     public var role: String?
-    /// Chosen playlist sort order, read from `user_metadata.playlist_sort_order`
-    /// — the raw value of a `LibrarySortOrder`. Unlike the preferences below,
-    /// this one follows the account between devices. See
-    /// `PlaylistSortSyncService`.
+    /// Playlist sort order, synced via user_metadata. See PlaylistSortSyncService.
     public var playlistSortOrder: String?
-    /// Per-playlist track sort, read from `user_metadata.playlist_track_sorts`
-    /// — a JSON map of playlist id → "field:direction". Follows the account
-    /// like `playlistSortOrder` does. See `PlaylistTrackSortService`.
+    /// Per-playlist track sorts, synced via user_metadata.
     public var playlistTrackSorts: String?
-    /// Which Spotify playlists have been imported, read from
-    /// `user_metadata.spotify_imports` — a JSON map of Spotify id → entry.
-    /// Follows the account so a phone knows what the Mac already brought over.
-    /// See `SpotifyImportLedger`.
+    /// Imported Spotify playlists, synced via user_metadata. See SpotifyImportLedger.
     public var spotifyImports: String?
     /// Saved albums JSON, `user_metadata.saved_albums`. See `SavedAlbumsService`.
     public var savedAlbums: String?
     /// Crates JSON, `user_metadata.crates`. See `CrateService`.
     public var crates: String?
-    /// Which playlists follow a Spotify source, read from
-    /// `user_metadata.spotify_links` — a JSON map of playlist id → link.
-    /// Follows the account so signing out doesn't take the connection with it.
-    /// See `SpotifyFollowService`.
+    /// Playlists following a Spotify source, synced via user_metadata.
     public var spotifyLinks: String?
+    /// Background colour, `user_metadata.backdrop`. See `MixBackdrop`.
+    public var backdrop: String?
+    /// `user_metadata.show_all_songs`. See `PlaylistMetadataService.showsAllSongs`.
+    public var showsAllSongs: Bool?
+    /// `user_metadata.imports_to`. See `PlaylistMetadataService.importDestination`.
+    public var importsTo: String?
+    /// `user_metadata.analytics_opt_in`, so one choice (often made on the web) covers every device.
+    public var analyticsOptIn: Bool?
 
     // MARK: Computed
     /// True if this user has the "developer" role set in their Supabase user_metadata.
@@ -54,7 +46,7 @@ public struct AppUser: Identifiable, Codable, Hashable, Sendable {
     public var createdAt: Date
     public var lastLoginAt: Date
 
-    // MARK: Preferences (local-only, not synced — device specific)
+    // MARK: Preferences (local-only, not synced, device specific)
     /// Whether the user has opted into background sync on cellular.
     public var syncOnCellular: Bool
     /// Preferred audio quality for streaming/sync (reserved for future use).
@@ -74,6 +66,10 @@ public struct AppUser: Identifiable, Codable, Hashable, Sendable {
         savedAlbums: String? = nil,
         crates: String? = nil,
         spotifyLinks: String? = nil,
+        backdrop: String? = nil,
+        showsAllSongs: Bool? = nil,
+        importsTo: String? = nil,
+        analyticsOptIn: Bool? = nil,
         createdAt: Date = Date(),
         lastLoginAt: Date = Date(),
         syncOnCellular: Bool = false,
@@ -91,6 +87,10 @@ public struct AppUser: Identifiable, Codable, Hashable, Sendable {
         self.savedAlbums = savedAlbums
         self.crates = crates
         self.spotifyLinks = spotifyLinks
+        self.backdrop = backdrop
+        self.showsAllSongs = showsAllSongs
+        self.importsTo = importsTo
+        self.analyticsOptIn = analyticsOptIn
         self.createdAt        = createdAt
         self.lastLoginAt      = lastLoginAt
         self.syncOnCellular   = syncOnCellular

@@ -1,18 +1,10 @@
-// SearchDiscoverBrowse.swift
-// Mixtape — Features/Search
-//
-// The catalogue half of the Search tab's landing: Spotify-style genre tiles
-// under "Browse all". Records and artists live on Home; Search is where people
-// go looking, so its landing offers places to look rather than things to play.
-//
-// iOS only. The Mac reaches all of this through the Discover section.
+// The Search tab's landing: genre tiles under "Browse all".
+// iOS only; the Mac has the Discover section.
 
 #if os(iOS)
 import SwiftUI
 
-/// Reads the same `DiscoverSessionStore` landing the Discover tab does rather
-/// than fetching its own: the two tabs then share one cache and one 30-minute
-/// TTL, so opening Search after Home costs nothing.
+/// Reads the Discover tab's landing from `DiscoverSessionStore`, so both share one cache.
 struct SearchDiscoverBrowse: View {
 
     let onOpen: (DiscoverDestination) -> Void

@@ -1,17 +1,5 @@
-// IOSMetadataReviewSheet.swift
-// Mixtape — iOS/Import
-//
-// Full-screen sheet shown after importing a track. The user can review/edit
-// proposed values, then tap Apply (downloads artwork + writes tags) or Skip.
-//
-// Mirrors MacMetadataReviewSheet but designed for touch:
-//   • Large artwork hero at the top
-//   • Form-style editable fields
-//   • Sticky action bar at the bottom
-//
-// It also mirrors the Mac sheet's timing: it opens on the filename reading
-// straight away and runs the iTunes lookup itself, rather than making import
-// wait for it and arriving long after the user has moved on.
+// Sheet shown after importing a track: review/edit the proposed tags, then Apply or Skip. Touch version
+// of MacMetadataReviewSheet. Opens on the filename reading and runs the iTunes lookup itself.
 
 #if os(iOS)
 import SwiftUI
@@ -25,17 +13,15 @@ struct IOSMetadataReviewSheet: View {
 
     @State private var draft: MetadataDraft
 
-    /// The candidate currently on screen. Starts as the item's local reading
-    /// and is replaced if the lookup finds something better — the artwork and
-    /// the confidence badge both come from here, not from `item`.
+    /// Candidate on screen: the item's local reading, replaced if the lookup finds better. Artwork and badge
+    /// read from here.
     @State private var candidate: EnrichmentCandidate
 
     @State private var isLookingUp = false
 
     /// A cover the user chose here. Nil while they leave the candidate alone.
     @State private var draftArtwork:  Data? = nil
-    /// Set by the bin. Distinct from `draftArtwork == nil`, which is also the
-    /// untouched state — without this the bin would have nothing to record.
+    /// Set by the bin. `draftArtwork == nil` is also the untouched state, so this records the clear.
     @State private var artworkCleared = false
 
     @State private var isApplying = false
@@ -49,9 +35,10 @@ struct IOSMetadataReviewSheet: View {
     }
 
     var body: some View {
-        MixSheet(title: "Review Metadata",
+        MixSheet(title: item.isEdit ? "Edit Metadata" : "Review Metadata",
                  subtitle: batchLabel,
-                 size: .large) {
+                 size: .large,
+                 dismissDisabled: isApplying) {
             VStack(spacing: 18) {
                 artworkHero
                 summarySection
@@ -60,28 +47,24 @@ struct IOSMetadataReviewSheet: View {
         } footer: {
             actionBar
         }
-        .interactiveDismissDisabled(isApplying)
         // Reset draft fields each time the review queue advances to a new song.
         .onChange(of: item.id) { _, _ in
             draft.reset(to: item.candidate, track: item.track)
             candidate = item.candidate
-            // The cover edit belongs to the song that was on screen, not to
-            // the next one in the queue.
+            // The cover edit belongs to the song that was on screen, not the next one.
             draftArtwork   = nil
             artworkCleared = false
         }
-        // Keyed on the item, so advancing the queue cancels the outgoing song's
-        // lookup instead of letting it come back and overwrite the next one.
+        // Keyed on the item so advancing the queue cancels the old lookup.
         .task(id: item.id) { await runLookup() }
     }
 
-    /// Where you are in the queue. This was a tiny grey label crammed into the
-    /// navigation bar's trailing slot; it belongs with the title, which is the
-    /// one place a sheet says what it is.
+    /// Where you are in the queue, shown with the title.
     private var batchLabel: String? {
         appState.batchTotal > 1
             ? "Song \(appState.currentItemNumber) of \(appState.batchTotal)"
-            : "Check what we found before it's written to the file."
+            : item.isEdit ? "Changes are written to the song's file."
+                          : "Check what we found before it's written to the file."
     }
 
     // MARK: - Lookup
@@ -94,13 +77,10 @@ struct IOSMetadataReviewSheet: View {
         guard let found = await deps.enrichmentService.enrich(url: lookup.sourceURL,
                                                               existing: lookup.existing)
         else { return }
-        // The queue may have moved on while this was in flight; `.task(id:)`
-        // cancels then, and applying a stale answer to a new song is exactly
-        // the bug that check prevents.
+        // `.task(id:)` cancels when the queue moves on; don't apply a stale answer.
         guard !Task.isCancelled else { return }
 
-        // A filename-only answer is what's already on screen. Replacing the
-        // candidate anyway would just re-badge the sheet for no gain.
+        // A filename-only answer is already on screen.
         guard found.source == .itunes else { return }
         candidate = found
         draft.merge(found, track: item.track)
@@ -109,11 +89,6 @@ struct IOSMetadataReviewSheet: View {
     // MARK: - Artwork Hero
 
     /// The cover, and the tap target for changing it.
-    ///
-    /// It used to sit on a 220pt bleed of its own artwork, blurred and darkened
-    /// — an iOS music-app flourish that made a data-entry sheet look like a
-    /// player. The cover is the thing being reviewed, so it just gets to be the
-    /// cover.
     private var artworkHero: some View {
         ArtworkPickerView(
             data: $draftArtwork,
@@ -127,8 +102,7 @@ struct IOSMetadataReviewSheet: View {
         .frame(maxWidth: .infinity)
     }
 
-    /// Whether there is a cover to throw away: one the user just chose, or the
-    /// candidate's, as long as they haven't already cleared it.
+    /// Whether there's a cover to remove: a user-chosen one, or the candidate's unless already cleared.
     private var showsRemoveBadge: Bool {
         if draftArtwork != nil { return true }
         if artworkCleared      { return false }
@@ -140,8 +114,7 @@ struct IOSMetadataReviewSheet: View {
         return artworkCleared ? .remove : .keep
     }
 
-    /// What sits behind the picker when the user hasn't supplied their own —
-    /// the candidate's remote cover, the file's embedded art, or nothing.
+    /// Behind the picker when the user hasn't chosen one: remote cover, embedded art, or nothing.
     @ViewBuilder
     private var candidateArtworkImage: some View {
         if artworkCleared {
@@ -190,7 +163,7 @@ struct IOSMetadataReviewSheet: View {
                 .font(.system(size: MixFontScale.size(13)))
                 .foregroundStyle(Color.mixTextSecondary)
                 .lineLimit(1)
-            // Confidence badge — shown inline under album so it always has room
+            // Confidence badge, inline under album so it always has room.
             confidenceBadge
                 .padding(.top, 4)
         }
@@ -218,8 +191,7 @@ struct IOSMetadataReviewSheet: View {
                     in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
-    /// Featured artist row. Leave empty if the track has no feature.
-    /// The track is always filed under the Artist field above.
+    /// Featured artist. Empty if none; the track is filed under Artist.
     private var featuredRow: some View {
         HStack(spacing: 12) {
             Text("Featured")
@@ -271,9 +243,7 @@ struct IOSMetadataReviewSheet: View {
 
     // MARK: - Confidence Badge
 
-    /// Says where the values on screen came from — including "still asking",
-    /// which is the honest answer for the first few seconds now that the sheet
-    /// doesn't wait for iTunes before showing itself.
+    /// Where the values came from, including "still looking" while iTunes is pending.
     private var confidenceBadge: some View {
         let (label, color): (String, Color) = {
             switch candidate.confidence {
@@ -309,9 +279,7 @@ struct IOSMetadataReviewSheet: View {
 
     // MARK: - Action Bar
 
-    /// Apply commits, Skip moves the queue on — which is why Skip isn't the
-    /// chrome's Cancel: closing the sheet and passing on this song aren't the
-    /// same act, and the two used to be the same-sized button side by side.
+    /// Apply commits; Skip moves the queue on. Skip isn't Cancel: closing and passing aren't the same.
     private var actionBar: some View {
         VStack(spacing: 10) {
             MixSheetPrimaryButton(
@@ -320,7 +288,7 @@ struct IOSMetadataReviewSheet: View {
                                        action: applyChanges),
                 fullWidth: true
             )
-            Button("Skip This Song") { appState.dequeueReview() }
+            Button(item.isEdit ? "Cancel" : "Skip This Song") { appState.dequeueReview() }
                 .buttonStyle(.plain).mixHandCursor()
                 .font(.system(size: MixFontScale.size(14), weight: .medium))
                 .foregroundStyle(Color.mixTextSecondary)
@@ -335,8 +303,7 @@ struct IOSMetadataReviewSheet: View {
         let trackID    = item.track.id
         let artworkURL = candidate.artworkURL
         let title      = draft.fields.title
-        // The track is always filed under the primary artist, passed separately
-        // as primaryArtistOverride; the stored name keeps the feature.
+        // Filed under the primary artist (passed as primaryArtistOverride); the stored name keeps the feature.
         let primary    = draft.primaryArtist
         let fullArtist = draft.fullArtist
         let album      = draft.fields.album

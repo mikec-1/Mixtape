@@ -1,19 +1,6 @@
-// SpotifyThrottle.swift
-// Mixtape — Core/Services/Online
-//
-// One place that knows Spotify is currently refusing us.
-//
-// A 429 from Spotify is an *app-wide* penalty, not a per-request or per-user
-// one: once it lands, every call Mixtape makes fails until it lifts. That makes
-// it a piece of app state rather than an error belonging to whichever screen
-// happened to ask last — and the reason it needs to be here is that the way it
-// used to surface, as a line of small text inside whichever sheet was open,
-// looked exactly like Mixtape being broken. Sync did nothing, the connection
-// card sat on "Reading your account…", and nothing anywhere said why.
-//
-// Set from `SpotifyClient` at the two places a 429 outlives its retries, and
-// cleared by the first request that succeeds — Spotify's advised wait is a
-// ceiling, and often the penalty lifts sooner.
+// App-wide Spotify rate-limit state. A 429 blocks every call until it lifts,
+// so it's shown globally rather than as an error on one screen. Set by
+// SpotifyClient when a 429 outlives its retries; cleared by the next success.
 
 import Foundation
 import Combine
@@ -30,14 +17,11 @@ public final class SpotifyThrottle: ObservableObject {
 
     public var isThrottled: Bool {
         guard let until else { return false }
-        // Read through the clock rather than relying on a timer to clear it:
-        // the penalty ends whether or not anything was watching.
+        // Checked against the clock, so no timer is needed.
         return until > .now
     }
 
-    /// A sentence to put in front of the user. Deliberately says what Spotify
-    /// is doing and what Mixtape will do about it, because the failure it
-    /// explains is otherwise indistinguishable from a bug.
+    /// User-facing text saying what Spotify is doing and what happens next.
     public var sentence: String? {
         guard let until, until > .now else { return nil }
         return "Spotify is limiting how often Mixtape can talk to it. "
@@ -52,8 +36,7 @@ public final class SpotifyThrottle: ObservableObject {
 
     public func note(retryAfter seconds: TimeInterval) {
         let end = Date().addingTimeInterval(max(seconds, 1))
-        // Never shorten a standing penalty on the strength of one endpoint's
-        // smaller advice; the longest wait seen is the one that matters.
+        // Never shorten a standing penalty; keep the longest wait.
         if let until, until > end { return }
         until = end
     }

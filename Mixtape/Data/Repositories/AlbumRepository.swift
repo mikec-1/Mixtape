@@ -1,14 +1,10 @@
-// AlbumRepository.swift
-// Mixtape — Data/Repositories
-
 import Foundation
 import SwiftData
 
 @MainActor
 public final class AlbumRepository {
 
-    /// Never stored: the context belongs to whichever account's store is open
-    /// right now. See `ModelStore`.
+    /// Not stored: belongs to the open account's store. See `ModelStore`.
     private var context: ModelContext { ModelStore.shared.context }
 
     public init() {}
@@ -20,13 +16,8 @@ public final class AlbumRepository {
             predicate: #Predicate { !$0.isSoftDeleted },
             sortBy: [SortDescriptor(\.title)]
         )
-        // See TrackRepository.fetchAll — the cover is left out on purpose.
-        // `propertiesToFetch` is not "the properties I want" so much as "what to
-        // prefetch eagerly". Naming the full scalar list makes Core Data pull the
-        // whole row *including the artwork blob*; naming only the id leaves the
-        // blob alone and batch-faults the scalars on access. Measured on a
-        // 2088-track library: full list 490 MB at end of refresh, id only
-        // 218 MB — and the id-only fetch was also the faster of the two.
+        // Only the id: naming more properties makes Core Data prefetch the whole row,
+        // artwork included. Scalars fault in on access. See `TrackRepository.fetchAll`.
         descriptor.propertiesToFetch = [\.id]
         return try context.fetch(descriptor).map { $0.toDomain(includingArtwork: false) }
     }
@@ -40,14 +31,7 @@ public final class AlbumRepository {
 
     // MARK: - Find or Create
 
-    /// Returns an existing album matching title + artistName, or creates a new one.
-    /// Callers should call `save(_:)` after mutating the returned album.
-    /// The album under this exact title and act, if there is one.
-    ///
-    /// The alternative callers reached for was `fetchAll().first(where:)`, which
-    /// maps every album in the library into a domain value to find one of them.
-    /// Done once per credited artist per imported song, that was a third of a
-    /// second per song on the main actor.
+    /// The album with this exact title and artist, without the cover. Cheaper than scanning `fetchAll()`.
     public func find(title: String, artistName: String) throws -> Album? {
         var descriptor = FetchDescriptor<AlbumEntity>(
             predicate: #Predicate {
@@ -58,6 +42,7 @@ public final class AlbumRepository {
         return try context.fetch(descriptor).first?.toDomain(includingArtwork: false)
     }
 
+    /// Existing album by title and artist, or a new one. Call `save(_:)` after mutating it.
     public func findOrCreate(title: String, artistName: String, deviceID: String) throws -> Album {
         var descriptor = FetchDescriptor<AlbumEntity>(
             predicate: #Predicate {
@@ -67,10 +52,8 @@ public final class AlbumRepository {
         // Only the first match is ever used.
         descriptor.fetchLimit = 1
         if let existing = try context.fetch(descriptor).first {
-            // The cover is loaded on purpose: `ImportService.updateAlbum` reads
-            // `album.artworkData == nil` to decide whether the album still needs
-            // one, and a nil that only means "wasn't fetched" makes it rewrite
-            // the cover on every imported song.
+            // Load the cover: `ImportService.updateAlbum` checks `artworkData == nil`, and
+            // an unloaded nil would make it rewrite the cover on every import.
             return existing.toDomain()
         }
         let album = Album(
@@ -121,12 +104,12 @@ public final class AlbumRepository {
     }
 }
 
-// MARK: - Entity ↔ Domain Mapping
+// MARK: - Entity <-> Domain Mapping
 
 extension AlbumEntity {
 
 
-    /// See TrackEntity.toDomain — `includingArtwork: false` is the bulk path.
+    /// `includingArtwork: false` is the bulk path. See `TrackEntity.toDomain`.
     func toDomain(includingArtwork: Bool = true) -> Album {
         Album(
             id:          id,
@@ -155,9 +138,7 @@ extension AlbumEntity {
         artistName  = album.artistName
         year        = album.year
         genre       = album.genre
-        // A domain struct from the bulk fetch carries no cover — nil here
-        // means "wasn't loaded", never "delete it". Clearing artwork is done
-        // on the entity directly.
+        // Nil from a bulk-fetched struct means "not loaded", not "delete".
         if let art = album.artworkData { artworkData = art }
         artworkKey  = album.artworkKey
         trackIDsData = album.trackIDs.toData()

@@ -1,23 +1,6 @@
-// LastFmScrobbler.swift
-// Mixtape — Core/Services
-//
-// ┌─────────────────────────────────────────────────────────────────────────┐
-// │ Last.fm scrobbler — full desktop web-auth flow implemented.               │
-// │                                                                           │
-// │ Builds correctly-signed Audioscrobbler 2.0 requests AND the desktop       │
-// │ auth.getToken → user-authorize → auth.getSession flow.                    │
-// │                                                                           │
-// │ Setup the USER must do (inherent to Last.fm — no API key ships in-app):   │
-// │   1. Register an app at https://www.last.fm/api/account/create to get an  │
-// │      API key + shared secret, and paste them into Settings ▸ Last.fm.     │
-// │   2. Tap "Connect" — the app opens the Last.fm authorize page, the user   │
-// │      approves, then taps "Finish connecting" to fetch + persist the       │
-// │      session key. (`beginWebAuth()` / `completeWebAuth()` below.)         │
-// │                                                                           │
-// │ Once connected, PlaybackEngine drives updateNowPlaying(track:) on play    │
-// │ and scrobble(track:startedAt:) when playback crosses Last.fm's threshold  │
-// │ (>50% of the track or 4 minutes, whichever first; tracks >30s only).      │
-// └─────────────────────────────────────────────────────────────────────────┘
+// Last.fm scrobbler (Audioscrobbler 2.0). The user supplies their own API key
+// and secret in Settings, then connects via the desktop web-auth flow.
+// Scrobbles at 50% or 4 minutes, for tracks over 30s.
 
 import Foundation
 import Combine
@@ -46,14 +29,12 @@ public final class LastFmScrobbler: ObservableObject {
 
     // MARK: - State
 
-    /// User-facing on/off switch, persisted to UserDefaults. When false the
-    /// service no-ops even if credentials are present.
+    /// When off, nothing is sent even if connected.
     @Published public var isEnabled: Bool {
         didSet { UserDefaults.standard.set(isEnabled, forKey: Keys.isEnabled) }
     }
 
-    /// The connected Last.fm username, or nil when not connected. Published so the
-    /// settings UI can reflect connection state live. Persisted.
+    /// Nil when not connected.
     @Published public private(set) var username: String?
 
     /// True while a getToken/getSession round-trip is in flight.
@@ -62,24 +43,15 @@ public final class LastFmScrobbler: ObservableObject {
     /// The most recent auth error, surfaced in the UI. Cleared on a new attempt.
     @Published public private(set) var lastAuthError: String?
 
-    /// The unauthorized request token captured by `beginWebAuth()`, consumed by
-    /// `completeWebAuth()`. In-memory only — the app stays running across the
-    /// browser round-trip, so it never needs to be persisted.
+    /// Token from beginWebAuth(), used by completeWebAuth(). Memory only.
     private var pendingToken: String?
 
-    /// The Mixtape account these credentials belong to, set at sign-in.
-    ///
-    /// Last.fm is connected by a person, not by a Mac, but the key, secret and
-    /// session all live in device-wide UserDefaults. Without an owner the next
-    /// account to sign in here arrived already scrobbling to somebody else's
-    /// profile. Nothing below is readable until `accountDidChange` claims it,
-    /// which leaves `isConfigured` false and every screen showing "Not
-    /// connected" — the same thing a genuinely unconnected account sees.
+    /// The Mixtape account the stored credentials belong to. They live in
+    /// device-wide UserDefaults, so nothing is readable until accountDidChange claims them.
     private var accountID: UUID?
 
     private init() {
-        // Starts unclaimed: `username` and the credentials wait for a signed-in
-        // account, so nothing of the last one is on screen before then.
+        // Unclaimed until an account signs in.
         self.isEnabled = UserDefaults.standard.bool(forKey: Keys.isEnabled)
         self.username  = nil
     }
@@ -97,21 +69,15 @@ public final class LastFmScrobbler: ObservableObject {
 
     // MARK: - Account binding
 
-    /// Claims, or wipes, the stored credentials for the account signing in.
-    ///
-    /// Called before the device's record of the last account is overwritten, so
-    /// `previous` still names whoever was signed in until now.
+    /// Claims or wipes the stored credentials for the signing-in account.
+    /// `previous` is whoever was signed in before.
     public func accountDidChange(to userID: UUID, previous: String?) {
-        // Supabase re-publishes a sign-in on every token refresh; only the first
-        // one has anything to decide.
+        // Token refreshes re-send sign-in.
         guard accountID != userID else { return }
         let defaults = UserDefaults.standard
         let owner = defaults.string(forKey: Keys.owner)
         guard CredentialOwner.belongs(owner: owner, to: userID, previous: previous) else {
-            // A different person. Unlike Spotify there is no account copy to
-            // restore from, so this does cost the previous user their pasted
-            // API key — which is the right trade: their session key is a live
-            // credential and this is no longer their device.
+            // Different person, so wipe their credentials.
             accountID = nil
             forgetCredentials()
             return
@@ -123,8 +89,7 @@ public final class LastFmScrobbler: ObservableObject {
         objectWillChange.send()
     }
 
-    /// Signing out hides the connection without ending it — the same person
-    /// signing back in shouldn't have to paste their API key again.
+    /// Hides the connection without ending it, so signing back in keeps the key.
     public func signedOut() {
         accountID = nil
         username = nil
@@ -138,16 +103,14 @@ public final class LastFmScrobbler: ObservableObject {
         apiKey != nil && apiSecret != nil
     }
 
-    /// True only when an API key, shared secret, and an authenticated session key
-    /// are all present. Until then scrobbling silently no-ops.
+    /// Needs a key, secret and session key.
     public var isConfigured: Bool {
         apiKey != nil && apiSecret != nil && sessionKey != nil
     }
 
     // MARK: - Connection management
 
-    /// Persist the user's API key + shared secret. Does not authenticate — call
-    /// `beginWebAuth()`/`completeWebAuth()` afterwards to obtain a session key.
+    /// Saves the key and secret. Doesn't authenticate.
     public func saveCredentials(apiKey: String, apiSecret: String) {
         let defaults = UserDefaults.standard
         defaults.set(apiKey.trimmingCharacters(in: .whitespacesAndNewlines), forKey: Keys.apiKey)
@@ -155,8 +118,7 @@ public final class LastFmScrobbler: ObservableObject {
         objectWillChange.send()
     }
 
-    /// Disconnect: wipe the session key + username (keeps the saved API key/secret
-    /// so the user can reconnect without re-entering them).
+    /// Clears the session and username, keeps the key and secret.
     public func disconnect() {
         let defaults = UserDefaults.standard
         defaults.removeObject(forKey: Keys.sessionKey)
@@ -179,10 +141,9 @@ public final class LastFmScrobbler: ObservableObject {
         objectWillChange.send()
     }
 
-    // MARK: - Web auth flow (auth.getToken → authorize → auth.getSession)
+    // MARK: - Web auth flow (auth.getToken -> authorize -> auth.getSession)
 
-    /// Step 1: fetch an unauthorized request token and return the Last.fm authorize
-    /// URL the caller should open in a browser. Requires saved credentials.
+    /// Step 1: get a request token and return the authorize URL to open.
     public func beginWebAuth() async throws -> URL {
         guard let apiKey, apiSecret != nil else { throw AuthError.missingCredentials }
         lastAuthError = nil
@@ -212,8 +173,7 @@ public final class LastFmScrobbler: ObservableObject {
         }
     }
 
-    /// Step 2: after the user authorizes in the browser, exchange the pending token
-    /// for a session key and persist it + the username. Marks scrobbling enabled.
+    /// Step 2: exchange the authorized token for a session key.
     public func completeWebAuth() async throws {
         guard let token = pendingToken else { throw AuthError.noPendingToken }
         lastAuthError = nil
@@ -264,13 +224,9 @@ public final class LastFmScrobbler: ObservableObject {
     }
 
     // MARK: - Public API
-    //
-    // Both methods no-op gracefully (return early) when the service is disabled
-    // or unconfigured, so callers can invoke them unconditionally.
+    // Both no-op when disabled or unconfigured.
 
-    /// Submits a completed listen to Last.fm (`track.scrobble`).
-    /// - Parameter startedAt: when the user *began* playing the track. Last.fm
-    ///   expects the start timestamp, not the completion time.
+    /// Submits a finished listen. startedAt is when playback began, as Last.fm expects.
     public func scrobble(track: Track, startedAt: Date) async {
         guard isEnabled, isConfigured, !PrivateSession.isActive else { return }
 
@@ -286,8 +242,7 @@ public final class LastFmScrobbler: ObservableObject {
         await send(params)
     }
 
-    /// Updates the user's "now playing" status (`track.updateNowPlaying`).
-    /// This is a transient status update and is never persisted as a scrobble.
+    /// Sets "now playing". Not a scrobble.
     public func updateNowPlaying(track: Track) async {
         guard isEnabled, isConfigured, !PrivateSession.isActive else { return }
 
@@ -304,8 +259,7 @@ public final class LastFmScrobbler: ObservableObject {
 
     // MARK: - Request construction (real, ready once keys exist)
 
-    /// Adds the api_key + session key, signs the request, and POSTs it form-encoded.
-    /// Response parsing is intentionally minimal; failed scrobbles are not retried or queued.
+    /// Signs and POSTs. Failures aren't retried.
     private func send(_ baseParams: [String: String]) async {
         guard let apiKey, let apiSecret, let sessionKey else { return }
 
@@ -313,9 +267,6 @@ public final class LastFmScrobbler: ObservableObject {
         params["api_key"] = apiKey
         params["sk"]      = sessionKey
 
-        // The api_sig is an md5 of every (key + value) pair sorted by key name,
-        // concatenated, with the shared secret appended. `format` and `callback`
-        // are excluded from the signature per the Last.fm spec.
         params["api_sig"] = signature(params, secret: apiSecret)
 
         // We request JSON for easier parsing; `format` is added AFTER signing.
@@ -338,9 +289,7 @@ public final class LastFmScrobbler: ObservableObject {
         }
     }
 
-    /// Signs `baseParams` (adding api_key), performs a GET, and returns parsed JSON.
-    /// Used by the auth flow (auth.getToken / auth.getSession). Throws on transport
-    /// errors or a Last.fm `error` payload.
+    /// Signed GET for the auth calls. Throws on errors.
     private func signedGET(_ baseParams: [String: String]) async throws -> [String: Any] {
         guard let apiKey, let apiSecret else { throw AuthError.missingCredentials }
 
@@ -365,8 +314,7 @@ public final class LastFmScrobbler: ObservableObject {
         return json
     }
 
-    /// Computes the Last.fm `api_sig`: md5( join(sorted "keyvalue" pairs) + secret ).
-    /// `format` and `callback` are never part of the signature.
+    /// md5 of the sorted key+value pairs plus the secret, without format and callback.
     private func signature(_ params: [String: String], secret: String) -> String {
         let signable = params
             .filter { $0.key != "format" && $0.key != "callback" }

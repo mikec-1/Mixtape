@@ -1,35 +1,9 @@
-// SpotifyImportLedger.swift
-// Mixtape — Core/Services
-//
-// Remembers which Spotify playlists, albums and Liked Songs have already been
-// brought across, so the picker can say so before someone imports them twice.
-//
-// The identity question
-//   "Is a playlist you've changed still the same playlist?" — for this purpose,
-//   yes. Identity is Spotify's id, which is stable across every edit; what
-//   changes is how much of it you have. So the ledger stores the id and the
-//   track count *at the time of the import*, and the picker turns the pair into
-//   the only thing anyone actually wants to know: "you have this already" or
-//   "you have this, and there are 12 more songs in it now".
-//
-// Why it never blocks
-//   Importing again is safe — the importer matches on recording, so a re-import
-//   adds what's new and reuses the rest. An already-imported row therefore stays
-//   tickable; the badge is information, not a gate.
-//
-// Why it follows the account
-//   It used to be a device-local file, on the reasoning that a Spotify
-//   connection belongs to a device. That was wrong in practice: importing Liked
-//   Songs on the Mac and then opening the picker on the phone offered the whole
-//   2263 songs again as if nothing had ever happened, and there is no reading of
-//   "you have this already" that is true on one of your devices and false on the
-//   other. So the entries ride in `user_metadata` beside the playlist sorts —
-//   see `PlaylistTrackSortService` for why that store and not a table.
-//
-//   The per-entry track ids are the exception: they are tens of kilobytes for a
-//   large Liked Songs and there is no room for that in `user_metadata`, so they
-//   stay on the device that did the import. Their only job is the exact
-//   "+9 −2" after a re-import; a device without them falls back to the count.
+// Which Spotify playlists, albums and Liked Songs were already imported, so
+// the picker can badge them. Identity is Spotify's id; the stored track count
+// shows "12 more songs now". Never blocks: re-import is safe and only adds
+// what's new.
+// Entries sync via `user_metadata`. Per-entry track ids stay on device (too big)
+// and only give the exact "+9 −2"; other devices fall back to counts.
 
 import Foundation
 import Combine
@@ -45,11 +19,9 @@ public final class SpotifyImportLedger: ObservableObject {
         public var importedAt: Date
         /// Spotify's track count at the time, for "12 new songs since".
         public var sourceCount: Int
-        /// Where it landed, when that's a single playlist. Absent for albums,
-        /// which dissolve into the library rather than becoming a list.
+        /// Destination playlist. Nil for albums.
         public var playlistID: UUID?
-        /// Spotify's ids for the songs this import saw, when they were carried.
-        /// Local-only — stripped from the synced copy, see the file header.
+        /// Spotify track ids from this import. Local-only.
         public var sourceTrackIDs: [String]?
     }
 
@@ -65,23 +37,17 @@ public final class SpotifyImportLedger: ObservableObject {
         case never
         /// Imported, and Spotify's count hasn't grown since.
         case imported(at: Date)
-        /// Imported, and the source has moved since — songs added, taken away,
-        /// or (when only counts are known) whichever way the net went.
+        /// Imported, but the source changed since.
         case outdated(at: Date, newSongs: Int, removedSongs: Int)
     }
 
-    /// Keyed by `SpotifyLibraryItem.id` — the kind-qualified id, because
-    /// Spotify's ids are only unique within a type.
+    /// Keyed by the kind-qualified `SpotifyLibraryItem.id`.
     @Published public private(set) var entries: [String: Entry] = [:]
 
-    /// Used only to check that what an entry points at still exists. Weak
-    /// because the library outlives nothing here and a strong reference back
-    /// would be a cycle through `AppDependencies`.
+    /// Checks entries still point at something. Weak to avoid a cycle.
     private weak var libraryService: LibraryService?
 
-    /// The one `AppDependencies` builds. Weak and static only so the auth
-    /// service can hand it the account's copy on sign-in the way it does for
-    /// the sort services — it is not a singleton, and nothing else uses it.
+    /// Set by `AppDependencies` so auth can hand over the account's copy. Not a singleton.
     public private(set) static weak var shared: SpotifyImportLedger?
 
     public init(libraryService: LibraryService? = nil) {
@@ -89,9 +55,7 @@ public final class SpotifyImportLedger: ObservableObject {
         Self.shared = self
         entries = Self.load()
 
-        // A wiped library hasn't got the songs any more, so claiming they were
-        // already imported would talk someone out of the import that would fix
-        // it. See `UserDataReset`.
+        // After a wipe, "already imported" would be false.
         NotificationCenter.default.addObserver(
             forName: .mixUserDataReset, object: nil, queue: .main
         ) { [weak self] note in
@@ -107,19 +71,14 @@ public final class SpotifyImportLedger: ObservableObject {
 
     public func state(for item: SpotifyLibraryItem) -> State {
         guard let entry = entries[item.id] else { return .never }
-        // A playlist the user has since deleted isn't imported any more, and
-        // saying it is would talk them out of the import that brings it back.
-        // Liked Songs and albums have no single destination to check.
+        // Deleted playlists aren't imported any more.
         if let playlistID = entry.playlistID,
            playlistID != Playlist.favouritesID,
            libraryService?.playlist(id: playlistID) == nil {
             return .never
         }
-        // Counts, not ids: listing the picker already costs a request per page
-        // and fetching every track of every playlist to diff it exactly would
-        // be hundreds more against an account that is already rate-limited.
-        // So the badge reports the net move, and the exact +new / −removed is
-        // reported after the import, which does read every track.
+        // Counts only; diffing every playlist's tracks costs too many requests. The
+        // exact diff is reported after import.
         let delta = item.trackCount - entry.sourceCount
         if delta == 0 { return .imported(at: entry.importedAt) }
         return .outdated(at: entry.importedAt,
@@ -127,11 +86,7 @@ public final class SpotifyImportLedger: ObservableObject {
                          removedSongs: max(-delta, 0))
     }
 
-    /// How many songs importing this row would actually bring over: everything
-    /// for something never imported, and only what the source has gained for
-    /// something that has been. This is what the Import button counts — it used
-    /// to add up whole track counts, so re-importing Liked Songs offered to
-    /// "Import 2263 Songs" next to a badge reading "9 new".
+    /// Songs an import would bring: everything if never imported, else only the gain.
     public func newSongCount(for item: SpotifyLibraryItem) -> Int {
         switch state(for: item) {
         case .never:                        return item.trackCount
@@ -148,11 +103,8 @@ public final class SpotifyImportLedger: ObservableObject {
 
     // MARK: - Writing
 
-    /// Files a finished import and reports what changed since the last one.
-    ///
-    /// Exact when both this run and the previous one carried Spotify ids — that
-    /// is the only way to see 9 added *and* 2 removed, which the counts alone
-    /// net out to 7. Falls back to the count delta otherwise.
+    /// Records a finished import and reports what changed. Exact when both runs
+    /// carried Spotify ids, otherwise a count delta.
     @discardableResult
     public func record(_ item: SpotifyLibraryItem,
                        playlistID: UUID?,
@@ -184,10 +136,7 @@ public final class SpotifyImportLedger: ObservableObject {
         return change
     }
 
-    /// Drops the record for a source, so the picker offers it as new again.
-    ///
-    /// Called when the playlist an import created is deleted: keeping the entry
-    /// would leave "already imported" standing over something that is gone.
+    /// Forgets a source so the picker offers it as new. Called when its playlist is deleted.
     public func forget(playlistID: UUID) {
         let stale = entries.filter { $0.value.playlistID == playlistID }.map(\.key)
         guard !stale.isEmpty else { return }
@@ -203,14 +152,8 @@ public final class SpotifyImportLedger: ObservableObject {
         save()
     }
 
-    /// Replaces the ledger with the account's own copy when a different user
-    /// signs in on this device.
-    ///
-    /// Nothing is pushed: the entries being dropped belong to the account
-    /// signing *out*, and by now the signed-in session is the new one — the
-    /// upload would have deleted the incoming user's ledger from their account.
-    /// An account with no copy gets an empty one, which is the truth: they have
-    /// imported nothing here.
+    /// Swaps in the new account's ledger. Not pushed, or it would overwrite the
+    /// incoming user's copy.
     public func accountDidChange(remote raw: String?) {
         isApplyingRemote = true
         entries = [:]
@@ -247,28 +190,20 @@ public final class SpotifyImportLedger: ObservableObject {
 
     // MARK: - Account sync
 
-    /// Set by `AppDependencies` — writes the encoded ledger into `user_metadata`.
+    /// Writes the encoded ledger to `user_metadata`.
     public var pushWriter: ((String) -> Void)?
 
     private var isApplyingRemote = false
     private var pushTask: Task<Void, Never>?
 
-    /// The account's copy, taken as authoritative on sign-in and on every
-    /// session refresh — the same contract `PlaylistTrackSortService` uses.
-    ///
-    /// Local track ids survive the adoption: they are not in the payload, and
-    /// throwing away this device's copy of them would cost the exact diff on
-    /// the one device that can still make it.
+    /// Adopts the account's copy on sign-in and refresh. Local track ids survive.
     public func adoptRemote(_ raw: String?) {
         guard let raw, let data = raw.data(using: .utf8),
               let remote = try? JSONDecoder().decode([String: Entry].self, from: data)
         else { return }
         var merged = remote
-        // An import the user undid here is not one this device is missing. The
-        // account's copy is authoritative for everything else, but it cannot
-        // express a deletion: the entry is simply absent, which reads the same
-        // as never having existed. Since this runs on every session refresh, a
-        // refresh landing before the debounced push put the badge straight back.
+        // Keep local deletions: the remote copy can't express them, and a refresh
+        // before the push would bring the badge back.
         var stale = false
         for key in forgotten where merged[key] != nil {
             merged[key] = nil
@@ -295,8 +230,7 @@ public final class SpotifyImportLedger: ObservableObject {
         didSet { UserDefaults.standard.set(Array(forgotten), forKey: "mix.spotifyForgottenImports") }
     }
 
-    /// Debounced: a multi-item import writes one entry per item and this is one
-    /// account update, not one per playlist.
+    /// Debounced: one account write per import.
     private func schedulePush() {
         pushTask?.cancel()
         pushTask = Task { @MainActor in

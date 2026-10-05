@@ -1,12 +1,5 @@
-// MacDockMenu.swift
-// Mixtape — Mac/App
-//
-// The Dock tile's right-click menu: what's playing, and the transport.
-//
-// iTunes has had this for as long as the Dock has, and it is the one control
-// surface that still works while the app is buried behind something else.
-// SwiftUI has no API for it, so this is the app's only AppDelegate — kept to
-// exactly that job.
+// Dock tile right-click menu: now playing and transport.
+// SwiftUI has no API for it, so this is the app's only AppDelegate.
 
 #if os(macOS)
 import AppKit
@@ -14,17 +7,14 @@ import AppKit
 @MainActor
 final class MacDockMenu: NSObject, NSApplicationDelegate {
 
-    /// Set once from `MixtapeApp`. Weak and static because AppKit builds the
-    /// delegate itself, outside the SwiftUI environment, and `AppDependencies`
-    /// has no singleton to reach back through.
+    /// Set from `MixtapeApp`. Static because AppKit creates the delegate outside the SwiftUI environment.
     static weak var engine: PlaybackEngine?
 
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
         guard let engine = Self.engine else { return nil }
         let menu = NSMenu()
 
-        // The song, as disabled header lines. Not actions: there is nowhere for
-        // them to go that clicking the tile doesn't already do.
+        // The song as disabled header lines.
         if let track = engine.queue.currentTrack {
             for line in [track.displayTitle, track.artistName] where !line.isEmpty {
                 let item = NSMenuItem(title: line, action: nil, keyEquivalent: "")
@@ -35,8 +25,7 @@ final class MacDockMenu: NSObject, NSApplicationDelegate {
         }
 
         menu.addItem(item(engine.state.isPlaying ? "Pause" : "Play", #selector(dockPlayPause)))
-        // Skipping with nothing loaded would silently do nothing, so the rows
-        // only appear once there is somewhere to skip from.
+        // Transport rows only when something is loaded.
         if engine.queue.currentTrack != nil {
             menu.addItem(item("Next", #selector(dockNext)))
             menu.addItem(item("Previous", #selector(dockPrevious)))
@@ -44,8 +33,7 @@ final class MacDockMenu: NSObject, NSApplicationDelegate {
         return menu
     }
 
-    /// A Spotlight hit. SwiftUI's `onContinueUserActivity` doesn't reliably
-    /// see these on macOS; the delegate does.
+    /// Spotlight hits: `onContinueUserActivity` misses these on macOS.
     func application(_ application: NSApplication, continue userActivity: NSUserActivity,
                      restorationHandler: @escaping ([any NSUserActivityRestoring]) -> Void) -> Bool {
         SpotlightIndex.open(userActivity)

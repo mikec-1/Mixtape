@@ -1,25 +1,8 @@
-// LibrarySnapshotReader.swift
-// Mixtape — Data/Persistence
-//
 // Reads the whole library off the main actor.
-//
-// The repositories are all `@MainActor` and share the container's `mainContext`,
-// which is the right shape for the write paths — they run inside a user action
-// that is already on the main actor and want their change visible to the very
-// next read. It is the wrong shape for the one read that dominates launch:
-// `LibraryService.refresh()` pulls every track, album and artist, and at ~2,100
-// tracks that is roughly a second of main-thread time during which the Library
-// tab cannot draw a frame.
-//
-// This is the same three fetches against a *private* context vended by
-// `@ModelActor`, which pins the actor's executor to that context so the rows are
-// only ever touched from one place. Nothing here writes, and nothing crosses the
-// boundary but value types: `Track`, `Album` and `Artist` are `Sendable` structs
-// that `toDomain` has already detached from their entities.
-//
-// Artwork is left behind, exactly as the repositories leave it — see
-// `TrackRepository.fetchAll` for why naming only `\.id` in `propertiesToFetch`
-// is what keeps the cover blobs out of the fetch.
+// The repositories share the main context, which suits writes but makes the
+// launch-time full read block the UI. This runs the same fetches on a private
+// context and returns only `Sendable` value types. Artwork is left out, as in
+// `TrackRepository.fetchAll`.
 
 import Foundation
 import SwiftData
@@ -30,60 +13,26 @@ public struct LibrarySnapshot: Sendable {
     public let tracks:  [Track]
     public let albums:  [Album]
     public let artists: [Artist]
-    /// Ids of the live tracks that have a cover stored.
-    ///
-    /// Computed here so the main actor never has to: the equivalent question on
-    /// the main actor is a full-table fetch with a predicate against an
-    /// external-storage attribute, and it used to run inside every `tracks =`
-    /// assignment.
-    /// `nil` from a caller that didn't compute it, which means "work it out on
-    /// the main actor as before".
+    /// Ids of live tracks with a stored cover, so the main actor doesn't have to
+    /// compute it. Nil means the caller should work it out itself.
     public let tracksWithArtwork: Set<UUID>?
-    /// How long the fetch itself took, so the caller can log it the same way the
-    /// main-actor path does.
+    /// Fetch time, for logging.
     public let fetchMilliseconds: Int
 }
 
-/// Deliberately **not** a `@ModelActor`, and not an actor at all.
-///
-/// It was one, and the read still ran on the main thread. `@ModelActor` installs
-/// SwiftData's `DefaultSerialModelExecutor`, which runs an enqueued job inline on
-/// the enqueuing thread rather than hopping — so a `read()` awaited from the main
-/// actor executed on the main thread through `NSManagedObjectContext.performAndWait`,
-/// and the "off-main" fetch froze the app for the whole ~650 ms. Building the actor
-/// off the main actor made no difference, because the thread comes from the caller,
-/// not from where the context was created.
-///
-/// So there is no actor and no custom executor here. `read()` is `nonisolated async`,
-/// which under SE-0338 does not inherit the caller's actor and runs on the shared
-/// concurrent pool; it does its work in one synchronous call, creating and dropping
-/// its `ModelContext` on that pool thread. The context therefore never escapes the
-/// call, which is what made the actor necessary in the first place.
+/// Not an actor: `@ModelActor`'s executor runs jobs inline on the caller's
+/// thread, so an await from main still ran on main. Instead `read()` creates and
+/// drops its own context inside a detached task.
 public final class LibrarySnapshotReader: Sendable {
 
     public init() {}
 
-    /// Fetches tracks, albums and artists off the main actor.
-    ///
-    /// Deliberately one call rather than three: the three fetches want to see the
-    /// same store state, and going back to the caller between them would let a
-    /// main-actor write land in the middle and produce a snapshot whose albums
-    /// reference tracks it doesn't contain.
-    /// `container` is passed in rather than held: it belongs to whichever
-    /// account's store is open at the moment of the call. See `ModelStore`.
+    /// Tracks, albums and artists in one call so all three see the same store state.
+    /// `container` is passed in because it belongs to whichever account's store is
+    /// open right now. See `ModelStore`.
     public func read(container: ModelContainer) async throws -> LibrarySnapshot {
-        // `Task.detached`, and not `nonisolated async`, because Swift 6.2
-        // reversed the rule this file used to rely on. Under SE-0338 a
-        // `nonisolated async` function ran on the generic executor; under
-        // SE-0461 it runs on the **caller's** actor, so awaiting it from
-        // `LibraryService` (which is `@MainActor`) kept the whole fetch on the
-        // main thread — the canary below printed on every single sync, through
-        // both the `@ModelActor` version and the `nonisolated async` one.
-        //
-        // `Task.detached` still inherits no isolation in 6.2, which is the
-        // property actually needed here. The container is `Sendable`, the
-        // context is created and dropped inside the detached body, and only
-        // value types come back.
+        // `Task.detached` because under SE-0461 a `nonisolated async` func runs on the
+        // caller's actor, which would be main here. Only value types come back.
         return try await Task.detached(priority: .userInitiated) {
             try Self.readSynchronously(container: container)
         }.value
@@ -92,9 +41,7 @@ public final class LibrarySnapshotReader: Sendable {
     private nonisolated static func readSynchronously(container modelContainer: ModelContainer) throws -> LibrarySnapshot {
         let started = CFAbsoluteTimeGetCurrent()
 
-        // The canary that caught the `@ModelActor` version. The failure mode is
-        // completely silent otherwise — the work still finishes, it just freezes
-        // the app doing it.
+        // Catches a regression back onto the main thread, which is otherwise silent.
         if Thread.isMainThread {
             MixLog.database.error("LibrarySnapshotReader.read() is running ON THE MAIN THREAD")
         }
@@ -117,20 +64,13 @@ public final class LibrarySnapshotReader: Sendable {
         )
         artistDescriptor.propertiesToFetch = [\.id]
 
-        // A scratch context per read, not the actor's own. A `ModelContext` keeps
-        // every row it fetches registered for as long as it lives, so reading the
-        // whole library through the actor's long-lived context would leave a
-        // second copy of it resident between refreshes. This one is created and
-        // dropped inside a single synchronous, actor-isolated call — the rows go
-        // with it, and the caller keeps only the structs. Same reasoning as
+        // A scratch context per read: a context keeps every fetched row alive, so a
+        // long-lived one would hold a second copy of the library. Same as
         // `ArtworkProvider.scratch`.
         let scratch = ModelContext(modelContainer)
 
-        // Split deliberately. `propertiesToFetch = [\.id]` keeps the cover blob
-        // out of the fetch, but `toDomain` then reads twenty-two other scalars
-        // off each row — and a property that wasn't fetched is a fault back to
-        // the store. If that is what the Mac's 4.3-second read is, the fetch
-        // will be quick and the map will be almost all of it.
+        // Timed separately: unfetched scalars fault back to the store in `toDomain`,
+        // so the map may cost more than the fetch.
         let fetchedAt = CFAbsoluteTimeGetCurrent()
         let trackRows = try scratch.fetch(trackDescriptor)
         let rowsAt    = CFAbsoluteTimeGetCurrent()

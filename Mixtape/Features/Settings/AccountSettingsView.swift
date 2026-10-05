@@ -1,9 +1,5 @@
-// AccountSettingsView.swift
-// Mixtape — Features/Settings
-//
-// Self-contained account management content: change username, email, password.
-// Presented by SettingsView inside a sheet (NavigationStack + Done button),
-// so this view does NOT create its own NavigationStack.
+// Account management: username, email, password. Shown in a sheet by SettingsView,
+// so no NavigationStack here.
 
 import SwiftUI
 import UniformTypeIdentifiers
@@ -99,7 +95,7 @@ public struct AccountSettingsView: View {
             passwordSection
         }
         .scrollContentBackground(.hidden)
-        .background(Color.mixBackground.ignoresSafeArea())
+        .background(MixPageBackground())
         .navigationTitle("Account")
         .tint(.mixPrimary)
     }

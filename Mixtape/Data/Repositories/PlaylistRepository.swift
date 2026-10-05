@@ -1,14 +1,10 @@
-// PlaylistRepository.swift
-// Mixtape — Data/Repositories
-
 import Foundation
 import SwiftData
 
 @MainActor
 public final class PlaylistRepository {
 
-    /// Never stored: the context belongs to whichever account's store is open
-    /// right now. See `ModelStore`.
+    /// Not stored: belongs to the open account's store. See `ModelStore`.
     private var context: ModelContext { ModelStore.shared.context }
 
     public init() {}
@@ -20,13 +16,8 @@ public final class PlaylistRepository {
             predicate: #Predicate { !$0.isSoftDeleted },
             sortBy: [SortDescriptor(\.dateCreated)]
         )
-        // No covers. This is the bulk path — `LibraryService.refreshPlaylists()`
-        // calls it on every library mutation — and each `artworkData` touched
-        // here faults a whole external-storage blob in off disk. A library with
-        // fifty playlists was reading fifty covers, one of them megabytes wide,
-        // every time a song was added or a playlist deleted. `displayArtwork`
-        // resolves the bytes through `ArtworkProvider` for the handful of
-        // covers actually on screen.
+        // No covers: this runs on every library change, and reading `artworkData` faults
+        // in each blob. `displayArtwork` loads on-screen covers via `ArtworkProvider`.
         return try context.fetch(descriptor).map { $0.toDomain(includingArtwork: false) }
     }
 
@@ -34,10 +25,8 @@ public final class PlaylistRepository {
         try fetchEntity(id: id)?.toDomain()
     }
 
-    /// The tombstones: playlists that were deleted but whose rows stay behind so
-    /// the deletion can reach every device. `fetchAll` filters them out, and
-    /// that filter is exactly what makes them a record of which songs a delete
-    /// left in the library. See `LibraryService.orphansFromDeletedPlaylists`.
+    /// Soft-deleted playlists, kept so the deletion reaches every device. Used to find
+    /// songs a delete left behind; see `LibraryService.orphansFromDeletedPlaylists`.
     public func fetchDeleted() throws -> [Playlist] {
         let descriptor = FetchDescriptor<PlaylistEntity>(
             predicate: #Predicate { $0.isSoftDeleted }
@@ -71,15 +60,11 @@ public final class PlaylistRepository {
 
     // MARK: - Cache Discard (account switch)
 
-    /// Drops every local playlist row without leaving a trace the server will
-    /// ever see. For signing out or switching accounts — not for deleting.
-    ///
-    /// Deliberately not `softDelete`: that stamps `syncStatus = .deleted`, and
-    /// the next push turns it into `is_deleted = true`. On an account switch the
-    /// push runs as the *incoming* user, so signing in was writing deletions for
-    /// playlists that account had never seen. System playlists are emptied
-    /// without `touch()` for the same reason — a touched Favourites is pending,
-    /// and an empty pending Favourites overwrites the real one on the server.
+    /// Drops every local playlist row without telling the server. For sign-out or
+    /// account switch, not deleting.
+    /// Not `softDelete`: the next push would run as the incoming user and delete
+    /// their playlists. System playlists are emptied without `touch()`, or an empty
+    /// pending Favourites would overwrite the server copy.
     public func discardLocalCopies() throws {
         for entity in try context.fetch(FetchDescriptor<PlaylistEntity>()) {
             if entity.id == Playlist.favouritesID || entity.id == Playlist.allSongsID {
@@ -92,13 +77,8 @@ public final class PlaylistRepository {
         try context.saveBatched()
     }
 
-    /// Lets the server's Favourites win the next pull regardless of timestamps.
-    ///
-    /// Favourites is last-write-wins on `syncLocalModifiedAt`, so a local copy
-    /// emptied five minutes ago beats a server row that still holds every heart
-    /// but hasn't changed in months: the pull fetches the right data and then
-    /// throws it away. Only for the explicit "re-sync from server" action, where
-    /// taking the server's word is the entire point of pressing the button.
+    /// Makes the server's Favourites win the next pull regardless of timestamps.
+    /// Only for the explicit "re-sync from server" action.
     public func yieldFavouritesToServer() throws {
         guard let fav = try fetchEntity(id: Playlist.favouritesID) else { return }
         fav.syncLocalModifiedAt = .distantPast
@@ -108,9 +88,8 @@ public final class PlaylistRepository {
 
     // MARK: - Ensure System Playlists
 
-    /// Creates the Favourites system playlist if it doesn't already exist.
-    /// Initialised as `.synced` so a fresh install never pushes an empty array
-    /// over an existing server version (pull runs and populates it instead).
+    /// Creates Favourites if missing. Starts `.synced` so a fresh install never pushes
+    /// an empty list over the server's (the pull fills it).
     public func ensureFavourites(deviceID: String) throws {
         if let fav = try fetchEntity(id: Playlist.favouritesID) {
             var dirty = false
@@ -119,9 +98,7 @@ public final class PlaylistRepository {
                 fav.syncStatus = SyncStatus.synced.rawValue
                 dirty = true
             }
-            // Renamed in 2026-09. Done here rather than as a one-shot because a
-            // pull from a device still on the old build brings the old name
-            // back, and this runs every launch.
+            // Renamed 2026-09. Checked every launch since older builds can sync the old name back.
             if fav.name == "Favourites" {
                 fav.name = Playlist.favouritesName
                 dirty = true
@@ -133,15 +110,13 @@ public final class PlaylistRepository {
             id:          Playlist.favouritesID,
             name:        Playlist.favouritesName,
             description: "Songs you've loved.",
-            // Pinned from birth, so a first launch opens on the shape the
-            // legacy pin migration below already gave every upgrading device:
-            // the system playlists at the top of the sidebar. Without it a
-            // fresh install was the one case that started with nothing pinned.
+            // Pinned from creation, matching what the pin migration gives upgraded installs.
             isPinned:    true,
             sync: SyncMetadata(
                 serverID:        nil,
                 status:          .synced,  // Don't push an empty Favourites over an existing server version
-                localModifiedAt: Date(),
+                // Older than any server copy. Stamped now, it was newer than the server's and the pull skipped it.
+                localModifiedAt: .distantPast,
                 serverModifiedAt: nil,
                 lastSyncedAt:    nil,
                 deviceID:        deviceID
@@ -151,9 +126,7 @@ public final class PlaylistRepository {
         try context.saveBatched()
     }
 
-    /// Creates the All Songs system playlist if it doesn't already exist.
-    /// Returns `true` if the playlist was freshly created (caller can then seed it
-    /// with existing tracks for users upgrading from an older version).
+    /// Creates All Songs if missing. Returns true if newly created, so the caller can seed it.
     @discardableResult
     public func ensureAllSongs(deviceID: String) throws -> Bool {
         if let all = try fetchEntity(id: Playlist.allSongsID) {
@@ -192,11 +165,11 @@ public final class PlaylistRepository {
     }
 }
 
-// MARK: - PlaylistEntity ↔ Domain Mapping
+// MARK: - PlaylistEntity <-> Domain Mapping
 
 extension PlaylistEntity {
 
-    /// See TrackEntity.toDomain — `includingArtwork: false` is the bulk path.
+    /// `includingArtwork: false` is the bulk path. See `TrackEntity.toDomain`.
     func toDomain(includingArtwork: Bool = true) -> Playlist {
         Playlist(
             id:          id,
@@ -229,18 +202,13 @@ extension PlaylistEntity {
         name                 = playlist.name
         playlistDescription  = playlist.description
         trackIDsData         = playlist.trackIDs.toData()
-        // A cover that changed has to be sent again, and the upload pass decides
-        // that by looking at `artworkKey`. Without this the first cover a
-        // playlist ever had would be the only one the other device ever saw.
+        // A changed cover needs uploading again; the upload pass checks `artworkKey`.
         if artworkData != playlist.artworkData {
             artworkKey = nil
-            // A local edit is this device's answer now; the stamp describes a
-            // file that no longer matches what is on screen here.
+            // Local edit wins; the remote stamp is stale now.
             artworkRemoteStamp = nil
         }
-        // Throwing a cover away has to reach the bucket, or the download pass
-        // finds the old file still sitting there and hands it back. See
-        // `artworkNeedsRemoteDelete`.
+        // A removed cover must be deleted from the bucket too. See `artworkNeedsRemoteDelete`.
         if playlist.coverKind == PlaylistCoverKind.none,
            artworkData != nil || artworkKey != nil {
             artworkNeedsRemoteDelete = true

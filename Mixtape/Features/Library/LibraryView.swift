@@ -1,30 +1,22 @@
-// LibraryView.swift
-// Mixtape — Features/Library
-
 import SwiftUI
 
 public struct LibraryView: View {
 
     @EnvironmentObject private var deps: AppDependencies
-    /// Directly: `deps.visibleSmartPlaylists` reads a nested ObservableObject,
-    /// which doesn't republish through `deps`.
+    /// Observed directly: `deps.visibleSmartPlaylists` doesn't republish through `deps`.
     @EnvironmentObject private var smartService: SmartPlaylistService
     @StateObject private var vm: LibraryViewModel
 
-    // The + menu, and the sheet it asked for. Two pieces of state rather than
-    // one because the chosen sheet can only be presented once the menu has
-    // finished dismissing — see `pendingRoute`.
+    // The + menu and its chosen sheet. Separate because the sheet waits for the
+    // menu to dismiss; see `pendingRoute`.
     @State private var showCreateMenu = false
     @State private var pendingRoute: LibraryCreateRoute?
     @State private var activeRoute:  LibraryCreateRoute?
 
-    /// Whether the playlist list is in drag-to-reorder mode. Lives here rather
-    /// than in the view model because it describes this screen right now, not
-    /// how the person likes their library read.
+    /// Drag-to-reorder mode. Screen state, so not in the view model.
     @State private var isArranging = false
 
-    /// Programmatic navigation path so cross-tab requests (tapping an artist in
-    /// the mini player / now-playing sheet) can push the artist page here.
+    /// Navigation path, so other tabs can push an artist page here.
     @State private var navPath = NavigationPath()
 
     #if os(iOS)
@@ -35,8 +27,7 @@ public struct LibraryView: View {
         _vm = StateObject(wrappedValue: LibraryViewModel(libraryService: libraryService))
     }
 
-    /// Reordering is only offered where a drop has an unambiguous meaning: the
-    /// playlist list, unsorted and unfiltered.
+    /// Reordering only makes sense in the unsorted, unfiltered playlist list.
     private var canArrange: Bool {
         vm.selectedSection != .smart && vm.selectedSection != .albums && vm.layout == .list && vm.canReorderPlaylists
     }
@@ -44,23 +35,17 @@ public struct LibraryView: View {
     public var body: some View {
         NavigationStack(path: $navPath) {
             ZStack {
-                Color.mixBackground.ignoresSafeArea()
+                MixPageBackground()
 
                 VStack(spacing: 0) {
                     #if os(iOS)
-                    // Hand-built rather than a large navigation title: the
-                    // avatar belongs on the title's own line, and the pills
-                    // below have to scroll away without collapsing it. See
-                    // `LibraryHeader`.
+                    // Hand-built header instead of a large nav title. See `LibraryHeader`.
                     LibraryHeader(isSearching: $vm.isSearching,
                                   searchText:  $vm.searchText,
                                   onAdd:       { showCreateMenu = true })
                     #endif
 
-                    // Sync and import announce themselves here and nowhere
-                    // else: it is this list they are changing, and an
-                    // app-wide banner meant every screen carried a caption
-                    // about a screen you were not on.
+                    // Sync and import progress, shown on the list they change.
                     LibraryActivityBar(library: deps.libraryService)
                         .mixAnimation(.spring(response: 0.32, dampingFraction: 0.86),
                                       value: deps.libraryService.activity)
@@ -76,8 +61,7 @@ public struct LibraryView: View {
                                    arranging: $isArranging,
                                    canArrange: canArrange)
                     .onChange(of: canArrange) { _, allowed in
-                        // Sorting by name, or opening search, ends the drag
-                        // session — there is nothing left to drag against.
+                        // Sorting or searching ends the drag session.
                         if !allowed { isArranging = false }
                     }
 
@@ -89,9 +73,7 @@ public struct LibraryView: View {
             }
             .miniPlayerSafeArea()
             #if os(iOS)
-            // `LibraryHeader` *is* the title bar here. Leaving the navigation
-            // bar visible would draw "Your Library" twice, and hiding only the
-            // title would leave an empty bar pushing the header down.
+            // `LibraryHeader` is the title bar, so hide the nav bar.
             .navigationBarHidden(true)
             #else
             .navigationTitle("Your Library")
@@ -122,24 +104,26 @@ public struct LibraryView: View {
                 CrateDetailView(crateID: $0.id, library: deps.libraryService)
             }
             #if os(iOS)
-            // Consume a cross-tab request to open a local artist (set when an
-            // artist is tapped in the mini player / now-playing sheet / Home).
-            .onChange(of: iosAppState.pendingLibraryArtist) { _, artist in
+            // Open a local artist requested from another tab (mini player, Now Playing, Home).
+            .onChange(of: iosAppState.pendingLibraryArtist, initial: true) { _, artist in
                 guard let artist else { return }
                 navPath.append(artist)
                 iosAppState.pendingLibraryArtist = nil
             }
-            // Same shape, for a playlist picked outside the library — a saved
-            // mix opened from Mixtape's profile.
-            .onChange(of: iosAppState.pendingLibraryPlaylist) { _, playlist in
+            // Same for a playlist picked elsewhere, like a saved mix.
+            .onChange(of: iosAppState.pendingLibraryPlaylist, initial: true) { _, playlist in
                 guard let playlist else { return }
                 navPath.append(playlist)
                 iosAppState.pendingLibraryPlaylist = nil
             }
+            .onChange(of: iosAppState.pendingLibraryCrate, initial: true) { _, crate in
+                guard let crate else { return }
+                navPath.append(crate)
+                iosAppState.pendingLibraryCrate = nil
+            }
             #endif
             .task { await vm.load() }
-            // The + menu hands back a route and closes; the route is only
-            // presented from `onDismiss`, once the menu is actually gone.
+            // Present the chosen route only once the menu is gone.
             .sheet(isPresented: $showCreateMenu, onDismiss: {
                 guard let route = pendingRoute else { return }
                 pendingRoute = nil
@@ -186,8 +170,7 @@ public struct LibraryView: View {
         }
     }
 
-    /// Move to the section the new thing will land in, so creating it doesn't
-    /// finish with the user looking at a page it isn't on.
+    /// Switch to the section the new item lands in.
     private func section(landingFor route: LibraryCreateRoute) -> LibrarySection? {
         switch route {
         case .playlist, .joinShared, .generateMix, .crate: return .playlists
@@ -201,8 +184,7 @@ public struct LibraryView: View {
     private var sectionPicker: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                // Leads the row and reads as a switch, not a destination: it
-                // cuts across every chip after it rather than replacing them.
+                // First, and styled as a toggle: it filters across the other chips.
                 SectionChip(title: "Downloaded",
                             icon: MixtapeIcons.download,
                             isSelected: vm.downloadedOnly) {
@@ -237,15 +219,7 @@ public struct LibraryView: View {
             let smart = showsAll ? vm.visibleSmart(deps.visibleSmartPlaylists, ids: deps.smartTrackIDs) : []
             let albums = showsAll ? vm.visibleAlbums : []
             VStack(spacing: 0) {
-                // Above everything else, and only when there is one: an invite is
-                // the one thing here that expires socially — somebody is waiting
-                // on an answer — and it's the surface the invitee looks at when
-                // they go hunting for the playlist they were told about.
-                PlaylistInviteInbox(horizontalPadding: 16)
-
-                // Only once a watched folder actually has music in it. This is
-                // a view over the user's own folders, not a library row, so it
-                // sits above the playlists rather than pretending to be one.
+                // Only once a watched folder has music. It's a view of the user's folders, above the playlists.
                 if !deps.localFiles.tracks.isEmpty {
                     LocalFilesLibraryLink(count: deps.localFiles.tracks.count)
                         .padding(.horizontal, 16)
@@ -280,8 +254,7 @@ public struct LibraryView: View {
 
 // MARK: - Local Files Link
 
-/// The way into `LocalFilesPage` on iOS, where there is no sidebar to hang it
-/// off. Appears only when a watched folder has something in it.
+/// Entry to `LocalFilesPage` on iOS, which has no sidebar. Only shown when there are files.
 private struct LocalFilesLibraryLink: View {
     let count: Int
 
@@ -321,7 +294,7 @@ private struct LocalFilesLibraryLink: View {
 
 // MARK: - Section Chip
 
-private struct SectionChip: View {
+struct SectionChip: View {
     let title: String
     var icon: String? = nil
     let isSelected: Bool
@@ -350,31 +323,20 @@ private struct SectionChip: View {
 
 private struct PlaylistsListView: View {
     let playlists: [Playlist]
-    /// Reordering is an explicit mode: the rows already answer a tap, a swipe
-    /// and a long press, and a fourth gesture on top of those would be a
-    /// coin toss every time somebody's thumb rested a moment too long.
+    /// Explicit mode, since rows already use tap, swipe and long press.
     @Binding var isArranging: Bool
-    /// Saved albums and smart playlists, listed after the playlists in the
-    /// unfiltered library.
+    /// Saved albums and smart playlists, after the playlists in the unfiltered library.
     var albums: [Album] = []
     var smart: [SmartPlaylist] = []
     /// Set outside Custom Order: everything interleaved by the sort.
     var mixed: [LibraryItem]? = nil
     @EnvironmentObject private var deps: AppDependencies
     @ObservedObject private var meta = PlaylistMetadataService.shared
-    /// A swipe used to be the one delete in the app that asked nothing, which was
-    /// fair while it only threw away a list. It now takes songs and downloads
-    /// with it, so it asks — and, like every other entry point, says how many.
+    /// Swipe-to-delete asks first, with counts, since it removes songs and downloads too.
     @State private var deleteTarget: Playlist? = nil
 
-    /// Pinned first, everything else in the order it arrived.
-    ///
-    /// `LibraryService` already orders the list this way, but only at the moment
-    /// it rebuilds it — and the pins are read from a separate store that may not
-    /// have loaded yet on the first pass, which left a pinned playlist sitting
-    /// wherever the alphabet put it until something else forced a refresh. A
-    /// stable partition here costs nothing and is answered by the same object
-    /// the pin control writes to, so it is right immediately and stays right.
+    /// Pinned first, then the given order. `LibraryService` already sorts this way,
+    /// but pins may load later, so partition here too.
     private var ordered: [Playlist] {
         pinnedPlaylists + unpinnedPlaylists
     }
@@ -382,44 +344,31 @@ private struct PlaylistsListView: View {
     private var pinnedPlaylists:   [Playlist] { playlists.filter { meta.isPinned(playlistID: $0.id) } }
     private var unpinnedPlaylists: [Playlist] { playlists.filter { !meta.isPinned(playlistID: $0.id) } }
 
-    /// Writes the whole visible sequence back, which is what carries the
-    /// arrangement to the Mac — see `LibraryService.setPlaylistOrder`.
-    ///
-    /// Scoped to the unpinned rows: pinned playlists are drawn in their own
-    /// `ForEach` with no `onMove` of their own, so a drag can never leave the
-    /// group it started in. It used to be one `ForEach` over the whole list —
-    /// dragging a row past the pinned/unpinned boundary looked like it worked
-    /// for a frame, then snapped back the moment the list re-sorted, because
-    /// pinned playlists always sort first regardless of where the drag left
-    /// them. Two groups the drag can't cross means that snap can't happen.
+    /// Writes the visible order back, which syncs it to the Mac (see
+    /// `LibraryService.setPlaylistOrder`). Pinned rows are a separate `ForEach`, so
+    /// a drag can't cross the pinned boundary and snap back.
     private func moveUnpinned(from source: IndexSet, to destination: Int) {
         var unpinned = unpinnedPlaylists
         unpinned.move(fromOffsets: source, toOffset: destination)
         deps.libraryService.setPlaylistOrder((pinnedPlaylists + unpinned).map(\.id))
     }
 
-    /// The same move, scoped to the pinned group. Pinned rows are arrangeable
-    /// among themselves — the boundary is the only thing a drag can't cross,
-    /// not the pin itself — and because each group has its own `ForEach` and
-    /// its own `onMove`, neither drag can reach the other's rows.
+    /// Same, within the pinned group.
     private func movePinned(from source: IndexSet, to destination: Int) {
         var pinned = pinnedPlaylists
         pinned.move(fromOffsets: source, toOffset: destination)
         deps.libraryService.setPlaylistOrder((pinned + unpinnedPlaylists).map(\.id))
     }
 
-    /// One row, shared by the pinned and unpinned groups so the two `ForEach`
-    /// blocks below stay a list split, not two different rows.
+    /// One row for both groups.
     @ViewBuilder
     private func row(for playlist: Playlist) -> some View {
         NavigationLink(value: playlist) {
             PlaylistRowView(playlist: playlist)
-                // The offline badge tracks downloads as they land, so the row
-                // observes the manager itself rather than reading a value
-                // through `deps` that wouldn't republish.
+                // The offline badge observes the manager directly; `deps` doesn't republish it.
                 .environmentObject(deps.downloadManager)
         }
-        .listRowBackground(Color.mixBackground)
+        .listRowBackground(MixRowBackground())
         .listRowSeparatorTint(Color.mixSeparator)
         .swipeActions(edge: .leading) {
             Button {
@@ -439,8 +388,7 @@ private struct PlaylistsListView: View {
                 }
             }
         }
-        // Long-press gets the playlist's whole "…" menu, not a shortened copy
-        // of it.
+        // Long press gets the full "..." menu.
         .playlistActions(playlist)
     }
 
@@ -449,15 +397,14 @@ private struct PlaylistsListView: View {
                   NavigationLink(value: album) {
                       AlbumRowView(album: album, downloads: deps.downloadManager)
                   }
-                  .listRowBackground(Color.mixBackground)
+                  .listRowBackground(MixRowBackground())
                   .listRowSeparatorTint(Color.mixSeparator)
                   .swipeActions(edge: .trailing) {
                       Button(role: .destructive) {
                           SavedAlbumsService.shared.setSaved(false, title: album.title, artistName: album.artistName)
                       } label: { Label("Remove", systemImage: "minus.circle") }
                   }
-                  // Long-press gets the album's whole menu, not a shortened
-                  // copy of it — the same rule the playlist rows follow.
+                  // Full album menu on long press, like playlists.
                   .contextMenu { AlbumActionsMenu(album: album) }
                   .moveDisabled(true)
               
@@ -473,7 +420,7 @@ private struct PlaylistsListView: View {
                                       kind: "Smart Playlist")
                           .environmentObject(deps.downloadManager)
                   }
-                  .listRowBackground(Color.mixBackground)
+                  .listRowBackground(MixRowBackground())
                   .listRowSeparatorTint(Color.mixSeparator)
                   .contextMenu {
                       SmartPlaylistActionsMenu(playlist: item, service: deps.smartPlaylistService)
@@ -482,16 +429,12 @@ private struct PlaylistsListView: View {
               
     }
 
-    /// A thin rule between the pinned group and everything else, shown only
-    /// while arranging — the one moment the boundary actually matters to
-    /// someone with a thumb on a row.
+    /// Rule between pinned and unpinned, shown only while arranging.
     private var pinnedBoundary: some View {
         Rectangle()
             .fill(Color.mixPrimary.opacity(0.6))
             .frame(height: 2)
-            // A `List` row is generously padded by default, which turned a
-            // 2pt rule into a visible gap in the list. The insets are the
-            // whole row here, so the boundary sits tight against the rows.
+            // Tight insets so the rule doesn't become a gap.
             .listRowInsets(EdgeInsets(top: 1, leading: 16, bottom: 1, trailing: 16))
             .listRowBackground(Color.clear)
             .listRowSeparator(.hidden)
@@ -521,10 +464,7 @@ private struct PlaylistsListView: View {
               }
               .onMove(perform: movePinned)
 
-              // A pinned playlist's place is decided by pinning it, not by
-              // where a drag left it — see `moveUnpinned`. Named rather than
-              // just left implicit, so someone mid-drag can see why the list
-              // stopped taking their row any higher.
+              // Explains why a drag won't go above the pinned group. See `moveUnpinned`.
               if isArranging, !pinnedPlaylists.isEmpty, !unpinnedPlaylists.isEmpty {
                   pinnedBoundary
               }
@@ -544,7 +484,7 @@ private struct PlaylistsListView: View {
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
             .mixPullToRefresh(deps)
-            .confirmationDialog(
+            .mixConfirmationDialog(
                 PlaylistDeletionPrompt.title(name: deleteTarget?.name ?? "",
                                              isReadOnly: deleteTarget?.isEditable == false),
                 isPresented: Binding(get: { deleteTarget != nil },
@@ -554,6 +494,7 @@ private struct PlaylistsListView: View {
             ) { playlist in
                 Button(PlaylistDeletionPrompt.confirmLabel(isReadOnly: !playlist.isEditable),
                        role: .destructive) {
+                    SupabaseSyncService.allowBulk("delete-playlists")
                     deps.libraryService.deletePlaylist(id: playlist.id)
                 }
                 Button("Cancel", role: .cancel) {}
@@ -568,11 +509,7 @@ private struct PlaylistsListView: View {
 
 // MARK: - Playlists Grid
 
-/// The grid half of the layout toggle.
-///
-/// A plain `ScrollView` rather than a `List` in grid clothing: the swipe
-/// actions the list row carries have no meaning on a tile, and the long-press
-/// menu — which does — comes along on its own.
+/// The grid layout. A `ScrollView`, not a `List`, since swipe actions mean nothing on tiles.
 private struct PlaylistsGridView: View {
     let items: [LibraryItem]
     @EnvironmentObject private var deps: AppDependencies
@@ -658,11 +595,8 @@ private struct AlbumsGridView: View {
 
 // MARK: - Downloaded
 
-/// The songs whose audio is actually on this device — the offline shelf.
-///
-/// Reads `library.tracks`, not `displayTracks`: the filter those apply *is*
-/// this list, and asking for it twice would only mean this section shows
-/// nothing whenever the app is online.
+/// Songs with audio on this device. Reads `library.tracks`, not the filtered
+/// `displayTracks`, or this would be empty whenever online.
 struct DownloadedSongsView: View {
 
     @EnvironmentObject private var deps:    AppDependencies
@@ -670,9 +604,7 @@ struct DownloadedSongsView: View {
     @EnvironmentObject private var library: LibraryService
     @ObservedObject var downloads: DownloadManager
     var query: String = ""
-    /// Drawn inside somebody else's ScrollView (Home) rather than owning the
-    /// screen (Library) — two scroll views fighting over one gesture is the
-    /// only difference between the two.
+    /// Drawn inside another ScrollView (Home) instead of owning the screen.
     var embedded: Bool = false
 
     private var tracks: [Track] {
@@ -700,7 +632,7 @@ struct DownloadedSongsView: View {
         } else {
             List(rows) { track in
                 row(track, in: rows)
-                    .listRowBackground(Color.mixBackground)
+                    .listRowBackground(MixRowBackground())
                     .listRowSeparatorTint(Color.mixSeparator)
             }
             .listStyle(.plain)
@@ -745,7 +677,7 @@ private struct LibraryEmptyState: View {
     }
 }
 
-// MARK: - Row / Card Views (public — shared with macOS and detail views)
+// MARK: - Row / Card Views (public, shared with macOS and detail views)
 
 public struct TrackRowView: View {
     let track: Track
@@ -755,45 +687,20 @@ public struct TrackRowView: View {
     var isFavourited:       Bool?     = nil
     var onToggleFavourite: (() -> Void)? = nil
     var availability:       TrackAvailability = .streamOnly
-    /// False when the caller lays out its own trailing columns (the playlist
-    /// table's heart + duration), so the row doesn't paint a second one.
+    /// False when the caller draws its own trailing columns.
     var showsTrailing:      Bool      = true
-    /// Non-nil on a page whose songs aren't in the library yet — the trailing
-    /// slot then carries the plus / check save control instead of a heart.
-    ///
-    /// The two say different things. A heart claims a song as a favourite,
-    /// which you can only do to a song you have; outside the library the
-    /// question is "do I want this at all", and the answer is the same plus /
-    /// check every other Discover row shows — including on the songs already
-    /// saved, where the filled check *is* the answer. See `SaveToLibraryButton`.
+    /// Set on pages whose songs aren't in the library: the trailing slot shows the
+    /// plus/check save control instead of a heart. See `SaveToLibraryButton`.
     var onSaveToLibrary: (() -> Void)? = nil
-    /// True while the engine is off resolving this song's audio online.
-    ///
-    /// The wait is real — a search plus a download, several seconds on a phone —
-    /// and until this existed the row did nothing at all in the meantime. A tap
-    /// that produces no visible change reads as a tap that didn't register, so
-    /// people tapped again, which is how the premature "no audio on this device"
-    /// error was being provoked in the first place.
+    /// The engine is resolving this song online. Shown so the tap visibly registered.
     var isResolving:        Bool      = false
 
-    /// A song a shared playlist names that this device has no copy of *and* no
-    /// way to go and get one.
-    ///
-    /// Dimmed and labelled rather than hidden: a collaborative playlist is
-    /// supposed to look the same to everyone in it, and a row you can see is a
-    /// row you can go and find. It stops reading this way on its own the moment
-    /// the real track lands under the same id.
-    ///
-    /// The origin alone is not the question, which is why this asks
-    /// `canResolveAudio`: a share that knows its own title is resolved online
-    /// on the way to playing it, so it is an ordinary song that happens to have
-    /// no file yet — dimming it would label a row that plays perfectly well as
-    /// broken.
+    /// A shared-playlist song this device can't get audio for. Dimmed, not hidden,
+    /// so the playlist looks the same to everyone. Uses `canResolveAudio`, since a
+    /// share with a title still resolves online and plays fine.
     private var isMissing: Bool { !track.canResolveAudio }
 
-    /// Offline, and this one isn't on the device. Greyed the same way a missing
-    /// song is — the row stays in the list and says why, rather than vanishing
-    /// and leaving a playlist that looks empty for no reason.
+    /// Offline and not downloaded. Greyed like a missing song rather than hidden.
     var isOfflineUnavailable: Bool = false
 
     /// Everything that makes a row look unreachable, whatever the reason.
@@ -803,9 +710,7 @@ public struct TrackRowView: View {
 
     public var body: some View {
         HStack(spacing: density == .compact ? 10 : 12) {
-            // On the cover rather than in the trailing column, which in table mode
-            // belongs to the duration and in list mode to the heart — and which is
-            // the far side of the row from the thing the user just tapped.
+            // On the cover, where the user tapped, since the trailing column is taken.
             ZStack {
                 ArtworkThumbnail(data: track.artworkData, artworkRef: .track(track.id), size: density.trackArtwork,
                                  cornerRadius: 6, placeholder: MixtapeIcons.track)
@@ -827,6 +732,7 @@ public struct TrackRowView: View {
                         .foregroundStyle(titleColour)
                         .lineLimit(1)
                     if track.isExplicit { MixExplicitBadge() }
+                    if track.origin == .edit { MixEditBadge() }
                 }
 
                 HStack(spacing: 4) {
@@ -858,14 +764,8 @@ public struct TrackRowView: View {
         return dimmed ? .mixTextTertiary : .mixTextPrimary
     }
 
-    /// The reason is appended to the artist rather than given a badge of its
-    /// own: the row is 44pt tall and already carries a number, a heart and a
-    /// duration, and a fourth thing competing for the same line reads as
-    /// clutter long before it reads as an explanation.
+    /// The reason is appended to the artist line instead of adding a badge.
     private var subtitle: String {
-        // While it's being fetched, "Not in your library" is both true and
-        // useless — it's the sentence that made people give up on a song that was
-        // thirty seconds from playing.
         if isResolving { return decorate(track.artistName, with: "Finding audio\u{2026}") }
         if isMissing { return decorate(track.artistName, with: "Not in your library") }
         if isOfflineUnavailable { return decorate(track.artistName, with: "Not downloaded") }
@@ -907,13 +807,8 @@ public struct TrackRowView: View {
     }
 }
 
-/// Pins a thumbnail to a square when no explicit size was given.
-///
-/// `.frame(width: nil, height: nil)` is a no-op, so the `size: nil` case had
-/// nothing holding the artwork's shape — and the artwork fills (`scaledToFill`),
-/// which overflows to cover and then reports the overflowed size upwards. One
-/// portrait photo in a grid therefore stretched its whole cell. Sizing with
-/// `Color.clear` fixes the footprint first and clips the picture into it.
+/// Keeps a thumbnail square when no size is given; otherwise `scaledToFill`
+/// reports its overflowed size and a portrait image stretches the cell.
 private struct SquareIfUnsized: ViewModifier {
     let size: CGFloat?
 
@@ -1001,15 +896,14 @@ public struct ArtistRowView: View {
 
 public struct PlaylistRowView: View {
     let playlist: Playlist
-    /// Replaces "Playlist • owner" — the Smart tab says "Smart Playlist".
+    /// Replaces "Playlist • owner", e.g. "Smart Playlist".
     var kind: String? = nil
     @ObservedObject private var meta = PlaylistMetadataService.shared
     @EnvironmentObject private var engine:    PlaybackEngine
     @EnvironmentObject private var downloads: DownloadManager
 
-    /// True when every song in the playlist is on disk — on All Songs that
-    /// means the whole library is offline. Mirrors the macOS sidebar and the
-    /// Playlists page.
+    /// Every song is on disk (the whole library, for All Songs). Mirrors the macOS
+    /// sidebar and Playlists page.
     private var isFullyDownloaded: Bool {
         downloads.isFullyDownloaded(playlist.trackIDs)
     }
@@ -1027,11 +921,7 @@ public struct PlaylistRowView: View {
                     .foregroundStyle(isNowPlaying ? Color.mixPrimary : Color.mixTextPrimary)
                     .lineLimit(1)
 
-                // The glyphs lead the line rather than trailing the title:
-                // pinned and downloaded are facts about the playlist's standing,
-                // and they read as a pair with the "Playlist • owner" they
-                // qualify. The song count moves to the end of the same line so
-                // the row stays two lines tall at the larger artwork size.
+                // Pinned and downloaded glyphs lead the subtitle; the song count goes at the end.
                 HStack(spacing: 5) {
                     if meta.isPinned(playlistID: playlist.id) {
                         Image(systemName: "pin.fill")
@@ -1040,7 +930,7 @@ public struct PlaylistRowView: View {
                             .rotationEffect(.degrees(45))
                             .accessibilityLabel("Pinned")
                     }
-                    DownloadStateBadge(ids: playlist.trackIDs, downloads: downloads)
+                    DownloadStateBadge(ids: playlist.trackIDs, downloads: downloads, showsProgress: downloads.isPlaylistOffline(playlist.id))
                     Text("\(kind ?? PlaylistDescriptor.line(playlist)) • \(playlist.trackCount) song\(playlist.trackCount == 1 ? "" : "s")")
                         .font(.mixLabel)
                         .foregroundStyle(Color.mixTextSecondary)
@@ -1066,33 +956,25 @@ public struct PlaylistRowView: View {
 
 public struct ArtworkThumbnail: View {
     let data: Data?
-    /// The row this cover belongs to, for rows whose blob the bulk fetch skipped.
-    /// Consulted only when `data` is nil — see `ArtworkProvider`.
+    /// The row this cover belongs to, used when `data` is nil. See `ArtworkProvider`.
     var artworkRef: ArtworkRef? = nil
     let size: CGFloat?
     let cornerRadius: CGFloat
     let placeholder: String
-    /// Colours for the fallback tile. Defaulted to the neutral pair, so the
-    /// only callers that pass them are the ones saying something with it —
-    /// Favourites wearing the brand colour it wears everywhere else.
+    /// Fallback tile colours. Only Favourites overrides them, with the brand colour.
     var placeholderTint: Color = .mixTextTertiary
     var placeholderBackground: Color = .mixSurface2
-    /// Artwork that isn't in this library — someone else's published song, in
-    /// practice. Consulted only when `data` is nil, so a local copy always wins
-    /// and no view that already had its picture starts touching the network.
+    /// Artwork not in the library (e.g. someone else's song). Only used when `data`
+    /// is nil, so a local copy always wins.
     var remoteURL: URL? = nil
 
-    /// A cover the caller is already holding — an online track's artwork, an
-    /// image the user just picked — needs no fetching and no waiting, so it
-    /// goes straight through the synchronous path. Everything else is a row
-    /// identity, and rows are what the async loader exists for.
+    /// Artwork the caller already has draws synchronously; row ids go through the async loader.
     private var explicit: Image? {
         guard let data, !data.isEmpty else { return nil }
         return mixImage(from: data, displaySize: size)
     }
 
-    /// Nil when this is the online-artwork case above, or when there is nothing
-    /// to draw at all.
+    /// Nil for the online-artwork case above, or with nothing to draw.
     private var source: ArtworkSource? {
         guard data == nil || data?.isEmpty == true, let artworkRef else { return nil }
         return .row(artworkRef)
@@ -1115,11 +997,8 @@ public struct ArtworkThumbnail: View {
                     }
                 }
             } else if let remoteURL {
-                // `CachedRemoteImage` rather than `AsyncImage`: a grid of cards
-                // that all show the same artist opened one download each, and
-                // scrolling a row off screen and back re-fetched and re-decoded
-                // it. The cache is process-wide and seeded during `init`, so a
-                // hit draws on the first frame with no placeholder flash.
+                // `CachedRemoteImage`, not `AsyncImage`: one download per URL, and a cache hit
+                // draws on the first frame.
                 CachedRemoteImage(url: remoteURL) { image in
                     image.resizable().scaledToFill()
                 } placeholder: {

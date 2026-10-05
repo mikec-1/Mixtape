@@ -1,14 +1,5 @@
-// RootView.swift
-// Mixtape — App
-//
-// Gate between the auth flow and the main app.
-// Reads isAuthenticated from AppDependencies and routes accordingly.
-//
-// Every mixtape:// deep link arrives here, and there are two kinds. Playlist
-// invites (mixtape://join/<CODE>) are redeemed locally. Everything else — email
-// confirmation, password reset — goes to authService.handleDeepLink(url), and
-// the SDK fires an authStateChanges event which updates authState /
-// isAwaitingPasswordReset.
+// Routes between auth and the main app, and handles mixtape:// links.
+// Invite links are redeemed here; auth links go to authService.handleDeepLink.
 
 import SwiftUI
 import OSLog
@@ -20,12 +11,10 @@ public struct RootView: View {
     @EnvironmentObject private var exportManager: ExportManager
     @Environment(\.scenePhase) private var scenePhase
     @State private var showDownloadPrompt = false
-    /// An invite tapped before there was an account to join it with.
-    @State private var pendingInviteCode: String?
-    /// Invites already toasted about, so returning to the app doesn't re-announce
-    /// the same one every time. Deliberately not persisted: once per launch is
-    /// the right amount of nagging for something still waiting on an answer.
-    @State private var announcedInvites: Set<UUID> = []
+    /// An invite, Jam or Blend link that arrived before the main screen was up.
+    @State private var pendingLink: URL?
+    @AppStorage(InviteNotifier.askedKey) private var askedNotifications = false
+    @State private var askNotifications = false
 
     public var body: some View {
         let _ = LaunchTimeline.markOnce("root-view/first-body")
@@ -53,33 +42,27 @@ public struct RootView: View {
         .mixAnimation(.easeInOut(duration: 0.35), value: deps.isAuthenticated)
         .mixAnimation(.easeInOut(duration: 0.45), value: deps.isRestoringSession)
         .task {
-            // The first `.task` on the root view runs after the first frame has
-            // been submitted, which is the closest thing SwiftUI offers to "the
-            // window is on screen and takes input".
+            // First `.task` runs after the first frame.
             LaunchTimeline.firstWindowVisible()
-
             await deps.restoreSessionIfNeeded()
             MixLog.launch.notice("Session restored at \(LaunchTimeline.elapsedMilliseconds(), privacy: .public) ms")
-            // Not covered by the onChange below. A launch that restores a session
-            // synchronously never *changes* isAuthenticated, and .onChange skips
-            // the initial value, so a cold start into a signed-in account could
-            // sit there having never once looked at the inbox.
+            // onChange skips the initial value, so check once on launch too.
             await refreshInvites()
+            deps.jam.nearby.watch(deps.isAuthenticated)
             MixLog.launch.notice("Invites refreshed at \(LaunchTimeline.elapsedMilliseconds(), privacy: .public) ms")
 
-            // Last, and only after the session is settled: a wipe or an account
-            // switch would cancel it anyway, so there is nothing to gain from
-            // starting it any earlier — and a cold launch has better things to
-            // do with the disk.
+            // Last, once the session is settled.
             deps.artworkCompaction.startIfNeeded()
         }
-        // While the app is open, keep looking. Sixty seconds is far longer than a
-        // push would take and far cheaper than the polling that would be needed
-        // to *feel* like push — the point is only that an invite arriving while
-        // someone is using the app doesn't wait for them to background it first.
+        // Poll the inbox while the app is open, in case realtime has quietly dropped.
         .task(id: deps.isAuthenticated) {
             guard deps.isAuthenticated else { return }
             while !Task.isCancelled {
+                // Once per device, and never over another sheet: a later pass asks instead.
+                // Read the store: this task's copy of self keeps the @AppStorage value it started with.
+                if !UserDefaults.standard.bool(forKey: InviteNotifier.askedKey) && !showDownloadPrompt && !deps.authService.pendingUsernameSelection {
+                    askNotifications = true
+                }
                 try? await Task.sleep(nanoseconds: 60 * NSEC_PER_SEC)
                 guard !Task.isCancelled else { return }
                 await refreshInvites()
@@ -87,85 +70,62 @@ public struct RootView: View {
         }
         .onChange(of: deps.isAuthenticated) { _, isAuth in
             checkPrompt(isAuth: isAuth)
-            // Signing out has to clear these too: the next account's invites are
-            // not this one's, and an un-cleared set would swallow their toast.
-            announcedInvites = []
+            // The next account's inbox isn't this one's.
             if !isAuth { InviteNotifier.shared.reset() }
-            Task {
-                if isAuth { await InviteNotifier.shared.requestAuthorizationIfNeeded() }
-                await refreshInvites()
-            }
+            deps.jam.nearby.watch(isAuth)
+            Task { await refreshInvites() }
         }
-        // Returning to the app is the moment a user is most likely to be looking
-        // for the playlist a friend just told them about, which makes it the
-        // cheapest place to check.
+        // Check invites when returning to the app.
         .onChange(of: scenePhase) { _, phase in
-            // Stops the app's looping animations while nobody can see them —
-            // see `AppVisibility` for what that was costing.
+            // Pauses looping animations while hidden.
             AppVisibility.shared.update(phase)
 
             switch phase {
             case .active:
+                Analytics.appBecameActive()
+                CrashReporter.flushErrors()
                 Task { await refreshInvites() }
-                // The Realtime websocket does not survive being backgrounded,
-                // and a dead channel is silent rather than loud — so rebuild it
-                // here and take one pull for whatever changed while away.
+                // Realtime dies in the background, so rebuild it and pull once.
                 deps.syncService.resumeRealtime()
-                // Coming back is also when a watched folder is most likely to
-                // have changed — the user has just been in Finder or the Files
-                // app moving music around. The scan is derived and cheap, and it
-                // no-ops entirely when no folder is being watched.
+                // Watched folders may have changed while away. No-op without folders.
                 deps.localFiles.rescan()
+                // A new month's recap, or one another device built.
+                Task { await deps.recap.refresh() }
             case .background:
-                // A BGAppRefreshTaskRequest can only be submitted while the app is
-                // alive, so leaving is the last chance to ask for the background
-                // slot that delivers an invite arriving after this point.
+                // Background refresh can only be scheduled while the app is alive.
                 InviteNotifier.shared.scheduleBackgroundRefresh()
+                CrashReporter.flushErrors()
             default:
                 break
             }
         }
         .onAppear {
             checkPrompt(isAuth: deps.isAuthenticated)
+            #if os(iOS)
+            ToastWindow.install(deps)
+            #endif
         }
-        // ── Deep link handler ──
-        // mixtape://join/<CODE> is an invite to a collaborative playlist and has
-        // nothing to do with auth, so it branches out before handleDeepLink —
-        // which would otherwise hand a share code to client.auth.session(from:).
-        // Everything else (email confirmation, password reset) shares the scheme
-        // and goes through the SDK, which fires the matching authStateChanges event.
-        // A Spotlight hit — see `SpotlightIndex`. Songs play as if
-        // clicked in All Songs; a cold launch reads the library first.
+        // Invite links are handled before handleDeepLink, which would treat the
+        // code as an auth callback. Spotlight hits go to SpotlightIndex.
         .onContinueUserActivity(CSSearchableItemActionType) { SpotlightIndex.open($0) }
-        .onOpenURL { url in
-            if let code = Self.inviteCode(from: url) {
-                Task { await redeemInvite(code) }
-            } else if let code = Self.inviteCode(from: url, kind: "jam") {
-                Task { await deps.jam.join(code: code) }
-            } else if Self.isHandledByAnAuthSession(url) {
-                // Deliberately nothing. See the note on the function.
-            } else {
-                Task { await deps.authService.handleDeepLink(url) }
-            }
+        .onOpenURL { open($0) }
+        .onChange(of: isReady) { _, ready in
+            guard ready, let url = pendingLink else { return }
+            pendingLink = nil
+            open(url)
         }
-        .onChange(of: deps.isAuthenticated) { _, isAuth in
-            // A link tapped while signed out is held rather than dropped: the
-            // sign-in that follows is almost always *because* of the link, and
-            // losing it means asking the sender for it again.
-            guard isAuth, let code = pendingInviteCode else { return }
-            pendingInviteCode = nil
-            Task { await redeemInvite(code) }
+        // Answered once it's seen, so quitting with it open doesn't bring it back.
+        .sheet(isPresented: $askNotifications) {
+            NotificationsPrompt()
+                .onAppear { askedNotifications = true }
         }
-        // Password reset is handled inline in MacAuthFlowView / SignInView.
-        // isAwaitingPasswordReset keeps authState = .unauthenticated so the user
-        // lands on the auth screen, which navigates to the Set New Password screen.
-        .modifier(NewCratePrompt())
+        // Password reset is handled inline in the auth screens.
+        .modifier(NewCratePrompt(library: deps.libraryService))
         .sheet(isPresented: $showDownloadPrompt) {
             WelcomeDownloadPrompt()
                 .environmentObject(exportManager)
         }
-        // First social sign-in: invite the user (once) to pick a real username
-        // instead of the auto-generated user_xxxx. Non-blocking — they can skip.
+        // First social sign-in: offer to replace the generated username. Skippable.
         .sheet(isPresented: Binding(
             get: { deps.authService.pendingUsernameSelection },
             set: { if !$0 { deps.authService.dismissUsernamePrompt() } }
@@ -173,26 +133,25 @@ public struct RootView: View {
             UsernamePromptView(authService: deps.authService)
         }
         .background(JamSheetPresenter(jam: deps.jam))
+        #if os(macOS)
+        .overlay { RecapPresenter(recap: deps.recap) }
+        #else
+        .background(RecapPresenter(recap: deps.recap))
+        #endif
+        // The backdrop colour is laid out against the whole window.
+        // Size plus insets: ignoresSafeArea here still reports the safe size, which left the image short of the bottom.
+        .background {
+            Color.clear
+                .onGeometryChange(for: CGSize.self) { p in
+                    let i = p.safeAreaInsets
+                    return CGSize(width: p.size.width + i.leading + i.trailing, height: p.size.height + i.top + i.bottom)
+                } action: { BackdropRenderer.shared.fieldSize = $0 }
+        }
     }
 
-    /// True for the redirects that belong to an `ASWebAuthenticationSession`
-    /// already waiting on them, which this view must therefore leave alone.
-    ///
-    /// Google sign-in returns through `mixtape://auth-callback`, and the auth
-    /// code in it may be redeemed exactly once — the server drops the flow state
-    /// on the first exchange. The session started by `signInWithGoogle()` catches
-    /// that URL and does the exchange itself. When the same URL *also* reached
-    /// `onOpenURL`, this ran a second exchange against a code that was already
-    /// spent, and the server answered "invalid flow state, no valid flow state
-    /// found" — which is the error that surfaced, on the sign-in screen, after an
-    /// otherwise perfectly good Google sign-in.
-    ///
-    /// `mixtape://spotify-callback` is the same story with a different owner:
-    /// `SpotifyAuth` runs its own session, and handing its code to Supabase's
-    /// auth client was never going to do anything but fail.
-    ///
-    /// Only the email flows — `mixtape://confirm`, `mixtape://reset-password` —
-    /// genuinely arrive cold, from Mail, with nothing in the app waiting for them.
+    /// Redirects an ASWebAuthenticationSession is already waiting on. Handling them
+    /// here too would redeem the one-time auth code twice and fail.
+    /// Only the email flows (confirm, reset-password) arrive cold.
     private static func isHandledByAnAuthSession(_ url: URL) -> Bool {
         let target = url.host ?? url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         return target == "auth-callback" || target == "spotify-callback"
@@ -200,95 +159,79 @@ public struct RootView: View {
 
     // MARK: Invite links
 
-    /// The share code in an invite URL, or nil if this isn't one.
-    ///
-    /// Both shapes are parsed today even though only the first can arrive today:
-    /// `mixtape://join/ABC123`, and `https://mixtaped.tech/join/ABC123` for when
-    /// that page exists. Universal links come in through
-    /// `NSUserActivityTypeBrowsingWeb` rather than `onOpenURL`, so switching over
-    /// still needs an Associated Domains entitlement and a second handler — but
-    /// it won't need this function rewritten, and every `mixtape://` invite
-    /// already sent keeps working because this branch never goes away.
-    /// `kind: "jam"` reads Jam links (mixtape://jam/CODE) the same way.
+    /// The share code in an invite URL, or nil. Accepts mixtape://join/CODE,
+    /// https://mixtaped.tech/join/CODE and ?code=CODE; `kind: "jam"` reads Jam links the same way.
     static func inviteCode(from url: URL, kind: String = "join") -> String? {
-        let segments = url.path.split(separator: "/").map(String.init)
-
-        if url.host?.lowercased() == kind {
-            if let first = segments.first { return normalisedCode(first) }
-            let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?
-                .queryItems?.first(where: { $0.name == "code" })?.value
-            return query.flatMap(normalisedCode)
+        var segments = url.path.split(separator: "/").map(String.init)
+        // mixtape://jam/CODE has the kind as its host; https links have it in the path.
+        if url.host?.lowercased() != kind {
+            guard segments.first?.lowercased() == kind else { return nil }
+            segments.removeFirst()
         }
-
-        if segments.first?.lowercased() == kind, segments.count >= 2 {
-            return normalisedCode(segments[1])
-        }
-
-        return nil
+        if let first = segments.first { return normalisedCode(first) }
+        let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?.first(where: { $0.name == "code" })?.value
+        return query.flatMap(normalisedCode)
     }
 
-    /// Codes are generated uppercase from a 32-character alphabet, but a link
-    /// that's been through a chat app can arrive lowercased or with a stray
-    /// trailing slash, and the RPC matches exactly.
+    /// Links from chat apps can arrive lowercased or with a trailing slash.
     nonisolated private static func normalisedCode(_ raw: String) -> String? {
         let code = raw.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         return code.count >= 4 ? code : nil
     }
 
-    private func redeemInvite(_ code: String) async {
-        guard deps.isAuthenticated else {
-            pendingInviteCode = code
-            deps.showToast("Sign in to join this playlist")
-            return
-        }
+    /// Signed in with the main screen showing, where joins can show their messages and sheets.
+    private var isReady: Bool { deps.isAuthenticated && !deps.isRestoringSession }
 
-        do {
-            let result = try await PlaylistSharingService.shared
-                .redeemInvite(code: code, libraryService: deps.libraryService)
-            deps.showToast(result.alreadyHere
-                           ? "\u{201C}\(result.record.name)\u{201D} is already in your library"
-                           : "Joined \u{201C}\(result.record.name)\u{201D}")
-            try? await deps.syncService.sync()
-            // Following the link for a playlist you were *also* directly invited
-            // to joins you outright — the RPC upgrades the membership row — so
-            // the pending card has to go, or it sits there offering something
-            // that's already in the library.
-            await refreshInvites()
-        } catch {
-            deps.showToast("That invite link isn't valid any more")
+    private func open(_ url: URL) {
+        if let code = Self.inviteCode(from: url) {
+            whenReady(url) { await redeemInvite(code) }
+        } else if let code = Self.inviteCode(from: url, kind: "jam") {
+            whenReady(url) { await deps.jam.join(code: code) }
+        } else if let code = Self.inviteCode(from: url, kind: "blend") {
+            whenReady(url) { await deps.blends.join(code: code) }
+        } else if Self.isHandledByAnAuthSession(url) {
+            // Deliberately nothing. See the note on the function.
+        } else {
+            Task { await deps.authService.handleDeepLink(url) }
         }
     }
 
-    /// Re-reads the invite inbox and announces anything new.
-    ///
-    /// Not guarded on `isAuthenticated`: `refreshPendingInvites` empties the list
-    /// when there's no session, which is exactly what should happen on sign-out.
-    private func refreshInvites() async {
-        let sharing = PlaylistSharingService.shared
-        await sharing.refreshPendingInvites()
+    /// A link that opens the app, or arrives signed out, waits for sign-in and the splash to finish.
+    private func whenReady(_ url: URL, _ join: @escaping () async -> Void) {
+        guard isReady else { pendingLink = url; return }
+        Task { await join() }
+    }
 
-        // A banner and a toast for the same invite on the same screen is the news
-        // twice. Whichever surface the user is actually looking at wins.
-        let foreground = scenePhase == .active
-        await InviteNotifier.shared.announce(sharing.pendingInvites, suppressBanner: foreground)
-
-        guard foreground else { return }
-        let fresh = sharing.pendingInvites.filter { !announcedInvites.contains($0.id) }
-        guard !fresh.isEmpty else { return }
-        announcedInvites.formUnion(fresh.map(\.id))
-
-        if fresh.count == 1, let invite = fresh.first {
-            deps.showToast(InviteNotifier.body(for: invite))
-        } else {
-            deps.showToast("You have \(fresh.count) playlist invites")
+    private func redeemInvite(_ code: String) async {
+        do {
+            let result = try await PlaylistSharingService.shared
+                .redeemInvite(code: code, libraryService: deps.libraryService)
+            let id = result.localPlaylistID
+            deps.showToast(Toast.done(result.alreadyHere
+                                      ? "\u{201C}\(result.record.name)\u{201D} is already in your library"
+                                      : "Joined \u{201C}\(result.record.name)\u{201D}")
+                .action("View") { Toast.openPlaylist(id) })
+            try? await deps.syncService.sync()
+            // Joining via link also accepts any direct invite, so refresh the inbox.
+            await refreshInvites()
+        } catch {
+            deps.showToast(.failed("That invite link isn't valid any more", error))
         }
+    }
+
+    /// Re-reads the inbox and messages, which announce anything new. Pending invites too, for Accept.
+    private func refreshInvites() async {
+        await InboxService.shared.refresh()
+        await MessagesService.shared.refresh()
+        await PlaylistSharingService.shared.refreshPendingInvites()
+        // Daily at most, so the poll is fine.
+        await InviteNotifier.shared.checkNewReleases()
     }
 
     private func checkPrompt(isAuth: Bool) {
         guard isAuth else { return }
-        // Show prompt only if the user has never confirmed a location and hasn't
-        // explicitly skipped. isLocationConfigured is set by ExportManager.setExportURL
-        // so it survives bookmark resolution failures on subsequent launches.
+        // Only prompt if no location was ever confirmed or skipped.
         if !exportManager.isLocationConfigured && !exportManager.didSkip {
             showDownloadPrompt = true
         }

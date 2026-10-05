@@ -1,22 +1,11 @@
-// LibraryCreateMenu.swift
-// Mixtape — Features/Library
-//
-// The + menu in Your Library: one place for every way of putting a new playlist
-// on the page.
-//
-// These used to be permanent rows pinned above the playlist list — "Smart
-// Playlists" and "Join Shared Playlist" — which cost two rows of the first
-// screen forever to advertise things you do once in a while, and floated over
-// the playlists scrolling underneath them. They're actions, not shelves, so
-// they live behind the + the way Spotify's Playlist / Blend / Folder menu does.
+// The + menu in Your Library: every way to add a playlist.
 
 import SwiftUI
 
 // MARK: - Route
 
-/// What the + menu was asked for. Presented by the caller *after* the menu
-/// dismisses — stacking a sheet on a sheet that's still on its way out is how
-/// you get a screen with nothing on it.
+/// What the + menu picked. The caller presents it once the menu has dismissed,
+/// since stacking sheets mid-dismiss shows a blank screen.
 enum LibraryCreateRoute: String, Identifiable {
     case playlist
     case smartPlaylist
@@ -95,11 +84,8 @@ struct LibraryCreateMenu: View {
         .presentationCornerRadius(24)
     }
 
-    /// Title block + four rows + the divider between the two halves, plus the
-    /// home-indicator strip, which counts towards the detent but isn't space
-    /// the content can use. Fixed rather than measured: the options are a known
-    /// set, and a detent that resizes itself as the rows render reads as a
-    /// glitch. Any slack lands on the trailing `Spacer`.
+    /// Title, rows, divider and home-indicator strip. Fixed so the detent doesn't
+    /// resize while rendering; slack goes to the trailing `Spacer`.
     private static let sheetHeight: CGFloat = 58 + (6 * 68) + 25 + 12 + 34
 
     private func row(_ route: LibraryCreateRoute,

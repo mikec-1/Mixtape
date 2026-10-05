@@ -1,39 +1,21 @@
-// DiscoverLikedSongsPage.swift
-// Mixtape — Features/Online
-//
-// "Liked Songs by <artist>" — what the liked-songs line on a Discover artist
-// page opens.
-//
-// The odd thing about this page is that nothing on it is online. It is reached
-// from a Deezer artist, but every row is a library track you have already
-// favourited, so playback goes straight to the engine: there is no source to
-// resolve and no download to wait for. That is also why the heart here removes
-// the song from the list under your finger — on a page that is *defined* by
-// being liked, un-liking has to have somewhere visible to go.
-//
-// Shared by both platforms. The rows are `TrackRowView`, the same row the
-// library uses, because that is what these are.
+// "Liked Songs by <artist>". Every row is a favourited library track, so
+// playback goes straight to the engine, and un-liking removes the row.
 
 import SwiftUI
 import Combine
 
 struct DiscoverLikedSongsPage: View {
 
-    /// Carried whole rather than as a name so the hero can wear the artist's
-    /// photo, the way the artist page you came from does.
+    /// The whole artist, so the hero can use their photo.
     let artist: OnlineArtist
 
-    /// Pop, for a host that doesn't draw chrome of its own. The artist page
-    /// this opens from is full-bleed and carries its own back button, and on
-    /// macOS this page inherits that bare header — without this it was a page
-    /// with no way out but the sidebar.
+    /// Pop, for hosts that don't draw their own back button (the Mac).
     var onBack: (() -> Void)? = nil
 
     @EnvironmentObject private var deps:   AppDependencies
     @EnvironmentObject private var engine: PlaybackEngine
 
-    /// Recomputed on every library publish, which is what makes un-liking a row
-    /// remove it immediately.
+    /// Recomputed on every library publish so un-liking removes a row immediately.
     private var tracks: [Track] {
         DiscoverArtistCounts.likedTracks(by: artist.name, in: deps.libraryService)
     }
@@ -44,17 +26,12 @@ struct DiscoverLikedSongsPage: View {
     private let pagePadding: CGFloat = 20
     #endif
 
-    /// Bumped whenever the download manager publishes.
-    ///
-    /// This view reads download state (`status(for:)` and friends) straight off
-    /// the manager inside `body`, which is not observation — nothing here holds
-    /// the manager, so nothing here hears it change. `AppDependencies` used to
-    /// rebroadcast every service's publishes, which covered this by invalidating
-    /// all 81 views that hold `deps` on every status transition. The views that
-    /// actually draw download state say so themselves now.
+    /// Bumped on download manager publishes, since `body` reads its state without observing it.
     @State private var downloadTick = 0
 
     var body: some View {
+        // Read so the bump below redraws; an unread @State never does.
+        let _ = downloadTick
         bodyContent
             .onReceive(deps.downloadManager.didChangeThrottled) { _ in
                 downloadTick &+= 1
@@ -108,8 +85,7 @@ struct DiscoverLikedSongsPage: View {
         }
     }
 
-    /// The artist's photo with a heart badged onto it — the artwork *is* the
-    /// artist, and the heart is the only thing separating this page from theirs.
+    /// The artist photo with a heart badge.
     private var artwork: some View {
         CachedRemoteImage(url: artist.imageURL) { image in
             image.resizable().scaledToFill()
@@ -150,9 +126,7 @@ struct DiscoverLikedSongsPage: View {
     // MARK: - Songs
 
     private var trackList: some View {
-        // The list is snapshotted once per redraw rather than read inside the
-        // loop: `tracks` hits the library on every access, and the play context
-        // has to be the same array the rows were built from.
+        // Snapshot once so the play context matches the rows drawn.
         let shown = tracks
         return VStack(spacing: 0) {
             ForEach(shown) { track in
@@ -169,10 +143,7 @@ struct DiscoverLikedSongsPage: View {
                 .mixTapAction {
                     Task { await engine.play(track: track, in: shown, source: .named("Liked Songs")) }
                 }
-                // Every row here is liked, so the shared menu's own
-                // Add/Remove item is the "Remove from Liked Songs" this page
-                // used to hand-write — and the twelve it was missing come with
-                // it.
+                // Every row is liked, so the shared menu's own Remove covers it.
                 .contextMenu {
                     LibrarySongMenu(targets: [track], onPlay: {
                         Task { await engine.play(track: track, in: shown, source: .named("Liked Songs")) }
@@ -188,9 +159,7 @@ struct DiscoverLikedSongsPage: View {
 
     // MARK: - Empty
 
-    /// Only reachable by un-liking the last song while looking at the list —
-    /// the line that opens this page doesn't exist at zero. So it's phrased as
-    /// something that just happened, not as an empty library.
+    /// Only reachable by un-liking the last song, so it's phrased as something that just happened.
     private var emptyState: some View {
         VStack(spacing: 10) {
             Image(systemName: "heart")

@@ -1,19 +1,4 @@
-// MacArtistsView.swift
-// Mixtape — Mac/Content
-//
-// Redesigned artist view: two-panel Apple Music–style layout.
-//
-//   Left (220 pt) — scrollable artist sidebar with circular avatar + name.
-//                   Uses List(selection:) so the selected row gets the
-//                   accent-colour highlight automatically.
-//   Right          — selected artist:
-//                     · Hero banner (blurred artwork or gradient, artist photo,
-//                       name, album/song count, Play All + Shuffle buttons)
-//                     · Albums carousel (horizontal scroll, click → MacAlbumDetailView)
-//                     · Songs table  (NativeTrackTable fills remaining height)
-//
-// When no artist is selected, the right panel shows an empty-state prompt.
-// Album drill-down is handled via NavigationStack + .navigationDestination.
+// Artists page: a grid of artists, drilling into one artist's hero, albums and songs.
 
 #if os(macOS)
 import SwiftUI
@@ -61,8 +46,7 @@ struct MacArtistsView: View {
         }
         .navigationTitle(selectedArtist?.name ?? "Artists")
         .navigationSubtitle(navSubtitle)
-        // Typing in the toolbar search means the user wants to find someone
-        // else, so drop back out to the grid.
+        // Typing a search drops back to the grid.
         .onChange(of: searchText) { _, text in
             if !text.isEmpty { selectedArtistID = nil }
         }
@@ -82,7 +66,7 @@ struct MacArtistsView: View {
                     .foregroundStyle(Color.mixTextSecondary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.mixBackground)
+            .background(MixPageBackground())
         } else {
             ScrollView {
                 LazyVGrid(
@@ -98,7 +82,7 @@ struct MacArtistsView: View {
                 .padding(.horizontal, 24)
                 .padding(.vertical, 20)
             }
-            .background(Color.mixBackground)
+            .background(MixPageBackground())
         }
     }
 
@@ -118,9 +102,7 @@ struct MacArtistsView: View {
 
 // MARK: - Artist Card
 
-/// Grid tile: circular photo, name, song count, and a play button that fades
-/// in on hover — the same interaction as the album grid, so both browse
-/// surfaces behave identically.
+/// Grid tile with a hover play button, like the album grid.
 private struct MacArtistCard: View {
     let artist: Artist
     let onSelect: () -> Void
@@ -221,25 +203,15 @@ private struct MacArtistDetailPanel: View {
 
     // MARK: - Body
 
-    // One scroll view owns the whole page. It used to be a fixed VStack whose
-    // songs table scrolled inside itself, which meant a short window had to
-    // find the height for hero + albums + a table from a budget that didn't
-    // have it — the table kept its minimum, the stack overflowed its slot, and
-    // the songs went off the bottom with no way to reach them. Now the hero
-    // scrolls away like everything else and the table is sized to its content.
-    /// Bumped whenever the download manager publishes.
-    ///
-    /// This view reads download state (`status(for:)` and friends) straight off
-    /// the manager inside `body`, which is not observation — nothing here holds
-    /// the manager, so nothing here hears it change. `AppDependencies` used to
-    /// rebroadcast every service's publishes, which covered this by invalidating
-    /// all 81 views that hold `deps` on every status transition. The views that
-    /// actually draw download state say so themselves now.
+    /// Bumped when the download manager publishes, since `body` reads its state without observing it.
     @State private var downloadTick = 0
     /// How much *you* played this artist. Loaded in `.task`: it reads play history.
     @State private var standing: ArtistStanding?
 
+    // One scroll view owns the page; the song table sizes to its content.
     var body: some View {
+        // Read so the bump below redraws; an unread @State never does.
+        let _ = downloadTick
         bodyContent
             .onReceive(deps.downloadManager.didChangeThrottled) { _ in
                 downloadTick &+= 1
@@ -260,10 +232,9 @@ private struct MacArtistDetailPanel: View {
             }
         }
         .scrollContentBackground(.hidden)
-        .background(Color.mixBackground)
+        .background(MixPageBackground())
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // Warm the first few songs while the user reads the page, so the tap
-        // that follows doesn't pay for the resolve.
+        // Warm the first few songs so the first tap doesn't wait on a resolve.
         .task(id: artist.id) {
             deps.onlineCoordinator.prefetchResolvable(artistTracks)
             standing = deps.statsService.artistStanding(for: artist.name)
@@ -297,8 +268,7 @@ private struct MacArtistDetailPanel: View {
                     Text(artist.name)
                         .font(.system(size: 26, weight: .bold))
                         .foregroundStyle(Color.mixTextPrimary)
-                        // Halo in the opposite tone of the text (dark behind
-                        // light text, light behind dark text) for legibility.
+                        // Halo in the opposite tone of the text.
                         .shadow(color: Color.mixBackground.opacity(0.7), radius: 4, y: 2)
 
                     let albums = artistAlbums.count
@@ -336,9 +306,7 @@ private struct MacArtistDetailPanel: View {
                         .controlSize(.regular)
                         .disabled(artistTracks.isEmpty)
 
-                        // The same overflow the artist page gets on iPhone.
-                        // Without it this panel could play an artist and
-                        // nothing else — not queue one, not download one.
+                        // Overflow menu, as on iPhone.
                         Menu {
                             ArtistActionsMenu(name: artist.name)
                         } label: {
@@ -349,8 +317,7 @@ private struct MacArtistDetailPanel: View {
                         .buttonStyle(.bordered).mixHandCursor()
                         .menuIndicator(.hidden)
                         .controlSize(.regular)
-                        // Horizontal only — an unbounded vertical fixedSize in
-                        // a split view is what drives the constraint crash.
+                        // Bounded: an unbounded vertical `fixedSize` in a split view causes the constraint crash.
                         .fixedSize(horizontal: true, vertical: false)
                     }
                     .padding(.top, 6)
@@ -365,24 +332,18 @@ private struct MacArtistDetailPanel: View {
 
     private var heroBackground: some View {
         Group {
-            // `mixImage` rather than a bare `NSImage(data:)`: this decodes a
-            // full banner-sized cover, and it sat in a `body` that re-ran on
-            // every hover in the grid below it.
+            // `mixImage` downsamples; this banner decode sat in a frequently re-run `body`.
             if let data = artist.displayArtwork, let img = mixImage(from: data) {
                 img
                     .resizable()
                     .scaledToFill()
-                    // A 28pt gaussian over a banner is the most expensive single
-                    // thing the artist page draws, and it is pure decoration —
-                    // the scrim below it is what makes the text readable.
+                    // The blur is the costliest thing here and pure decoration.
                     .blur(radius: chrome.showsMaterials ? 28 : 0)
                     .scaleEffect(1.08)               // hide white blur-edge fringe
-                    // Adaptive scrim: lightens the banner in light mode and
-                    // darkens it in dark mode, so the hero text stays readable
-                    // in both (a fixed black scrim left light mode muddy).
+                    // Adaptive scrim so the hero text reads in light and dark.
                     .overlay(Color.mixBackground.opacity(0.5))
             } else {
-                // No artwork — use a branded gradient
+                // No artwork: branded gradient.
                 LinearGradient(
                     colors: [Color.mixPrimary.opacity(0.28), Color.mixBackground],
                     startPoint: .topLeading,
@@ -392,12 +353,7 @@ private struct MacArtistDetailPanel: View {
         }
     }
 
-    /// Just the photo. It used to be a button that re-fetched the artist's
-    /// picture — with a hover spinner over it — from back when import left new
-    /// artists wearing an album cover and you had to fix each one by hand.
-    /// `LibraryService.scheduleArtistImageBackfill()` does that automatically
-    /// now, so the control was a reload for its own sake sitting on top of the
-    /// artwork it kept replacing.
+    /// Just the photo. `LibraryService.scheduleArtistImageBackfill()` fetches artist pictures.
     private var artistAvatar: some View {
         Group {
             if let data = artist.displayArtwork, let img = NSImage(data: data) {
@@ -461,9 +417,11 @@ private struct MacArtistDetailPanel: View {
                 onPlayNext:         { engine.queue.insertNext($0) },
                 onAddToQueue:       { engine.queue.append($0) },
                 onGetInfo:          { appState.showInspector(for: $0) },
+                onEditMetadata:     { appState.enqueueReview(MetadataReviewItem(editing: $0)) },
+                onEditSong:         { appState.editTrack = $0 },
+                onPostSong:         { appState.postTrack = $0 },
                 onDragTracksChanged: { appState.isDraggingTracks = $0 },
-                // Artist is still offered: on a featured track it opens the
-                // *other* credited artist, which is the whole point.
+                // On a featured track this opens the other credited artist.
                 onGoToArtist:       { appState.openDiscoverArtist(named: $0) },
                 onGoToAlbum:        { appState.openDiscoverAlbum(for: $0) },
                 onSongRadio:        deps.downloadManager.isConnected
@@ -472,6 +430,7 @@ private struct MacArtistDetailPanel: View {
                 onOpenAlbumLink:    { appState.openDiscoverAlbum(for: $0) },
                 onRemove:           { selection in
                     for track in selection { engine.stopIfPlaying(trackID: track.id) }
+                    SupabaseSyncService.allowBulk("user-remove")
                     deps.libraryService.deleteTracks(ids: selection.map(\.id))
                 },
                 onToggleFavourite:  { deps.toggleFavourite(trackID: $0.id) },
@@ -487,9 +446,7 @@ private struct MacArtistDetailPanel: View {
                 onLinkCopied:       { deps.showToast(ShareSheet.copiedMessage) },
                 canDownload:         { deps.downloadManager.downloadUnavailableReason(for: $0) == nil },
                 scale:              appState.uiScale,
-                // Sized to its rows and scrolled by the page, not by itself —
-                // a scroll view inside a scroll view would trap the wheel over
-                // the song list.
+                // Sized to its rows so the page scrolls, not a nested scroll view.
                 fitsContent:        true,
                 resolvingIDs:       engine.routingTrackIDs
             )

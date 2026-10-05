@@ -1,15 +1,6 @@
-// SmartPlaylistService.swift
-// Mixtape — Core/Services
-//
-// CRUD + live resolution for SmartPlaylists. Smart playlists are local-only:
-// they persist their *rule* (via SwiftData SmartPlaylistEntity) but never their
-// contents, which are resolved on demand against the current library, play
-// history and favourites.
-//
-// ModelContext is obtained the same way the repositories get theirs — passed in
-// from whichever account's store is open. See `ModelStore`.
-//
-// Minimum deployment: iOS 17 / macOS 14
+// CRUD and live resolution for smart playlists. Only the rule is stored
+// (SmartPlaylistEntity); contents are resolved on demand. Context comes from
+// `ModelStore`.
 
 import Foundation
 import SwiftData
@@ -22,17 +13,14 @@ public final class SmartPlaylistService: ObservableObject {
     /// Published list of the user's smart playlists, sorted by creation date.
     @Published public private(set) var playlists: [SmartPlaylist] = []
 
-    /// Never stored: the context belongs to whichever account's store is open
-    /// right now. See `ModelStore`.
+    /// The open account's context. Never stored.
     private var context: ModelContext { ModelStore.shared.context }
     private let deviceID: String
 
     /// For covers, which get a `Playlist` and have no deps to ask.
     nonisolated(unsafe) public static weak var current: SmartPlaylistService?
 
-    /// Rules are local, but they belong to one account: nobody signed in sees
-    /// none, and a second account on this device never sees the first one's.
-    /// Set by `AppDependencies` on sign-in and sign-out.
+    /// Rules belong to one account. Set by `AppDependencies` on sign-in/out.
     public var currentUserID: String? {
         didSet {
             guard oldValue != currentUserID else { return }
@@ -72,9 +60,7 @@ public final class SmartPlaylistService: ObservableObject {
         }
     }
 
-    /// A rule the user wrote goes straight into their library: they opened a
-    /// sheet and named it, which is the whole gesture of adding something. The
-    /// shipped five are the ones that arrive on Home and wait to be asked for.
+    /// User-created rules go straight into the library. Built-ins wait on Home.
     @discardableResult
     public func create(name: String, iconName: String, rule: SmartPlaylistRule) -> SmartPlaylist {
         let playlist = SmartPlaylist(name: name, iconName: iconName, rule: rule, inLibrary: true)
@@ -106,8 +92,7 @@ public final class SmartPlaylistService: ObservableObject {
         refresh()
     }
 
-    /// Add this rule to Your Library, or take it back out. Removing is not
-    /// deleting: a built-in goes back to living on Home, where it came from.
+    /// Adds or removes a rule from the library. Built-ins go back to Home.
     public func setInLibrary(id: UUID, _ inLibrary: Bool) {
         let desc = FetchDescriptor<SmartPlaylistEntity>(
             predicate: #Predicate { $0.id == id }
@@ -135,11 +120,8 @@ public final class SmartPlaylistService: ObservableObject {
 
     // MARK: - Resolution
 
-    /// Evaluates a smart playlist's rule against the live library and returns
-    /// the matching tracks in rule-appropriate order.
-    ///
-    /// - `library`: source of truth for the current track collection + favourites.
-    /// - `history`: optional play-history repository for play-count / last-played rules.
+    /// Evaluates a rule against the live library. `history` is needed for
+    /// play-count and last-played rules.
     public func resolve(
         _ playlist: SmartPlaylist,
         using library: LibraryService,
@@ -163,8 +145,7 @@ public final class SmartPlaylistService: ObservableObject {
                 .map { $0 }
 
         case .onRepeat(let limit):
-            // The recent window only — `mostPlayed` is the all-time list, and
-            // two identical shelves under different names is worse than one.
+            // Recent window only; `mostPlayed` is the all-time list.
             let counts = playCounts(history: history, limit: 100)
             return tracks
                 .filter { (counts[$0.id] ?? 0) > 1 }
@@ -200,19 +181,11 @@ public final class SmartPlaylistService: ObservableObject {
         }
     }
 
-    /// These two rules have no limit of their own, and on an imported library
-    /// they match nearly everything — a 2 000-song "Hidden Gems" is a library
-    /// view, not a playlist anyone will play. Capped to N so the list stays
-    /// listenable; the rule itself is unchanged, so nothing stored needs
-    /// migrating.
+    /// Cap for open-ended rules, which can match most of an imported library.
     private static let openRuleCap = 100
 
-    /// Below this a shipped smart playlist isn't worth a card. "Most Played"
-    /// with one song in it is the complaint that produced this number: a rule
-    /// that can only fill a single row is a rule whose inputs don't exist yet,
-    /// and the honest thing is to not draw it until they do. The user's own
-    /// rules are exempt — hiding one they wrote leaves them nowhere to edit or
-    /// delete it.
+    /// Built-ins with fewer songs than this aren't shown. User rules are exempt so
+    /// they can still be edited.
     public static let minimumBuiltInSongs = 10
 
     /// Whether this playlist is worth putting on Home right now.
@@ -221,30 +194,25 @@ public final class SmartPlaylistService: ObservableObject {
         return count >= minimumBuiltInSongs
     }
 
-    /// One week's deal from an open-ended pool.
-    ///
-    /// Seeded by the ISO week and the playlist's own id, so it is the same list
-    /// all week, the same list on every device, and not the same shuffle for
-    /// two playlists at once. `prefix` alone showed the same hundred songs for
-    /// as long as nothing was imported — which for "never played" is the one
-    /// thing guaranteed not to happen.
+    /// A weekly deal from an open-ended pool, seeded by ISO week and rule:
+    /// stable all week, same on every device. Ties break on the synced id so
+    /// the order going into the shuffle matches too.
     private func dealt(_ pool: [Track], for playlist: SmartPlaylist) -> [Track] {
-        let ordered = pool.sorted { $0.dateImported > $1.dateImported }
+        let ordered = pool.sorted {
+            $0.dateImported != $1.dateImported
+                ? $0.dateImported > $1.dateImported
+                : $0.id.uuidString.lowercased() < $1.id.uuidString.lowercased()
+        }
         guard playlist.rule.rotatesWeekly, ordered.count > Self.openRuleCap else {
             return Array(ordered.prefix(Self.openRuleCap))
         }
-        return Array(WeeklyDeal.shuffled(ordered, id: playlist.id).prefix(Self.openRuleCap))
+        return Array(WeeklyDeal.shuffled(ordered, key: playlist.rule.dealKey).prefix(Self.openRuleCap))
     }
 
     // MARK: - Resolution helpers
 
-    /// Builds a play-count map from the play history.
-    ///
-    /// The default is the whole retained history, not a recent window.
-    /// `mostPlayed` says "all-time" on the card and was reading the last 200
-    /// plays, which on a library that is mostly listened to elsewhere meant a
-    /// "Most Played" of one song. `onRepeat` passes its own small window,
-    /// which is the rule that genuinely wants one.
+    /// Play counts over the whole retained history by default. `onRepeat` passes
+    /// a small window.
     private func playCounts(history: PlayHistoryRepository?, limit: Int = 10_000) -> [UUID: Int] {
         guard let ids = try? history?.fetchRecentTrackIDs(limit: limit) else { return [:] }
         var counts: [UUID: Int] = [:]
@@ -252,10 +220,7 @@ public final class SmartPlaylistService: ObservableObject {
         return counts
     }
 
-    /// Returns IDs played at least once in the recent (capped) history window.
-    /// Note: PlayHistory does not store per-entry dates here, so we treat any
-    /// presence in recent history as "played recently" — a reasonable proxy
-    /// given the 50-entry cap.
+    /// IDs in the recent capped history window, used as a "played recently" proxy.
     private func recentlyPlayedIDs(history: PlayHistoryRepository?, since: Date) -> [UUID] {
         (try? history?.fetchRecentTrackIDs(limit: 50)) ?? []
     }
@@ -274,13 +239,8 @@ public final class SmartPlaylistService: ObservableObject {
 
     // MARK: - Defaults
 
-    /// The generation of the default set. Bumping it tops up existing installs
-    /// with the defaults added since — once. A deleted default stays deleted;
-    /// the flag is what stops a top-up from resurrecting it on the next launch.
-    /// The shelf the app ships. Named here rather than inline in the seeder
-    /// because `isBuiltIn` needs the same list: the entity carries no flag
-    /// saying who made it, and the seeder's own names are the only thing that
-    /// tells a shipped rule from one the user typed.
+    /// The shipped rules. `isBuiltIn` matches on these names, since entities
+    /// don't record who made them.
     static let defaultRules: [(String, SmartPlaylistRule)] = [
         ("Recently Added",       .recentlyAdded(limit: 50)),
         ("On Repeat",            .onRepeat(limit: 30)),
@@ -289,9 +249,7 @@ public final class SmartPlaylistService: ObservableObject {
         ("Forgotten Favourites", .forgottenFavourites(days: 90)),
     ]
 
-    /// True for the five the app seeds. A renamed built-in reads as the user's,
-    /// which is the harmless direction to be wrong in — it only decides which
-    /// shelf the card sits on.
+    /// True for seeded rules. A renamed built-in counts as the user's.
     public static func isBuiltIn(_ playlist: SmartPlaylist) -> Bool {
         if case .monthTape = playlist.rule { return true }
         return defaultRules.contains { $0.0 == playlist.name }
@@ -304,6 +262,11 @@ public final class SmartPlaylistService: ObservableObject {
     public static func isArchivedTape(_ playlist: SmartPlaylist, now: Date = Date()) -> Bool {
         guard let start = playlist.rule.tapeStart else { return false }
         return (Calendar.current.dateComponents([.month], from: start, to: now).month ?? 0) > 1
+    }
+
+    /// One month's tape, archived or not. Nil once it's been deleted.
+    public func tape(year: Int, month: Int) -> SmartPlaylist? {
+        playlists.first { $0.rule == .monthTape(year: year, month: month) }
     }
 
     private var deletedTapesKey: String { "smartPlaylists.deletedTapes.\(currentUserID ?? "")" }
@@ -336,12 +299,12 @@ public final class SmartPlaylistService: ObservableObject {
         refresh()
     }
 
+    /// Bump to seed newly added defaults on existing installs, once. Deleted ones stay deleted.
     private static let defaultsGeneration = 2
     private static let defaultsKey = "smartPlaylists.defaultsGeneration"
 
-    /// Rows from before rules had owners. Nothing recorded whose they were, so
-    /// they go to the first account signed in on this build — along with that
-    /// install's seeding generation, so a default it deleted stays deleted.
+    /// Pre-ownership rows go to the first account signed in, with its seeding
+    /// generation so deleted defaults stay deleted.
     private func claimUnownedRows() {
         guard let owner = currentUserID else { return }
         let unowned = ((try? context.fetch(FetchDescriptor<SmartPlaylistEntity>())) ?? [])
@@ -354,8 +317,7 @@ public final class SmartPlaylistService: ObservableObject {
         defaults.removeObject(forKey: Self.defaultsKey)
     }
 
-    /// Seeds the built-in smart playlists for the signed-in account: all of them
-    /// the first time, afterwards only the ones added since its last generation.
+    /// Seeds all built-ins the first time, then only ones added since the last generation.
     private func seedDefaultsIfNeeded() {
         guard let owner = currentUserID else { return }
         let key = "\(Self.defaultsKey).\(owner)"

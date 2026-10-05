@@ -1,14 +1,4 @@
-// WelcomeDownloadPrompt.swift
-// Mixtape — App
-//
-// Shown on first launch after sign-in when no export location has been chosen.
-// Presents the default folder and lets the user proceed — or, on macOS, pick a
-// different one or skip.
-//
-// This used to be a 420×560 onboarding screen: a 56pt glyph, a display-sized
-// welcome, and three centred paragraphs stacked between Spacers, with the two
-// buttons floating at the bottom of the column. It's one decision — where do
-// files go — so it's one sentence, one card, and a button bar.
+// First-launch prompt to pick the export folder.
 
 import SwiftUI
 
@@ -98,8 +88,7 @@ struct WelcomeDownloadPrompt: View {
 
     // MARK: - Actions
 
-    /// Skipping isn't cancelling — it records a choice — so it doesn't ride on
-    /// the chrome's dismiss button.
+    /// Skip records a choice, so it isn't the dismiss button.
     private var actions: some View {
         #if os(macOS)
         HStack(spacing: 12) {

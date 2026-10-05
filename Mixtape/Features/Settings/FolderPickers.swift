@@ -1,6 +1,3 @@
-// FolderPickers.swift
-// Mixtape — Components
-
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -8,9 +5,7 @@ import UniformTypeIdentifiers
 import AppKit
 
 public struct FolderPickerHelper {
-    /// `message` is the line above the file list. It defaults to the export
-    /// folder's wording because that was this picker's only caller for a long
-    /// time; watched folders mean something quite different and say so.
+    /// `message` is the line above the file list. Defaults to the export folder's wording.
     public static func show(
         message: String = "Choose or create a folder where Mixtape will save your exported songs.",
         onCompletion: @escaping (URL?) -> Void

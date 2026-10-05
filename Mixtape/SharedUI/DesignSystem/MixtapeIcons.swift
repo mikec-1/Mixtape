@@ -1,8 +1,4 @@
-// MixtapeIcons.swift
-// Mixtape — Design System
-//
-// Centralised SF Symbol names so we can swap icons in one place.
-// All icons use SF Symbols (no third-party icon fonts needed).
+// SF Symbol names in one place.
 
 import SwiftUI
 

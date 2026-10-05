@@ -1,31 +1,9 @@
-// SpotifyExportService.swift
-// Mixtape — Core/Services
-//
-// Sending music the other way: a Mixtape playlist recreated on Spotify, and
-// Favourites pushed into Liked Songs.
-//
-// Why this is a one-shot and not a mirror
-//   Coming *from* Spotify, every song arrives with a Spotify id, so a follow
-//   check is exact. Going the other way there is no id to carry: a song ripped
-//   from a file or found in Discover has only a title and an artist, and finding
-//   it on Spotify is a search whose answer is sometimes a live version, a
-//   karaoke cover, or nothing at all. A standing two-way sync would make those
-//   guesses silently, over and over, with no moment at which anyone could look
-//   at them. So this plans first, shows its work, and only writes what the user
-//   has seen.
-//
-// The three verdicts
-//   `confident`  — the normalised title and artist agree and the runtimes are
-//                  within a few seconds. Ticked by default.
-//   `uncertain`  — something came back, but not something this is willing to
-//                  claim is the same recording. Shown, and *not* ticked.
-//   `missing`    — Spotify has nothing under that name. Reported so the count
-//                  at the end is honest about what didn't make it.
-//
-// Liked Songs is additive, always
-//   `pushLikes` only ever adds. A song you unhearted here is not a song you
-//   asked to unlike on Spotify, and a push that could remove things is a push
-//   nobody would dare run twice.
+// Mixtape -> Spotify: playlists recreated on Spotify and Favourites pushed
+// to Liked Songs. One-shot, not a mirror: without Spotify ids every match is a
+// search, so it plans first and only writes what the user has reviewed.
+// Verdicts: `confident` (name matches, runtime within tolerance, ticked),
+// `uncertain` (shown, unticked), `missing` (nothing found).
+// Likes push only ever adds.
 
 import Foundation
 import OSLog
@@ -42,25 +20,15 @@ public final class SpotifyExportService: ObservableObject {
             case confident
             case uncertain
             case missing
-            /// The lookup itself failed. Distinct from `missing` because "we
-            /// couldn't ask" and "Spotify doesn't have it" are different facts,
-            /// and printing the second when the first happened is a lie about
-            /// the catalogue — which is exactly what a song with a hundred
-            /// million streams reading "not on Spotify" was.
-            ///
-            /// It carries *why* so the wording can be true rather than vague:
-            /// a rate limit is worth waiting out, a dead connection isn't.
+            /// The lookup failed, which is not the same as "not on Spotify". Carries the reason.
             case unchecked(Reason)
         }
 
         /// Why a lookup produced no answer.
         public enum Reason: Sendable, Equatable {
-            /// Spotify is throttling the app. Waiting fixes it; retrying now
-            /// makes it worse. Carries Spotify's own advised wait when it gave
-            /// one, because "try again later" and "try again in four minutes"
-            /// are different amounts of help.
+            /// Throttled, with Spotify's advised wait if given.
             case rateLimited(retryAfter: TimeInterval)
-            /// Anything else — offline, a dropped connection, a bad reply.
+            /// Offline, dropped connection or a bad reply.
             case unreachable
 
             public var sentence: String {
@@ -116,8 +84,7 @@ public final class SpotifyExportService: ObservableObject {
         public var missing:   [Candidate] { candidates.filter { $0.verdict == .missing } }
         public var unchecked: [Candidate] { candidates.filter { $0.isUnchecked } }
 
-        /// Why the unchecked ones went unchecked. A run stops at the first rate
-        /// limit, so in practice every failure in one plan has the same cause.
+        /// Why lookups went unchecked. A run stops at the first rate limit, so there's one cause.
         public var uncheckedReason: Candidate.Reason? {
             candidates.compactMap(\.uncheckedReason).first
         }
@@ -146,17 +113,7 @@ public final class SpotifyExportService: ObservableObject {
 
     // MARK: - Remembered matches
 
-    /// A search result worth not asking for twice.
-    ///
-    /// Matching a favourite costs one Spotify search, and the review page runs
-    /// the whole set every time it opens — nine hundred favourites is nine
-    /// hundred searches on every visit, for answers that were the same last
-    /// time. A recording's title, artist and length do not change, so once a
-    /// song has been found it stays found.
-    ///
-    /// Only *found* songs are kept. A song Spotify had nothing for is looked up
-    /// again next time: catalogues gain records, and caching an absence would
-    /// hide a song from its owner permanently.
+    /// A found match, cached since title, artist and length don't change.
     private struct CachedMatch: Codable {
         var uri: String
         var title: String
@@ -171,18 +128,8 @@ public final class SpotifyExportService: ObservableObject {
         }
     }
 
-    /// A song Spotify had nothing for, and when we last asked.
-    ///
-    /// Misses used to be thrown away on the principle that catalogues gain
-    /// records and a cached absence would hide a song from its owner forever.
-    /// That principle is right and the implementation was the problem: a
-    /// library with two thousand favourites, most of them unmatched, re-ran two
-    /// thousand searches on every visit to the review page and spent the app's
-    /// entire API quota doing it — after which *every* song reads as unfound,
-    /// which hides far more than a stale miss ever would.
-    ///
-    /// So a miss is remembered, but it expires. Ask again after `missTTL` and
-    /// the new record gets found; until then the page costs nothing.
+    /// A cached miss. Expires after `missTTL` so new catalogue additions surface,
+    /// without re-searching the whole library on every visit.
     private struct CachedMiss: Codable {
         var checkedAt: Date
     }
@@ -208,8 +155,7 @@ public final class SpotifyExportService: ObservableObject {
         guard let data = defaults.data(forKey: Self.missCacheKey),
               let decoded = try? JSONDecoder().decode([String: CachedMiss].self, from: data)
         else { return }
-        // Expired entries are dropped on the way in rather than checked on the
-        // way out, so the store doesn't grow a tail of answers nobody trusts.
+        // Drop expired misses on load.
         let cutoff = Date().addingTimeInterval(-Self.missTTL)
         missCache = decoded.filter { $0.value.checkedAt > cutoff }
     }
@@ -219,8 +165,7 @@ public final class SpotifyExportService: ObservableObject {
         defaults.set(data, forKey: Self.missCacheKey)
     }
 
-    /// True when this song was looked up recently and Spotify had nothing.
-    /// `.unchecked` never lands here — a lookup that failed is not an answer.
+    /// Recently searched and not found. Failed lookups never count.
     private func recentlyMissed(_ track: Track) -> Bool {
         guard let miss = missCache[track.id.uuidString] else { return false }
         return miss.checkedAt > Date().addingTimeInterval(-Self.missTTL)
@@ -251,8 +196,7 @@ public final class SpotifyExportService: ObservableObject {
         saveMissCache()
     }
 
-    /// Forgets every remembered match. The cache is keyed by local track id, so
-    /// it means nothing to a different account.
+    /// Clears cached matches; they're keyed by local track id, so per account.
     public func forgetMatches() {
         matchCache.removeAll()
         missCache.removeAll()
@@ -264,11 +208,7 @@ public final class SpotifyExportService: ObservableObject {
 
     // MARK: - Planning
 
-    /// Looks every song up on Spotify and judges the results.
-    ///
-    /// Sequential, and not because it has to be: a hundred parallel searches
-    /// would earn a 429 within seconds and finish slower than this does, and the
-    /// progress it reports would be meaningless besides.
+    /// Looks up and judges every song. Sequential, since parallel searches just hit 429s.
     public func plan(name: String, tracks: [Track]) async throws -> Plan {
         var token = try await auth.validAccessToken()
         let total = tracks.count
@@ -278,10 +218,7 @@ public final class SpotifyExportService: ObservableObject {
         var candidates: [Candidate] = []
         candidates.reserveCapacity(total)
 
-        // Set the moment Spotify says we're over the limit. Everything after it
-        // is recorded as unchecked without a request: once an app is being
-        // throttled, grinding through another two thousand lookups deepens the
-        // penalty and gets two thousand identical failures for it.
+        // After a 429, mark the rest unchecked without requesting.
         var throttled = false
         var retryWait: TimeInterval = 0
 
@@ -296,10 +233,7 @@ public final class SpotifyExportService: ObservableObject {
                 continue
             }
 
-            // An answer we already have. `plan` is reached both from the export
-            // sheet and from the favourites review, and the review runs the
-            // whole favourites list, so consulting the cache here is what keeps
-            // a second visit free.
+            // Cache hit.
             if let cached = matchCache[track.id.uuidString] {
                 candidates.append(Candidate(track: track,
                                             match: cached.match,
@@ -315,19 +249,12 @@ public final class SpotifyExportService: ObservableObject {
                 continue
             }
 
-            // Re-asked as we go, not held for the whole run. A thousand songs is
-            // longer than a Spotify token lives, and because a failed search is
-            // swallowed below, an expired one wouldn't raise an error — it would
-            // quietly report the second half of somebody's library as "not on
-            // Spotify". `validAccessToken` is a keychain read until it isn't.
+            // Refresh the token as we go; long runs outlive it and failed searches are swallowed below.
             if index > 0, index % 50 == 0 {
                 token = (try? await auth.validAccessToken()) ?? token
             }
 
-            // Deliberately not `try?`. A swallowed error here is indistinguishable
-            // from an empty result set, and the sheet renders an empty result set
-            // as "not on Spotify" — so one 429 used to relabel a song with a
-            // hundred million streams as missing from the catalogue.
+            // Not `try?`: a swallowed error looks like "not on Spotify".
             do {
                 let results = try await client.searchTracks(
                     title:  track.title,
@@ -349,9 +276,7 @@ public final class SpotifyExportService: ObservableObject {
             }
             planned = (index + 1, total)
 
-            // The lookups are network-bound and already yield, but the judging
-            // isn't — without this a long playlist would hold the main actor
-            // between requests and stall the progress it's reporting.
+            // Yield so judging doesn't hold the main actor between requests.
             await Task.yield()
         }
 
@@ -366,13 +291,8 @@ public final class SpotifyExportService: ObservableObject {
 
         let wanted = LibraryTrackIndex.key(title: track.title, artistName: track.artistName)
 
-        // Prefer a result whose identity key matches outright over merely the
-        // one Spotify ranked first — relevance ranking answers "what did you
-        // probably mean", which is not the same question.
-        // The printed title carries the feature credit and the artist field
-        // carries every guest; Spotify splits the same song the other way. Both
-        // readings count as an exact name match, or every featured song would
-        // come back "uncertain" for a difference in bookkeeping.
+        // Prefer an exact identity match over Spotify's top result. Features can be
+        // in the title or the artist field on either side, and both count as exact.
         let wantedCore = LibraryTrackIndex.key(
             title:      SpotifyClient.coreTitle(track.title),
             artistName: ImportService.primaryArtistName(from: track.artistName)
@@ -388,10 +308,7 @@ public final class SpotifyExportService: ObservableObject {
         let chosen = exact ?? best
         let alternatives = results.filter { $0.uri != chosen.uri }
 
-        // A duration check on top of the name, because the commonest wrong
-        // answer — a live take, an extended mix, a radio edit — has the right
-        // name and the wrong length. Skipped when the library row never learned
-        // its own duration, where it would fail everything for no reason.
+        // Also check length, to catch live takes and edits. Skipped when our duration is unknown.
         let sameLength = track.duration <= 0
             || abs(chosen.duration - track.duration) <= Self.durationTolerance
 
@@ -406,19 +323,15 @@ public final class SpotifyExportService: ObservableObject {
     // MARK: - Committing
 
     public struct Outcome: Sendable {
-        /// Spotify's id for the playlist that was just created — what a sync
-        /// link points at afterwards.
+        /// The new Spotify playlist's id, for sync links.
         public var playlistID: String
         public var playlistURL: URL?
         public var added: Int
         public var skipped: Int
     }
 
-    /// Creates the playlist on Spotify and fills it with the chosen URIs.
-    ///
-    /// Order is the plan's order, which is the playlist's order here. Songs the
-    /// user left unticked are simply absent — this never substitutes a
-    /// runner-up for something they declined.
+    /// Creates the playlist and adds the chosen URIs in plan order. Unticked songs
+    /// are left out, never substituted.
     public func commit(name: String,
                        description: String?,
                        isPublic: Bool,
@@ -457,9 +370,7 @@ public final class SpotifyExportService: ObservableObject {
             throw refusalToReport()
         }
 
-        // Chunked here as well as inside `addTracks` so the bar moves: the
-        // client's own chunking is invisible from out here, and a nine-hundred
-        // song playlist would otherwise sit at zero for nine requests.
+        // Chunked here too so progress moves per request.
         for chunk in uris.chunked(into: 100) {
             try Task.checkCancellation()
             do {
@@ -480,41 +391,22 @@ public final class SpotifyExportService: ObservableObject {
 
     // MARK: - Likes
 
-    /// What a favourites push would actually do, worked out before it does it.
-    ///
-    /// The push used to be a confirmation dialog and a leap: it planned, wrote,
-    /// and reported afterwards. That reads fine at nine hundred songs and badly
-    /// at one — "Likes 1 song on Spotify" for a song already in Liked Songs is a
-    /// button offering work that doesn't exist. So the check happens first now,
-    /// and what comes back is a list of what's *missing* from Spotify rather
-    /// than a list of what's favourited here.
+    /// What a likes push would do, computed first: only matched songs not already
+    /// in Liked Songs are offered.
     public struct LikesReview: Sendable {
-        /// Matched, and not already in the account's library. The only rows the
-        /// user is asked about, because they're the only ones that would change
-        /// anything.
+        /// Matched and not yet liked. The only rows the user reviews.
         public var pushable: [Candidate]
-        /// Favourites already in Liked Songs. Counted, not listed: a hundred
-        /// rows of "nothing to do here" is not a review, it's a wall. Counted
-        /// as *rows*, not as URIs, so two favourites that turn out to be the
-        /// same recording still read as two.
+        /// Already liked, counted by row not URI.
         public var alreadyLiked: Int
-        /// Searched for and not found. Listed, because "not on Spotify" is a
-        /// fact about someone's library they may want to know.
+        /// Searched and not found.
         public var missing: [Candidate]
 
-        /// Whether Spotify answered when asked what was already saved.
-        ///
-        /// When it doesn't, every match falls through as pushable and
-        /// `alreadyLiked` reads zero, which is precisely the behaviour this
-        /// page was built to replace. The push is still safe — saving is
-        /// idempotent — but the review is guesswork, and it says so rather
-        /// than quietly presenting a stale list as a checked one.
+        /// Whether the already-saved check succeeded. If not, every match shows as
+        /// pushable (still safe, saving is idempotent) and the page says so.
         public var checkSucceeded: Bool = true
-        /// Songs whose lookup never got an answer — a rate limit, usually.
-        /// Not counted as missing, because nobody established that they are.
+        /// Lookups that got no answer. Not counted as missing.
         public var unchecked: Int = 0
-        /// Why, when there were any. Drives the wording, so a rate limit reads
-        /// as something to wait out rather than as a mystery.
+        /// Drives the wording for unchecked songs.
         public var uncheckedReason: Candidate.Reason?
 
         /// Nothing to do: everything favourited is either already saved or
@@ -522,10 +414,7 @@ public final class SpotifyExportService: ObservableObject {
         public var hasNothingToPush: Bool { pushable.isEmpty }
     }
 
-    /// Matches every favourite against Spotify and drops the ones already saved.
-    ///
-    /// Songs matched on an earlier run are taken from the cache and never
-    /// searched again; only the ones nothing is known about cost a request.
+    /// Matches favourites against Spotify (cached where possible) and drops ones already saved.
     public func reviewLikes(_ tracks: [Track]) async throws -> LikesReview {
         guard auth.canWrite else { throw SpotifyExportError.writeNotAllowed }
 
@@ -551,9 +440,7 @@ public final class SpotifyExportService: ObservableObject {
             for candidate in plan.candidates { known[candidate.track.id] = candidate }
         }
 
-        // Back into the caller's order: the cached half and the searched half
-        // arrive separately, and a favourites list that reshuffles itself
-        // depending on what was cached would be its own small bug.
+        // Restore the caller's order after merging cached and searched results.
         let candidates = tracks.compactMap { known[$0.id] }
         let matched = candidates.filter { $0.match != nil }
         let uris = Set(matched.compactMap { $0.match?.uri })
@@ -567,9 +454,7 @@ public final class SpotifyExportService: ObservableObject {
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
-                // Not fatal — saving is idempotent, so the worst case is being
-                // offered songs already saved. But it is not silent either: the
-                // review carries the failure so the page can admit to it.
+                // Not fatal; the review flags it.
                 checked = false
             }
         }
@@ -583,23 +468,13 @@ public final class SpotifyExportService: ObservableObject {
                            alreadyLiked: matched.count - pushable.count,
                            missing: candidates.filter { $0.verdict == .missing },
                            checkSucceeded: checked,
-                           // A song whose lookup failed is neither pushable nor
-                           // missing; it is unknown, and the page says so rather
-                           // than presenting a partial answer as a whole one.
+                           // Failed lookups are unknown, not pushable or missing.
                            unchecked: candidates.filter(\.isUnchecked).count,
                            uncheckedReason: candidates.compactMap(\.uncheckedReason).first)
     }
 
-    /// Saves exactly these Spotify URIs to the account's library.
-    ///
-    /// Takes URIs rather than tracks because by this point the matching has been
-    /// done and, more to the point, *reviewed* — re-deriving it here would throw
-    /// away the user's corrections and their unticked rows.
-    ///
-    /// Additive, always. A song unhearted in Mixtape is not a song anyone asked
-    /// to unlike on Spotify: the two lists have separate histories and no shared
-    /// record of who removed what. That is also what makes it safe to re-run —
-    /// saving something already saved is a no-op at Spotify's end.
+    /// Saves these URIs to Liked Songs. Takes the reviewed URIs, not tracks, to
+    /// keep the user's choices. Additive only, and safe to re-run.
     @discardableResult
     public func pushLikes(uris: [String]) async throws -> Int {
         guard !uris.isEmpty else { return 0 }
@@ -616,9 +491,7 @@ public final class SpotifyExportService: ObservableObject {
             } catch SpotifyPlaylistError.writeNotPermitted {
                 throw refusalToReport()
             } catch SpotifyPlaylistError.tokenExpired {
-                // One retry on a fresh token, and only for the token itself
-                // expiring. A refusal about permissions is not retryable and
-                // must reach the user unchanged.
+                // One retry on a fresh token for expiry only; permission refusals pass through.
                 token = try await auth.refreshedAccessToken()
                 try await client.saveToLikedSongs(uris: chunk, accessToken: token)
             }
@@ -629,13 +502,8 @@ public final class SpotifyExportService: ObservableObject {
 }
 
 extension SpotifyExportService {
-    /// Tells apart the two refusals that look identical from the outside.
-    ///
-    /// A grant missing `user-library-modify` and an app Spotify won't let write
-    /// at all both come back as 403. Only the first is fixed by consenting
-    /// again, and sending someone back through a permission screen they have
-    /// already agreed to — twice — is worse than saying plainly that the
-    /// problem isn't theirs to solve from in here.
+    /// Both a missing `user-library-modify` scope and an app-level block are 403s.
+    /// Only the first is fixed by re-consenting.
     func refusalToReport() -> SpotifyExportError {
         auth.canWrite ? .refusedBySpotify : .writeNotAllowed
     }
@@ -646,8 +514,7 @@ public enum SpotifyExportError: LocalizedError {
     case noAccount
     /// The connection reads this account but was never allowed to change it.
     case writeNotAllowed
-    /// Every permission was granted and Spotify refused the write regardless —
-    /// an app-level restriction, which nothing the user does in Mixtape fixes.
+    /// Spotify refused despite full permissions; nothing the user can fix.
     case refusedBySpotify
 
     public var errorDescription: String? {

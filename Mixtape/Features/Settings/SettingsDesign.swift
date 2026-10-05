@@ -1,22 +1,8 @@
-// SettingsDesign.swift
-// Mixtape — Features/Settings
-//
-// The visual vocabulary every Settings page is built from.
-//
-// These rows deliberately don't use `List`. The old Settings did, and it's the
-// direct cause of most of what was wrong with it: `List` renders a `Toggle` as a
-// checkbox on macOS and a switch on iOS, so the same file produced two different
-// controls depending on which rows remembered to override `.toggleStyle`, and
-// section insets, row heights and separators all diverged between platforms.
-// Cards drawn here look and behave identically on both, and a control can only
-// be styled one way because the style lives in the component, not the call site.
-//
-// The other rule: colour is information, not decoration. Every row used to carry
-// an accent-tinted icon chip, which made a page of twelve rows read as twelve
-// equally urgent things. Here the accent means "this is interactive or currently
-// set", red means destructive, and everything else is a quiet monochrome glyph.
-// Only the top-level category rows keep coloured icons — that's where colour
-// actually helps you find your place.
+// The components every Settings page is built from.
+// No `List`: it draws a Toggle as a checkbox on macOS and a switch on iOS, and its insets
+// and separators differ between platforms. These cards look the same on both.
+// Colour is information: accent means interactive or set, red means destructive,
+// everything else is a monochrome glyph. Only category rows get coloured icons.
 
 import SwiftUI
 
@@ -28,8 +14,7 @@ enum SettingsMetrics {
     static let cardRadius:   CGFloat = 10
     static let rowPadH:      CGFloat = 14
     static let rowPadV:      CGFloat = 7
-    /// Settings sits inside the content pane, which can be very wide. Text is
-    /// unreadable in 900pt lines, so the page holds a comfortable measure.
+    /// Keeps a readable line length in a wide content pane.
     static let pageMaxWidth: CGFloat = 640
     #else
     static let rowMinHeight: CGFloat = 44
@@ -39,19 +24,14 @@ enum SettingsMetrics {
     static let pageMaxWidth: CGFloat = 700
     #endif
 
-    /// Fixed width for the leading glyph so every title in a card starts on the
-    /// same x, with or without an icon.
+    /// Fixed glyph width so every title in a card starts on the same x.
     static let iconColumn: CGFloat = 24
     static let groupSpacing: CGFloat = 22
 }
 
 // MARK: - Search highlight
 
-/// The row id search asked us to show, if any.
-///
-/// Search navigates to a category; without this the user then has to find the
-/// row themselves, which is most of the work search was supposed to save. Rows
-/// carrying a matching id tint themselves until the highlight is cleared.
+/// The row id search asked for. Matching rows tint themselves until it's cleared.
 private struct SettingsHighlightKey: EnvironmentKey {
     static let defaultValue: String? = nil
 }
@@ -69,8 +49,7 @@ extension EnvironmentValues {
 struct SettingsPage<Content: View>: View {
 
     let title: String
-    /// Shown under the title when a page needs one line of orientation. Most
-    /// don't — a well-named page explains itself.
+    /// One line of orientation under the title, when a page needs it.
     var subtitle: String? = nil
     @ViewBuilder var content: Content
 
@@ -91,8 +70,7 @@ struct SettingsPage<Content: View>: View {
                 }
                 .padding(.bottom, 2)
                 #else
-                // iOS already has the title in the navigation bar — printing it
-                // again at the top of the page just says the same word twice.
+                // iOS already shows the title in the navigation bar.
                 if let subtitle {
                     Text(subtitle)
                         .font(.mixSubtext)
@@ -119,8 +97,7 @@ struct SettingsPage<Content: View>: View {
 struct SettingsGroup<Content: View>: View {
 
     var title: String? = nil
-    /// A closing line of explanation. Used sparingly — only where the rows above
-    /// genuinely can't say it themselves.
+    /// A closing line of explanation, only where the rows can't say it.
     var footer: String? = nil
     @ViewBuilder var content: Content
 
@@ -168,15 +145,12 @@ struct SettingsCard<Content: View>: View {
             .clipShape(RoundedRectangle(cornerRadius: SettingsMetrics.cardRadius, style: .continuous))
     }
 
-    /// Inserts a separator between children — but never after the last one,
-    /// which is why this needs the variadic tree rather than a plain `VStack`:
-    /// only here are the children individually addressable.
+    /// A separator between children but not after the last. Needs the variadic tree
+    /// to address children individually.
     private struct DividedRows: _VariadicView_UnaryViewRoot {
         @ViewBuilder
         func body(children: _VariadicView.Children) -> some View {
-            // Indexed rather than compared by id: `Children.Element.id` is an
-            // `AnyHashable`, and asking ForEach to infer from that collides with
-            // the newer `Subview` overloads.
+            // Indexed: inferring ForEach ids from `AnyHashable` collides with the `Subview` overloads.
             let rows  = Array(children)
             let count = rows.count
             VStack(spacing: 0) {
@@ -199,8 +173,7 @@ struct SettingsCard<Content: View>: View {
 /// One row: optional leading glyph, title, optional second line, trailing content.
 struct SettingsRow<Trailing: View>: View {
 
-    /// Stable identifier, matching the search index. Rows without one can't be
-    /// found by search — which is correct for things like the profile header.
+    /// Matches the search index. Rows without one can't be found by search.
     var id: String? = nil
     let title: String
     var subtitle: String? = nil
@@ -290,7 +263,7 @@ struct SettingsValue: View {
 
 // MARK: - Controls
 
-/// A switch row. Always a switch — on both platforms, in every card.
+/// A switch row, on both platforms.
 struct SettingsToggleRow: View {
 
     var id: String? = nil
@@ -351,8 +324,7 @@ struct SettingsButtonRow<Trailing: View>: View {
     let title: String
     var subtitle: String? = nil
     var icon: String? = nil
-    /// `.accent` for ordinary actions, `.plain` for navigation, `.destructive`
-    /// for anything that removes data.
+    /// `.accent` for actions, `.plain` for navigation, `.destructive` for anything that removes data.
     var role: SettingsActionRole = .accent
     var showsChevron: Bool = false
     var isEnabled: Bool = true
@@ -391,8 +363,7 @@ extension SettingsButtonRow where Trailing == EmptyView {
     }
 }
 
-/// A row that leaves the app for a page on mixtaped.tech. The arrow is the
-/// promise that it opens the browser rather than a page in here.
+/// Opens a page on mixtaped.tech in the browser; the arrow says so.
 struct SettingsLinkRow: View {
 
     var id: String? = nil
@@ -439,8 +410,7 @@ enum SettingsActionRole {
     }
 }
 
-/// A slider with its current value shown above it. Two lines, because a slider
-/// squeezed into a row's trailing edge is unusable at any window width.
+/// A slider with its value above it. Two lines, since a trailing-edge slider is unusable.
 struct SettingsSliderRow: View {
 
     var id: String? = nil
@@ -487,9 +457,7 @@ struct SettingsSliderRow: View {
     }
 }
 
-/// A small capsule button that lives in a row's trailing edge, for an action
-/// that belongs to the value beside it ("Clear" next to a cache size) rather
-/// than deserving a row of its own.
+/// A small capsule button in a row's trailing edge, e.g. "Clear" next to a cache size.
 struct SettingsInlineButton: View {
 
     let title: String

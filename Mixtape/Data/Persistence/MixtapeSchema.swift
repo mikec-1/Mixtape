@@ -1,10 +1,4 @@
-// MixtapeSchema.swift
-// Mixtape — Data Layer
-//
-// SwiftData @Model definitions. These are the persistence representations.
-// Domain structs (Track, Album, etc.) are mapped to/from these by their repositories.
-//
-// Minimum deployment: iOS 17 / macOS 14
+// SwiftData @Model definitions. Repositories map these to the domain structs.
 
 import Foundation
 import SwiftData
@@ -27,8 +21,7 @@ public final class TrackEntity {
     @Attribute(.externalStorage) public var artworkData: Data?
     public var artworkKey: String?
     public var composer: String?
-    /// Defaulted so the store migrates lightly: every row that predates the
-    /// column reads as "not known to be explicit".
+    /// Defaulted for lightweight migration.
     public var isExplicit: Bool = false
     public var dateImported: Date
     public var isSoftDeleted: Bool
@@ -40,11 +33,12 @@ public final class TrackEntity {
     public var remoteKey: String?
     public var fileUploaded: Bool
     public var fileDownloadedAt: Date?
-    /// `TrackOrigin.rawValue`. Optional because rows written before origin was
-    /// stored have none — `toDomain()` infers those once, on read.
+    /// `TrackOrigin.rawValue`. Nil on old rows; `toDomain()` infers it.
     public var originRaw: String?
     /// Resolver key for `.online` rows.
     public var sourceRef: String?
+    /// JSON `SongEdit` for `.edit` rows. Defaulted for lightweight migration.
+    public var editData: Data? = nil
 
     // Sync metadata
     public var syncStatus: String      // SyncStatus.rawValue
@@ -253,34 +247,18 @@ public final class PlaylistEntity {
     public var dateModified: Date
     public var isSoftDeleted: Bool
 
-    /// `PlaylistOrigin.rawValue`. Defaulted so the store migrates in place: every
-    /// playlist that existed before playlists could come from anywhere else is
-    /// one the user made.
+    /// `PlaylistOrigin.rawValue`. Defaults to owned for rows from before origins existed.
     public var originRaw: String = PlaylistOrigin.owned.rawValue
     /// Display name of the owner, for playlists that aren't the user's own.
     public var ownerName: String?
 
-    /// Where this playlist's cover came from, as a `PlaylistCoverKind` raw
-    /// value.
-    ///
-    /// A chosen cover and a composed one used to be indistinguishable, and that
-    /// is why covers differed per device: a composed cover was rebuilt locally
-    /// from whichever tracks had artwork *on that device*, so no two devices
-    /// drew the same tiles. The composed bytes are now baked into `artworkData`
-    /// and synced like any other cover; this is what still allows them to be
-    /// re-baked when the track list changes, what a chosen cover sets so it is
-    /// never overwritten, and what a cleared cover sets so nothing is put back.
-    ///
-    /// Defaulted so the store migrates in place. `derived` is the right reading
-    /// of every existing row — every cover before this existed either came from
-    /// the songs or will simply be re-baked once, and a chosen one is marked the
-    /// next time it is set.
+    /// `PlaylistCoverKind` raw value. Composed covers are baked into `artworkData`
+    /// and synced, so devices agree; this says whether it may be re-baked (derived),
+    /// must be kept (chosen) or stays empty (none). Existing rows default to derived.
     public var coverKindRaw: String = PlaylistCoverKind.derived.rawValue
     public var isPinned: Bool = false
 
-    /// The user's own arrangement — see `Playlist.sortIndex`. Defaulted to nil
-    /// so the store migrates in place and an existing library reads as
-    /// "never arranged" until it is.
+    /// User's arrangement, see `Playlist.sortIndex`. Nil means never arranged.
     public var sortIndex: Int? = nil
 
     /// JSON-encoded `[PlaylistSide]`. Nil means no sides.
@@ -289,33 +267,17 @@ public final class PlaylistEntity {
     /// JSON-encoded `PlaylistNotes`. Nil means none.
     public var notesData: Data? = nil
 
-    /// When the bucket's copy of this cover was last written, as of the last
-    /// time we looked.
-    ///
-    /// The playlists table has no artwork column, so the row cannot say the
-    /// picture changed — and the first attempt at this marked every playlist
-    /// stale whenever a pull brought newer rows, which re-downloaded the whole
-    /// wall of covers. The bucket listing already carries a modified date per
-    /// file, and one listing covers every playlist, so comparing against this is
-    /// both exact and free: a cover is fetched when its file is genuinely newer
-    /// than the copy on disk, and never otherwise.
-    ///
-    /// Local only. Never encoded into `PlaylistRow`, so it needs no column.
+    /// Modified date of the bucket's copy of this cover when last checked. The
+    /// playlist row has no artwork column, so the bucket listing is what says a cover
+    /// changed. Local only.
     public var artworkRemoteStamp: Date? = nil
 
-    /// The user threw this cover away and the bucket has not been told yet.
-    ///
-    /// A deletion is the one cover change that cannot travel as an upload, and
-    /// leaving the old file in place is worse than doing nothing: the download
-    /// pass lists the folder, finds it, and hands the deleted cover straight
-    /// back. Local only, cleared once the object is gone.
+    /// Cover was removed and the bucket copy hasn't been deleted yet. Otherwise the
+    /// download pass would bring it back. Local only.
     public var artworkNeedsRemoteDelete: Bool = false
 
-    /// Where this playlist's cover sits in the `artwork` bucket, once it's been
-    /// uploaded. Local-only, unlike the track/album/artist equivalents: the
-    /// path is `<userID>/playlists/<playlistID>.jpg` and both ids are already
-    /// on every device, so it's derivable rather than something the row has to
-    /// carry. What it records here is "this device has already sent it".
+    /// Set once this device has uploaded the cover. Local only: the path
+    /// (`<userID>/playlists/<playlistID>.jpg`) is derivable on every device.
     public var artworkKey: String?
 
     // Sync
@@ -325,6 +287,9 @@ public final class PlaylistEntity {
     public var syncLocalModifiedAt: Date
     public var syncServerModifiedAt: Date?
     public var syncLastSyncedAt: Date?
+    /// Track list as of the last pull or push. A push replays only the changes made
+    /// since then onto the server's list. Nil on rows from before this existed. Local only.
+    public var syncBaseTrackIDsData: Data? = nil
 
     public init(
         id: UUID = UUID(),
@@ -427,9 +392,7 @@ public final class PlayHistoryEntity {
 }
 
 // MARK: - SmartPlaylistEntity
-//
-// Local-only auto-updating playlist defined by an encoded rule.
-// No Supabase sync metadata — its contents are resolved live, never stored.
+// Local-only auto-updating playlist defined by an encoded rule. Not synced; contents resolve live.
 
 @Model
 public final class SmartPlaylistEntity {
@@ -440,13 +403,10 @@ public final class SmartPlaylistEntity {
     /// JSON-encoded SmartPlaylistRule (see SmartPlaylist.encodedRule()).
     public var ruleData: Data
     public var dateCreated: Date
-    /// The account this rule belongs to. Nil only on rows from before rules had
-    /// owners; `SmartPlaylistService` hands those to the next account to sign in.
+    /// Owning account. Nil on old rows; `SmartPlaylistService` assigns those to the next sign-in.
     public var ownerID: String?
-    /// Whether this rule is listed in Your Library. The shipped five arrive
-    /// `false` — they live on Home and are added from their own page — while
-    /// anything the user wrote themselves arrives `true`, since a rule you had
-    /// to open a sheet to make is one you meant to keep.
+    /// Shown in Your Library. Built-in rules start false (they live on Home);
+    /// user-made ones start true.
     public var inLibrary: Bool = false
 
     public init(
@@ -510,13 +470,9 @@ public final class FavoriteEntity {
 
 // MARK: - PlayedTrackSnapshot
 
-/// A lightweight, persisted snapshot of a played track that is NOT in the
-/// library — i.e. an online (Discover) song. The play-history table only stores
-/// a bare `trackID`; for library songs that's enough (they resolve through the
-/// TrackRepository), but online songs have no library row, so without this they
-/// vanish from "Recently played" after a relaunch and never appear in listening
-/// stats. We upsert one snapshot per unique online track (keyed by its stable
-/// id) and resolve recently-played / stats lookups against it as a fallback.
+/// Snapshot of a played song that isn't in the library (a Discover song).
+/// Play history only stores a track id, so without this those plays drop out of
+/// Recently Played and stats after a relaunch. One per track id.
 @Model
 public final class PlayedTrackSnapshotEntity {
 

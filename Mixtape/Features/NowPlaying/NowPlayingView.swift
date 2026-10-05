@@ -1,11 +1,4 @@
-// NowPlayingView.swift
-// Mixtape — Features/NowPlaying
-//
-// Full-screen player sheet.
-// All state comes from PlaybackEngine and QueueService (@EnvironmentObject).
-//
-// Overhaul: ambient album-art background, synced/plain lyrics panel, and new
-// playback controls (sleep timer, playback speed, Up Next reorder).
+// Full-screen player sheet. State comes from PlaybackEngine and QueueService.
 
 import SwiftUI
 
@@ -13,9 +6,7 @@ public struct NowPlayingView: View {
 
     @EnvironmentObject private var engine: PlaybackEngine
     @EnvironmentObject private var deps:   AppDependencies
-    /// `engine.queue` is a plain `let` on the engine, so its changes don't
-    /// republish through it — shuffle and repeat have to be observed here or the
-    /// buttons only catch up on the next unrelated engine publish.
+    /// Observed directly: `engine.queue` doesn't republish through the engine.
     @EnvironmentObject private var queueService: QueueService
     #if os(iOS)
     @EnvironmentObject private var iosAppState: IOSAppState
@@ -30,12 +21,7 @@ public struct NowPlayingView: View {
 
     @State private var isLoadingLyrics = false
 
-    /// Lyrics for the current track, read straight from the service.
-    ///
-    /// Deliberately not mirrored into `@State`: `LyricsService.cache` is
-    /// `@Published`, so a write already re-runs this body, and a `@State` copy
-    /// only ever updated by `refreshForCurrentTrack` meant lyrics the user had
-    /// just saved didn't appear until the screen was dismissed and reopened.
+    /// Read straight from the service (`cache` is `@Published`) so saved lyrics show immediately.
     private var lyrics: TrackLyrics? {
         guard let track = queueService.currentTrack else { return nil }
         return lyricsService.cached(for: track)
@@ -46,6 +32,9 @@ public struct NowPlayingView: View {
     @State private var showUpNext  = false
     @State private var showGetInfo = false
     @State private var showLyricsEditor = false
+    @State private var showLyricCard = false
+    @State private var editTrack: Track?
+    @State private var postTrack: Track?
     #if os(iOS)
     /// Karaoke: the same synced lyrics, full screen, at singing size.
     @State private var showKaraoke = false
@@ -65,13 +54,7 @@ public struct NowPlayingView: View {
     /// How far the player has been pulled down towards dismissal (iOS).
     @State private var dismissOffset: CGFloat = 0
 
-    /// The song being fetched right now, if any.
-    ///
-    /// Mirrored into local state rather than read off `deps` in `body`: nothing
-    /// here holds the coordinator, so nothing here would hear it change. The
-    /// mini player has had this readout for a while (`TrackPreparingBar`), but
-    /// that bar is a sibling of this sheet — from in here, a skip to a song that
-    /// wasn't downloaded yet looked like the app had simply stopped.
+    /// The song being fetched, if any. Mirrored into state since nothing here observes the coordinator.
     @State private var preparing: OnlinePlaybackCoordinator.PreparingTrack?
 
     public var body: some View {
@@ -79,8 +62,7 @@ public struct NowPlayingView: View {
             ambientBackground
             content
                 #if os(iOS)
-                // `.gesture` so the seek bar's and artwork's own drags win where
-                // they are; the artwork forwards its vertical drags below.
+                // `.gesture` so the seek bar and artwork drags win; artwork forwards vertical drags.
                 .contentShape(Rectangle())
                 .gesture(DragGesture(minimumDistance: 20)
                     .onChanged(trackDismissDrag)
@@ -88,8 +70,7 @@ public struct NowPlayingView: View {
                 #endif
         }
         .offset(y: dismissOffset)
-        // The wash is clamped dark for white type, so the player is dark in
-        // either appearance. Applied before the sheets so they keep the app's.
+        // The wash is clamped dark, so the player is always dark. Applied before the sheets so they keep the app's scheme.
         .environment(\.colorScheme, .dark)
         // React to track changes: refresh ambient colours + lyrics.
         .onChange(of: queueService.currentTrack?.id) { _, _ in
@@ -115,6 +96,12 @@ public struct NowPlayingView: View {
                 LyricsEditorSheet(track: track)
             }
         }
+        .sheet(isPresented: $showLyricCard) {
+            if let track = queueService.currentTrack, let lyrics, lyrics.hasAny {
+                LyricCardSheet(track: track, lyrics: lyrics)
+                    .environmentObject(deps)
+            }
+        }
         .sheet(isPresented: $showGetInfo) {
             if let track = queueService.currentTrack {
                 GetInfoSheet(
@@ -123,14 +110,27 @@ public struct NowPlayingView: View {
                 )
             }
         }
+        .sheet(item: $editTrack) { track in
+            SongEditorSheet(track: track, onOpenPost: { code in
+                #if os(iOS)
+                iosAppState.openPost(code: code)
+                #endif
+            })
+            .environmentObject(deps)
+        }
+        .sheet(item: $postTrack) { track in
+            PostSheet(track: track, onOpen: { code in
+                #if os(iOS)
+                iosAppState.openPost(code: code)
+                #endif
+            })
+            .environmentObject(deps)
+        }
     }
 
     // MARK: - Ambient Background
 
-    /// Spotify's Canvas without the video: the cover, blurred into light across
-    /// the top of the screen, running down into its own colour and then into
-    /// the page. None of the catalogues behind the app carry looping video, so
-    /// the still is what there is to extend.
+    /// The cover blurred across the top, fading into its colour, then the page.
     private var ambientBackground: some View {
         GeometryReader { geo in
             ZStack(alignment: .top) {
@@ -160,14 +160,12 @@ public struct NowPlayingView: View {
                         .transition(.opacity)
                 }
 
-                // Keeps white type readable over a bright cover without
-                // greying the colour out of the middle.
+                // Keeps white type readable over a bright cover.
                 LinearGradient(colors: [.black.opacity(0.3), .clear, .black.opacity(0.3)],
                                startPoint: .top, endPoint: .bottom)
             }
-            // Flattened once: the seek bar ticks several times a second, and a
-            // live blur would be recomposited under every one of them.
-            .drawingGroup()
+            // Flattened once so the blur isn't recomposited on every seek tick.
+            .gpuRendered()
         }
         .ignoresSafeArea()
     }
@@ -178,9 +176,7 @@ public struct NowPlayingView: View {
         VStack(spacing: 0) {
             topBar
             Spacer(minLength: 16).frame(maxHeight: 40)
-            // One square for both, so opening the lyrics moves nothing below.
-            // Priority, or the spacers take their share first and the cover
-            // comes out a third of the width.
+            // One square for artwork and lyrics so toggling moves nothing. Priority keeps the spacers from shrinking it.
             Color.clear
                 .aspectRatio(1, contentMode: .fit)
                 .overlay {
@@ -190,9 +186,7 @@ public struct NowPlayingView: View {
             trackInfo
                 .padding(.top, 40)
                 .padding(.bottom, 18)
-            // The seek bar has nothing to say about a song that hasn't been
-            // fetched yet, so the wait takes its place rather than being drawn
-            // somewhere else on top of it.
+            // The fetch progress replaces the seek bar while waiting.
             if let preparing {
                 preparingStrip(preparing)
                     .frame(minHeight: 44)
@@ -203,8 +197,7 @@ public struct NowPlayingView: View {
             }
             controls
                 .padding(.top, 8)
-            // The only flexible gap: the player sits up under the top bar and
-            // the output/lyrics/share/queue row stays on the bottom edge.
+            // The only flexible gap.
             Spacer(minLength: 12)
             bottomRow
         }
@@ -215,9 +208,7 @@ public struct NowPlayingView: View {
 
     // MARK: - Preparing
 
-    /// What the seek bar becomes while the next song is being fetched: the same
-    /// progress the mini player's card shows, in the place the user is already
-    /// looking, with the way out that a modal sheet otherwise doesn't offer.
+    /// Shown instead of the seek bar while the next song is fetched, with a cancel.
     private func preparingStrip(_ preparing: OnlinePlaybackCoordinator.PreparingTrack) -> some View {
         VStack(spacing: 8) {
             PreparingProgressTrack(fraction: preparing.progress.fraction)
@@ -228,8 +219,7 @@ public struct NowPlayingView: View {
                     .foregroundStyle(Color.mixTextSecondary)
                     .lineLimit(1)
 
-                // Only when there is a real number behind it — a percentage the
-                // app made up sets a clock the work isn't running against.
+                // Only with real progress behind it.
                 if let fraction = preparing.progress.fraction {
                     Text("\(Int((fraction * 100).rounded()))%")
                         .font(.mixCaptionBold)
@@ -289,21 +279,12 @@ public struct NowPlayingView: View {
 
     private var optionsMenu: some View {
         Menu {
-            // The heart used to be a button beside the title; it's here now
-            // because saving is the thing you reach for while a song plays, and
-            // favouriting is the rarer follow-up. Only offered once the song is
-            // in the library — `toggleFavourite` won't act on anything else.
+            // Only for songs in the library; `toggleFavourite` won't act on anything else.
             if let track = queueService.currentTrack,
                deps.libraryService.track(id: track.id) != nil {
                 let favoured = deps.libraryService.isFavourited(trackID: track.id)
                 Button {
-                    // `deps.toggleFavourite` shows the card on the way in;
-                    // the way out gets a sentence instead, because "Removed"
-                    // on the same green check reads as the opposite of what
-                    // just happened.
-                    if !deps.toggleFavourite(trackID: track.id) {
-                        deps.showToast("Removed from Liked Songs")
-                    }
+                    deps.toggleFavourite(trackID: track.id)
                 } label: {
                     Label(favoured ? "Remove from Liked Songs" : "Add to Liked Songs",
                           systemImage: favoured ? "heart.slash" : "heart")
@@ -389,6 +370,21 @@ public struct NowPlayingView: View {
 
             Divider()
 
+            if let track = queueService.currentTrack, track.canEdit {
+                Button {
+                    editTrack = track
+                } label: {
+                    Label("Edit Song…", systemImage: "slider.horizontal.3")
+                }
+            }
+            if let track = queueService.currentTrack, track.edit != nil {
+                Button {
+                    postTrack = track
+                } label: {
+                    Label("Post…", systemImage: "paperplane")
+                }
+            }
+
             Button {
                 showGetInfo = true
             } label: {
@@ -440,7 +436,7 @@ public struct NowPlayingView: View {
                     #endif
                     guard abs(value.translation.width) > abs(value.translation.height) else { return }
                     if value.translation.width < -50 {
-                        // Swipe left → next.
+                        // Swipe left -> next.
                         withMixAnimation(.easeInOut(duration: 0.18)) { artworkSlide = -320 }
                         Task {
                             await engine.playNext()
@@ -448,7 +444,7 @@ public struct NowPlayingView: View {
                             withMixAnimation(.spring(response: 0.4, dampingFraction: 0.8)) { artworkSlide = 0 }
                         }
                     } else if value.translation.width > 50 {
-                        // Swipe right → previous.
+                        // Swipe right -> previous.
                         withMixAnimation(.easeInOut(duration: 0.18)) { artworkSlide = 320 }
                         Task {
                             await engine.playPrevious()
@@ -489,9 +485,7 @@ public struct NowPlayingView: View {
                     engine.seek(to: time)
                 }
                 #if os(iOS)
-                // Only offered for synced lyrics: without timings there is
-                // nothing to sing *along* to, and this panel is already the
-                // right home for a static block of text.
+                // Synced lyrics only.
                 Button {
                     Haptics.play(.light)
                     showKaraoke = true
@@ -524,9 +518,7 @@ public struct NowPlayingView: View {
                     Text("No lyrics found")
                         .font(.mixBody)
                         .foregroundStyle(Color.mixTextSecondary)
-                    // Four sources came back empty; the user is the fifth.
-                    // A dead end is the wrong thing to leave here when the
-                    // fix is a box of text away.
+                    // All sources came back empty, so offer to add lyrics by hand.
                     if queueService.currentTrack != nil {
                         lyricsEditorButton("Add Lyrics")
                     }
@@ -535,23 +527,28 @@ public struct NowPlayingView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // Lyrics that *were* found are still worth being able to correct — a
-        // mismatched LRCLIB hit is as useless as no hit at all — so the way in
-        // stays available in every state, just quietly, out of the way of the
-        // words themselves.
+        // Found lyrics can be wrong too, so the edit button stays available.
         .overlay(alignment: .topTrailing) {
             if queueService.currentTrack != nil, lyrics?.hasAny == true {
-                lyricsEditorButton(lyrics?.isUserProvided == true ? "Edit" : "Fix", compact: true)
-                    .padding(.top, 2)
+                HStack(spacing: 6) {
+                    lyricsPill("Share", icon: MixtapeIcons.share) { showLyricCard = true }
+                    lyricsEditorButton(lyrics?.isUserProvided == true ? "Edit" : "Fix", compact: true)
+                }
+                .padding(.top, 2)
             }
         }
     }
 
     /// The one control that opens the editor, in its two sizes.
     private func lyricsEditorButton(_ title: String, compact: Bool = false) -> some View {
-        Button { showLyricsEditor = true } label: {
+        lyricsPill(title, icon: "square.and.pencil", compact: compact) { showLyricsEditor = true }
+    }
+
+    private func lyricsPill(_ title: String, icon: String, compact: Bool = true,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
             HStack(spacing: 5) {
-                Image(systemName: "square.and.pencil")
+                Image(systemName: icon)
                     .font(.system(size: compact ? 10 : 12, weight: .semibold))
                 Text(title)
                     .font(.system(size: compact ? 11 : 13, weight: .medium))
@@ -570,14 +567,10 @@ public struct NowPlayingView: View {
     private var trackInfo: some View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                // Title — opens Get Info (unchanged).
                 Button {
                     showGetInfo = true
                 } label: {
-                    // A title too long for the sheet scrolls itself rather than
-                    // truncating. "Nothing Breaks Like a Heart (feat. …" names
-                    // a song about as well as a shrug does, and this is the one
-                    // screen with room to let the rest arrive.
+                    // Long titles scroll rather than truncate.
                     MarqueeText(text: displayTitle,
                                 font: .mixTitle.weight(.bold),
                                 color: .mixTextPrimary)
@@ -586,17 +579,15 @@ public struct NowPlayingView: View {
                 }
                 .buttonStyle(.plain).mixHandCursor()
 
-                // Artist — each parsed artist is its own tap target.
                 HStack(spacing: 6) {
                     if queueService.currentTrack?.isExplicit == true { MixExplicitBadge() }
+                    if queueService.currentTrack?.origin == .edit { MixEditBadge() }
                     artistLine
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             Spacer()
-            // In your library, or not. Favouriting moved to the ••• menu — it's
-            // a second, narrower decision, and it can't even be made until the
-            // song is saved.
+            // Library membership. Liking lives in the "..." menu.
             if let track = queueService.currentTrack {
                 NowPlayingSaveButton(trackID: track.id, size: 26)
             }
@@ -605,19 +596,13 @@ public struct NowPlayingView: View {
 
     // MARK: - Artist Line
 
-    /// The printed credit for the current song: the stored artist, plus any
-    /// feature its title names. A Discover song carries only its main artist —
-    /// see `ImportService.displayArtists`. The Get Info rows below deliberately
-    /// keep showing the stored field instead; that panel reports what the track
-    /// actually holds.
-    /// The title as printed. Kept beside `displayCredit` so both halves of the
-    /// line come from one place.
-    /// While a song is being fetched, the line names *that* song: it is the one
-    /// the user just asked for, and the queue won't catch up until it plays.
+    /// The title as printed. While a song is being fetched, names that song.
     private var displayTitle: String {
         ImportService.bareTitle(preparing?.title ?? queueService.currentTrack?.title ?? "—")
     }
 
+    /// The printed credit: stored artist plus features named in the title.
+    /// Get Info shows the stored field instead.
     private var displayCredit: [String] {
         if let preparing {
             return ImportService.displayArtists(title: preparing.title,
@@ -627,18 +612,12 @@ public struct NowPlayingView: View {
         return ImportService.displayArtists(title: track.title, artistName: track.artistName)
     }
 
-    /// The artist line beneath the title. On iOS each parsed artist is an
-    /// individual tap target that dismisses the sheet and opens the right
-    /// profile; elsewhere it's plain text. A single artist looks identical to
-    /// the previous lone label.
-    ///
-    /// Long credits scroll here too, and on iOS the whole row is measured and
-    /// moved as one — each name keeps its own tap target, but the line travels
-    /// together instead of every name deciding separately whether it fits.
+    /// The artist line. Each parsed artist is a tap target on iOS, plain text
+    /// elsewhere. Long credits scroll as one row.
     @ViewBuilder
     private var artistLine: some View {
         #if os(iOS)
-        // Same slower walk as the collapsed bar's credit — see `MiniPlayerBar`.
+        // Same slow scroll as the mini player's credit.
         MarqueeScroller(identity: displayCredit.joined(separator: ", "), speed: 15) {
             TappableArtistRow(targets: artistTargets, font: .mixBody, color: .mixTextSecondary)
         }
@@ -652,12 +631,8 @@ public struct NowPlayingView: View {
     }
 
     #if os(iOS)
-    /// One tap target per individual artist. Tapping dismisses the now-playing
-    /// sheet, then opens that name's Discover artist page — every name in the
-    /// line lands on the same kind of page, rather than the main artist opening
-    /// the library and the features opening Discover (mirrors the mini player
-    /// and macOS). The Get Info sheet further down still prefers a local artist
-    /// page: that one is showing stored metadata, not the printed credit.
+    /// One tap target per artist, each dismissing the sheet and opening its
+    /// Discover page, like the mini player and macOS.
     private var artistTargets: [(name: String, action: (() -> Void)?)] {
         guard queueService.currentTrack != nil else { return [("", nil)] }
         return displayCredit.map { name in
@@ -682,21 +657,17 @@ public struct NowPlayingView: View {
     private var bottomRow: some View {
         HStack(spacing: 0) {
             #if os(iOS)
-            // One control, not two: the glyph alone on the built-in speaker,
-            // the remote device's or the external output's name when either has
-            // the sound. Either way it opens the picker.
+            // One control: the glyph on the built-in speaker, otherwise the output's name. Opens the picker.
             DevicesButton(continuity: deps.continuity,
                           downloads: deps.downloadManager, size: 20, showsName: true)
             #endif
 
             Spacer(minLength: 8)
 
-            // Lyrics — primary, on-screen access (not buried in •••).
             NPButton(icon: "quote.bubble", label: "Lyrics",
                      isActive: showLyrics || karaokeIsShowing, size: 20) {
                 #if os(iOS)
-                // Synced lyrics go straight to karaoke: it is the same lines at
-                // a size worth reading, and the panel only ever had them small.
+                // Synced lyrics go straight to karaoke.
                 if lyrics?.hasSynced == true {
                     showKaraoke = true
                     return
@@ -716,6 +687,12 @@ public struct NowPlayingView: View {
                 .accessibilityLabel("Share")
             }
 
+            if let track = queueService.currentTrack, track.canEdit {
+                NPButton(icon: "slider.horizontal.3", label: "Edit Song", size: 20) {
+                    editTrack = track
+                }
+            }
+
             NPButton(icon: MixtapeIcons.queue, label: "Queue", size: 20) {
                 showUpNext = true
             }
@@ -725,9 +702,7 @@ public struct NowPlayingView: View {
     // MARK: - Playback Controls
 
     private var controls: some View {
-        // spacing: 0 + flexible Spacers — the spacing must NOT be added on top of
-        // the Spacers or the row's minimum width exceeds the screen and shoves the
-        // whole layout off-edge. The Spacers spread the cluster evenly to fill.
+        // spacing: 0 with flexible Spacers. Spacing on top of the Spacers pushes the row off-screen.
         HStack(spacing: 0) {
             NPButton(icon: MixtapeIcons.shuffle, label: "Shuffle",
                      isActive: queueService.shuffleEnabled, size: 22) {
@@ -742,7 +717,6 @@ public struct NowPlayingView: View {
 
             Spacer(minLength: 8)
 
-            // Play / Pause — white disc, dark glyph.
             Button {
                 engine.togglePlayPause()
             } label: {
@@ -791,17 +765,12 @@ public struct NowPlayingView: View {
             return wash.isEmpty ? ArtworkColors.brandGradient : wash
         }
 
-        // Lyrics. Whatever is cached is already on screen — `lyrics` reads the
-        // service directly — so this only decides whether to go and fetch, and
-        // whether to show a spinner while that happens.
+        // Cached lyrics are already on screen; this only decides whether to fetch and show a spinner.
         guard let track = queueService.currentTrack else {
             isLoadingLyrics = false
             return
         }
-        // A plain-only (or missing) result still falls through to resolve() so
-        // we keep trying to upgrade to interactive synced lyrics rather than
-        // getting stuck on a plain block. The user's own lyrics are exempt:
-        // there is nothing to upgrade them to.
+        // Plain or missing results still try to upgrade to synced. The user's own lyrics are exempt.
         let cached = lyricsService.cached(for: track)
         if let cached, cached.hasSynced || cached.isUserProvided {
             isLoadingLyrics = false
@@ -811,9 +780,7 @@ public struct NowPlayingView: View {
         isLoadingLyrics = (cached == nil)
         Task {
             await lyricsService.resolve(for: track)
-            // No need to check the track hasn't changed underneath us: the
-            // result went into the cache keyed by *its own* track, and `lyrics`
-            // reads the cache for whatever is playing now.
+            // The result is cached under its own track, so a track change underneath is harmless.
             isLoadingLyrics = false
         }
     }
@@ -830,36 +797,26 @@ public struct NowPlayingView: View {
 
 // MARK: - Seek Bar
 
-/// The slider and its two time labels.
-///
-/// Split out of `NowPlayingView` so the tick that moves the knob stops here.
-/// The screen around it — ambient background, artwork, transport, the whole
-/// bottom row — used to re-evaluate five times a second because the scrub
-/// value lived up there as `@State` kept in sync by `.onChange(of:
-/// engine.currentTime)`. See `PlaybackClock`.
-///
-/// The drag state lives here too, and nothing outside needs to know about it:
-/// `seek(to:)` writes the position through immediately, so letting go of the
-/// knob and reading the clock back agree without anyone holding a copy.
+/// The slider and time labels, split out so clock ticks only redraw this.
+/// See `PlaybackClock`. `seek(to:)` writes through, so drag state stays local.
 struct NowPlayingSeekBar: View {
 
     @ObservedObject var clock: PlaybackClock
+    @EnvironmentObject private var engine: PlaybackEngine
     let duration: TimeInterval
     let onSeek: (TimeInterval) -> Void
 
     @State private var isScrubbing = false
     @State private var scrubValue: Double = 0
 
-    /// What the labels and the knob should show: the drag while there is one,
-    /// the clock otherwise.
+    /// The drag while scrubbing, the clock otherwise.
     private var shown: Double { isScrubbing ? scrubValue : clock.currentTime }
 
     private var fraction: Double {
         duration > 0 ? min(max(shown / duration, 0), 1) : 0
     }
 
-    /// Thin white track and a small knob that grows while held — the system
-    /// slider's thumb is a glass capsule twice the height of the bar.
+    /// Thin track and a small knob that grows while held.
     var body: some View {
         VStack(spacing: -8) {
             GeometryReader { geo in
@@ -870,6 +827,10 @@ struct NowPlayingSeekBar: View {
                         .frame(width: geo.size.width * fraction)
                 }
                 .frame(height: isScrubbing ? 6 : 4)
+                .overlay {
+                    CommentDots(queue: engine.queue, duration: duration, color: .mixPrimary)
+                        .allowsHitTesting(false)
+                }
                 .overlay(alignment: .leading) {
                     Circle()
                         .fill(Color.white)
@@ -924,24 +885,17 @@ struct NowPlayingSeekBar: View {
 
 // MARK: - Synced Lyrics View
 
-/// Auto-scrolling synced lyrics with the active line highlighted.
-///
-/// Two sizes from one view: the panel inside Now Playing, and the karaoke
-/// screen, which is the same lyrics drawn big enough to read from across a
-/// room. Only the type scale and the colours differ, so they are parameters
-/// rather than a second copy of the sweep-and-autoscroll logic.
+/// Auto-scrolling synced lyrics with the active line highlighted. Used by the
+/// Now Playing panel and karaoke; only type and colours differ.
 struct SyncedLyricsView: View {
     let lines: [LyricLine]
-    /// Observed rather than handed down as a number: the highlight has to move
-    /// on every tick, and this is where that redraw should stop. See
-    /// `PlaybackClock`.
+    /// Observed directly so clock ticks redraw only this. See `PlaybackClock`.
     @ObservedObject var clock: PlaybackClock
     /// Stops the per-frame sweep redrawing a line that isn't moving.
     let isPlaying: Bool
     let onTapLine: (TimeInterval) -> Void
 
-    /// Karaoke draws in white over the album wash and leans on weight for the
-    /// sung/unsung split; the panel sits on the app's own surface.
+    /// Karaoke draws white over the wash; the panel sits on the app surface.
     var lineFont: Font = .mixBody
     var activeFont: Font = .mixBody.weight(.bold)
     var sung: Color = .mixTextPrimary
@@ -950,20 +904,14 @@ struct SyncedLyricsView: View {
     var lineSpacing: CGFloat = 14
     /// Per-song timing correction, in seconds: positive holds the lyrics back.
     var offset: TimeInterval = 0
-    /// Side inset *inside* the scroll view rather than around it. The active
-    /// line swells and carries a glow, so a line drawn hard against the scroll
-    /// view's own bounds gets its first and last glyphs clipped.
+    /// Inset inside the scroll view so the active line's glow isn't clipped.
     var hPadding: CGFloat = 0
 
-    /// Index of the line whose timestamp is the latest <= the current position.
-    /// Per-word spans, so the active line can be swept rather than flipped on.
-    /// Held in state because this view's body re-runs on every clock tick, and
-    /// the spans only change when the lyrics do.
+    /// Per-word spans, cached in state since the body runs on every clock tick.
     @State private var words: [[LyricWord]] = []
 
     private var activeIndex: Int? {
-        // No lead — see `MacSyncedLyrics.activeIndex`. A line holds until the
-        // next one starts, so the last word of a line isn't cut short.
+        // No lead (see `MacSyncedLyrics.activeIndex`): a line holds until the next starts.
         let now = clock.interpolatedTime() - offset
         var idx: Int?
         for (i, line) in lines.enumerated() {
@@ -972,8 +920,7 @@ struct SyncedLyricsView: View {
         return idx
     }
 
-    /// See `MacSyncedLyrics.scrollTarget` — the dots hold the view while an
-    /// instrumental plays.
+    /// See `MacSyncedLyrics.scrollTarget`: the dots hold the view during instrumentals.
     private var scrollTarget: String? {
         let next = (activeIndex ?? -1) + 1
         if next < lines.count,
@@ -990,10 +937,7 @@ struct SyncedLyricsView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: lineSpacing) {
                     ForEach(Array(lines.enumerated()), id: \.element.id) { i, line in
-                        // Only present while it's actually playing (plus a beat of lead-in
-                        // so the entry animation has somewhere to start). Outside that the
-                        // row doesn't exist at all — three dim dots parked mid-song read as
-                        // a stray bullet list.
+                        // Only while the gap is playing, plus a short lead-in for the animation.
                         if let gap = LyricSync.instrumentalGap(before: i, lines: lines, words: words),
                            clock.currentTime - offset >= gap.start - 0.2,
                            clock.currentTime - offset < gap.end {
@@ -1009,8 +953,7 @@ struct SyncedLyricsView: View {
                         let isActive = (i == activeIndex)
                         Group {
                             if isActive, i < words.count, !words[i].isEmpty {
-                                // Only the line being sung is drawn word by
-                                // word — it's the only one whose fill moves.
+                                // Only the active line sweeps word by word.
                                 TimelineView(.animation(paused: !isPlaying)) { _ in
                                     WordSweepLine(
                                         words: words[i],
@@ -1049,9 +992,7 @@ struct SyncedLyricsView: View {
     }
 }
 
-/// Per-song lyric timing corrections. A dictionary in `UserDefaults`, keyed the
-/// same way as the user's own lyrics — small enough that a store of its own
-/// would be more machinery than data.
+/// Per-song lyric timing offsets in `UserDefaults`, keyed like the user's own lyrics.
 enum LyricsOffsets {
     private static let key = "lyricsOffsets"
 
@@ -1069,20 +1010,13 @@ enum LyricsOffsets {
 
 // MARK: - Queue Sheet
 
-/// Spotify's queue, adapted: what's playing, then each lane under its own
-/// heading, then shuffle / repeat / timer as tiles along the bottom.
-///
-/// Reorder is always on (the handles are the list's own); removing is behind
-/// Edit, so the red minuses only show when you've asked for them. Taps route
-/// through the coordinator's context during an online session, mirroring the
-/// macOS queue panel.
+/// The queue: now playing, each lane under a heading, then shuffle/repeat/timer
+/// tiles. Reorder is always on; delete needs Edit. Online taps route through the coordinator.
 private struct UpNextSheet: View {
     @EnvironmentObject private var engine: PlaybackEngine
     @EnvironmentObject private var library: LibraryService
     @EnvironmentObject private var deps:   AppDependencies
-    /// `engine.queue` is a plain `let` on the engine, so its changes don't
-    /// republish through it — shuffle and repeat have to be observed here or the
-    /// buttons only catch up on the next unrelated engine publish.
+    /// Observed directly: `engine.queue` doesn't republish through the engine.
     @EnvironmentObject private var queueService: QueueService
     #if os(iOS)
     @EnvironmentObject private var iosAppState: IOSAppState
@@ -1090,25 +1024,16 @@ private struct UpNextSheet: View {
 
     @State private var isEditing = false
 
-    /// Upcoming rows (after the current index). Rows rather than tracks: each
-    /// has its own identity, so a song queued twice is two rows the list can
-    /// tell apart — and its position, which is how it is played and moved.
+    /// Upcoming rows. Rows have their own identity, so a song queued twice is two rows.
     private var upcoming: [QueueService.Entry] { queueService.upcomingRows }
 
-    /// While repeat-all is on, the loop and its divider are how the queue reads
-    /// — "these songs repeat, those wait" — so the lane headings stand down
-    /// rather than being crossed with it.
+    /// With repeat-all on, the loop divider replaces the lane headings.
     private var isRepeatGrouping: Bool {
         queueService.repeatMode == .all && queueService.repeatBoundaryIndex != nil
     }
 
-    /// A row of the list: a song, or the heading that starts its lane ("Next in
-    /// queue", "Next up: <Playlist>", "Next up: recommended songs").
-    ///
-    /// Headings are rows in the same `ForEach` rather than `Section`s: a drag
-    /// has to move a song from any lane to any other, and `onMove` doesn't
-    /// cross section boundaries. Rows of their own (not drawn inside the first
-    /// song) so edit mode's handles line up with the song, not the heading.
+    /// A song row or a lane heading. Headings are rows in one `ForEach` so drags
+    /// can cross lanes (`onMove` can't cross sections).
     private enum QueueItem: Identifiable {
         case heading(String, QueueOrigin, id: String)
         case side(String, id: String)
@@ -1151,14 +1076,12 @@ private struct UpNextSheet: View {
             TapeDeckPicker(decks: deps.tapeDecks)
                 .padding(.horizontal, 20)
                 .padding(.bottom, 8)
-            // Over the list rather than in it: the notice has to survive the
-            // queue emptying, which is exactly what a run of skips does.
+            // Over the list so the notice survives the queue emptying.
             list.overlay(alignment: .bottom) { SkipNoticeBox() }
             tiles
         }
         #if os(iOS)
-        // Get Info from a row's menu. The app hosts it for every other menu,
-        // but can't present over the player this sheet sits on.
+        // Get Info from a row's menu. The app can't present it over this sheet's player.
         .sheet(item: $iosAppState.infoTrack) { track in
             GetInfoSheet(track: track,
                          isOnline: deps.onlineCoordinator.hasActiveOnlineSession,
@@ -1244,14 +1167,12 @@ private struct UpNextSheet: View {
         .scrollContentBackground(.hidden)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         #if os(iOS)
-        // Always in edit mode so the reorder handles are there to grab; with
-        // no delete action outside Edit, that is all edit mode draws.
+        // Always in edit mode for the reorder handles.
         .environment(\.editMode, .constant(.active))
         #endif
     }
 
-    /// Swipe/minus delete exists only while editing, so the list's own
-    /// edit mode draws just the reorder handles the rest of the time.
+    /// Delete only while editing.
     private var deleteAction: ((IndexSet) -> Void)? {
         isEditing ? { remove(at: $0) } : nil
     }
@@ -1262,13 +1183,11 @@ private struct UpNextSheet: View {
         .listRowInsets(EdgeInsets(top: 6, leading: 20, bottom: 6, trailing: 16))
         .listRowBackground(Color.clear)
         .listRowSeparator(.hidden)
-        // Drawn on the row rather than as a row of its own so the
-        // list stays one ForEach and dragging still works across it.
+        // On the row, not a separate row, so dragging still works across it.
         .overlay(alignment: .bottom) {
             if isRepeatBoundary(item) { repeatDivider }
         }
-        // The shared song menu, as on the Mac queue: liking is the point of it
-        // here — the one place you're guaranteed to be hearing the song.
+        // The shared song menu, as on the Mac queue.
         .contextMenu {
             LibrarySongMenu(targets: [item.track],
                             onPlay: { play(item) },
@@ -1373,8 +1292,7 @@ private struct UpNextSheet: View {
                         .lineLimit(1)
                 }
                 HStack(spacing: 4) {
-                    // The mark the app's own picks don't get: this row is here
-                    // because the user asked for it.
+                    // Marks songs the user queued.
                     if item.isManual {
                         Image(systemName: "text.badge.plus")
                             .font(.system(size: 9, weight: .semibold))
@@ -1485,7 +1403,7 @@ private struct UpNextSheet: View {
 
     // MARK: Repeat group
 
-    /// The last row of the loop — the divider is drawn beneath it.
+    /// The last row of the loop; the divider is drawn under it.
     private func isRepeatBoundary(_ row: QueueService.Entry) -> Bool {
         queueService.repeatBoundaryIndex == row.index
     }
@@ -1495,8 +1413,7 @@ private struct UpNextSheet: View {
         queueService.isAfterRepeatGroup(index: row.index)
     }
 
-    /// The line that answers "what exactly is repeating?" — everything above it.
-    /// Labelled, because an unexplained rule between two songs reads as trim.
+    /// Labelled divider under the repeating songs.
     private var repeatDivider: some View {
         HStack(spacing: 6) {
             Text(queueService.repeatDividerLabel)
@@ -1513,14 +1430,12 @@ private struct UpNextSheet: View {
 
     // MARK: Actions
 
-    /// Jump straight to a queued track. Online sessions resolve through the
-    /// coordinator (spinner + on-demand download); local queues play in place.
+    /// Plays a queued row. Online sessions go through the coordinator; local queues play in place.
     private func play(_ row: QueueService.Entry) {
         guard !isEditing else { return }
         Task {
             if await deps.onlineCoordinator.playQueueTrack(at: row.index, track: row.track) { return }
-            // By position, so tapping the second copy of a song plays that row
-            // rather than jumping back to the first.
+            // By position, so a second copy of a song plays that row.
             await engine.play(track: row.track, in: engine.queue.queue, startIndex: row.index,
                               source: engine.queue.source)
         }
@@ -1532,9 +1447,7 @@ private struct UpNextSheet: View {
         }
     }
 
-    /// Take rows out of the queue. Routed through the coordinator: during an
-    /// online session the queue is a mirror of the context, so removing rows
-    /// here alone would last until the next push.
+    /// Removes rows through the coordinator, since online the queue mirrors the context.
     private func remove(at offsets: IndexSet) {
         let items = items
         // Descending, so removing one row doesn't shift the ones still to go.
@@ -1549,18 +1462,14 @@ private struct UpNextSheet: View {
         guard let first = source.first, let fromIndex = items[first].entry?.index else { return }
         let toIndex = queueService.currentIndex + 1
             + items[..<destination].filter { $0.entry != nil }.count
-        // Through the coordinator, and with the same destination semantics: in an
-        // online session the queue is a mirror of the context, so a move applied
-        // to it alone would be undone by the next push — which is why reordering
-        // used to be switched off entirely during Discover playback.
+        // Through the coordinator: online the queue mirrors the context and the next push would undo a local move.
         deps.onlineCoordinator.moveInQueue(from: fromIndex, to: toIndex)
     }
 }
 
 // MARK: - Helper Views
 
-/// Icon button used inside the controls row. An active toggle turns the accent
-/// colour and gains a dot beneath, so its state isn't carried by colour alone.
+/// Controls-row button. Active toggles get the accent colour and a dot beneath.
 private struct NPButton: View {
     let icon: String
     let label: String
@@ -1591,26 +1500,16 @@ private struct NPButton: View {
 
 // MARK: - Get Info Sheet
 
-/// Metadata for the current track. Follows the *live* current track (so it
-/// stays correct across auto-advance instead of freezing on the song it was
-/// opened with) and mirrors the macOS inspector's richer content: artwork,
-/// individually tappable artists, and file details.
+/// Metadata for the current track: artwork, tappable artists, file details.
 struct GetInfoSheet: View {
-    /// Track the sheet was opened with — only a fallback when playback stops.
+    /// The track the sheet was opened with, used when playback stops.
     let track: Track
     let isOnline: Bool
-    /// Whether the sheet re-points itself at whatever is playing now.
-    ///
-    /// True from the player, where "this song" means the one you are listening
-    /// to and an auto-advance should carry the sheet with it. False from a row,
-    /// where "this song" is the row you asked about — following playback there
-    /// would answer a question about a different song than the one tapped.
+    /// Whether the sheet follows playback. True from the player, false from a row.
     var followsPlayback: Bool = true
     @EnvironmentObject private var engine: PlaybackEngine
     @EnvironmentObject private var deps:   AppDependencies
-    /// `engine.queue` is a plain `let` on the engine, so its changes don't
-    /// republish through it — shuffle and repeat have to be observed here or the
-    /// buttons only catch up on the next unrelated engine publish.
+    /// Observed directly: `engine.queue` doesn't republish through the engine.
     @EnvironmentObject private var queueService: QueueService
     #if os(iOS)
     @EnvironmentObject private var iosAppState: IOSAppState
@@ -1620,22 +1519,17 @@ struct GetInfoSheet: View {
     /// This song's own history. Loaded in `.task`, since ranking the artist reads the log.
     @State private var standing: SongStanding?
 
-    /// Always reflect the currently playing track; fall back to the opening
-    /// track when playback has stopped.
+    /// The playing track, or the opening track when playback has stopped.
     private var currentTrack: Track {
         followsPlayback ? (queueService.currentTrack ?? track) : track
     }
 
     var body: some View {
         let track = currentTrack
-        // This was an `.insetGrouped` List, which is the exact shape of an iOS
-        // Settings screen — grey field, floating white cards, a nav bar on top.
-        // It's a metadata panel, so it reads as one surface: the artwork, then
-        // the facts, separated by hairlines rather than by cards.
+        // One surface with hairlines, not an inset grouped list.
         MixSheet(title: "Song Info", size: .medium) {
             #if os(macOS)
-            // Side by side on the Mac: stacked, the artwork alone pushed the
-            // facts below the fold of a sheet that has the width to spare.
+            // Side by side on the Mac.
             HStack(alignment: .top, spacing: 20) {
                 artworkHeader(track)
                 details(track)
@@ -1701,8 +1595,7 @@ struct GetInfoSheet: View {
         }
     }
 
-    /// Rows on one surface, hairline-separated. `VStack(spacing: 0)` plus a
-    /// divider between every pair — no card per row, no card per section.
+    /// Rows on one surface, hairline-separated.
     private func infoGroup<C: View>(@ViewBuilder _ rows: () -> C) -> some View {
         VStack(spacing: 0) { rows() }
             .background(Color.mixSurface,
@@ -1728,8 +1621,7 @@ struct GetInfoSheet: View {
         .mixShadow(color: .black.opacity(0.28), radius: 12, y: 5)
     }
 
-    /// Artist row — on iOS each parsed artist is its own tap target that closes
-    /// the sheet and opens the matching profile (mirrors the Now Playing view).
+    /// Artist row. On iOS each artist is a tap target that closes the sheet and opens its profile.
     @ViewBuilder
     private func artistRow(_ track: Track) -> some View {
         #if os(iOS)
@@ -1754,8 +1646,7 @@ struct GetInfoSheet: View {
         #endif
     }
 
-    /// Format + size of the local copy, when one exists. Falls back to the
-    /// recorded import size when the file isn't on this device.
+    /// Format and size of the local copy, or the recorded import size if not on this device.
     private func fileInfo(_ track: Track) -> (format: String, size: String?)? {
         let resolved = deps.fileStorage.localURL(for: track)
         let ext = (resolved?.pathExtension
@@ -1771,8 +1662,7 @@ struct GetInfoSheet: View {
         return (ext.isEmpty ? "Audio" : ext, size)
     }
 
-    /// No rule between rows — the label/value contrast and the spacing already
-    /// separate them, and nine hairlines in a 300pt panel is a spreadsheet.
+    /// No dividers between rows; spacing separates them.
     private func row(_ label: String, _ value: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 16) {
             Text(label)

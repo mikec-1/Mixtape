@@ -1,8 +1,4 @@
-// Haptics.swift
-// Mixtape — Design System
-//
-// Thin cross-platform haptic feedback helper. No-ops on macOS. Respects a
-// user toggle persisted in UserDefaults ("haptics.enabled", default on).
+// Cross-platform haptics. No-op on macOS. Respects "haptics.enabled" (default on).
 
 import SwiftUI
 

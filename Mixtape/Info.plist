@@ -57,6 +57,13 @@
 		<string>tg</string>
 	</array>
 	<!-- "Save Image" on a share card, from the system activity sheet. -->
+	<!-- "Jams near you": hosts advertise their Jam on the local network. -->
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_mixtape-jam._tcp</string>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Mixtape looks for Jams on your network so you can join people nearby.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Mixtape saves share cards to your photo library.</string>
 	<key>UIFileSharingEnabled</key>

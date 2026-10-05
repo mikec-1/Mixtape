@@ -1,20 +1,15 @@
-// TrackRepository.swift
-// Mixtape — Data/Repositories
-
 import Foundation
 import SwiftData
 
 @MainActor
 public final class TrackRepository {
 
-    /// Never stored: the context belongs to whichever account's store is open
-    /// right now. See `ModelStore`.
+    /// Not stored: belongs to the open account's store. See `ModelStore`.
     private var context: ModelContext { ModelStore.shared.context }
 
     public init() {}
 
-    /// The store every repository shares — the handle a caller needs to open a
-    /// `RepositorySaveBatch` around a run of writes.
+    /// The shared context, for opening a `RepositorySaveBatch`.
     public var modelContext: ModelContext { context }
 
     // MARK: - Fetch
@@ -24,17 +19,9 @@ public final class TrackRepository {
             predicate: #Predicate { !$0.isSoftDeleted },
             sortBy: [SortDescriptor(\.title)]
         )
-        // Everything `toDomain` reads except the cover. Artwork is stored inline
-        // — a downsampled cover sits well under SwiftData's ~128 KB external
-        // storage threshold — so a plain fetch materialises the whole library's
-        // artwork up front, on the main thread, to publish an array that a
-        // screenful of rows draws twenty pictures from.
-        // `propertiesToFetch` is not "the properties I want" so much as "what to
-        // prefetch eagerly". Naming the full scalar list makes Core Data pull the
-        // whole row *including the artwork blob*; naming only the id leaves the
-        // blob alone and batch-faults the scalars on access. Measured on a
-        // 2088-track library: full list 490 MB at end of refresh, id only
-        // 218 MB — and the id-only fetch was also the faster of the two.
+        // Only the id. Naming more properties makes Core Data prefetch the whole row,
+        // artwork included; with just the id, scalars fault in on access and covers stay
+        // on disk. Far less memory and faster on a large library.
         descriptor.propertiesToFetch = [\.id]
         return try context.fetch(descriptor).map { $0.toDomain(includingArtwork: false) }
     }
@@ -46,25 +33,14 @@ public final class TrackRepository {
         return try context.fetch(descriptor).first?.toDomain()
     }
 
-    /// Every stored track among `ids`, keyed by id.
-    ///
-    /// One query instead of one per song. Saving a twenty-five-track mix asks
-    /// "do I already have this?" twenty-five times, and each of those was a
-    /// separate fetch against the whole table before this existed.
-    ///
-    /// Soft-deleted rows are included on purpose, unlike `fetchAll`: a caller
-    /// deciding whether it may write over an id needs to see the tombstone
-    /// sitting on it, not conclude the id is free.
+    /// Stored tracks among `ids`, keyed by id, in one query.
+    /// Includes soft-deleted rows, unlike `fetchAll`: a caller deciding whether it
+    /// may write an id needs to see the tombstone.
     public func fetch(ids: [UUID]) throws -> [UUID: Track] {
         try fetchEntities(ids: ids).mapValues { $0.toDomain() }
     }
 
-    /// The rows `fetchAll` hides.
-    ///
-    /// Only the deletion-repair path wants these. Everything else in the app is
-    /// right to treat a soft-deleted track as gone — but a tombstone that was
-    /// applied by mistake is invisible to every other query, so repairing it
-    /// needs a way to look at the dead.
+    /// Soft-deleted tracks, for the deletion-repair path only.
     public func fetchSoftDeleted() throws -> [Track] {
         let descriptor = FetchDescriptor<TrackEntity>(
             predicate: #Predicate { $0.isSoftDeleted }
@@ -92,11 +68,7 @@ public final class TrackRepository {
         try context.saveBatched()
     }
 
-    /// Upserts many tracks as a single transaction.
-    ///
-    /// `save(_:)` commits once per track, so writing a mix meant twenty-five
-    /// separate transactions for what is logically one change — and the user
-    /// waited through every one of them on the main actor.
+    /// Upserts many tracks in one transaction.
     public func save(_ tracks: [Track]) throws {
         guard !tracks.isEmpty else { return }
         let existing = try fetchEntities(ids: tracks.map(\.id))
@@ -126,11 +98,7 @@ public final class TrackRepository {
         try context.saveBatched()
     }
 
-    /// Soft-deletes a whole selection in one fetch. Per-id, deleting a large
-    /// import was thousands of predicate fetches on the main thread.
-    ///
-    /// Returns the ids that were actually found, so the caller doesn't have to
-    /// ask again which ones existed.
+    /// Soft-deletes a selection in one fetch. Returns the ids that were found.
     @discardableResult
     public func softDelete(ids: [UUID]) throws -> Set<UUID> {
         let found = try fetchEntities(ids: ids)
@@ -165,16 +133,13 @@ public final class TrackRepository {
     }
 }
 
-// MARK: - Entity ↔ Domain Mapping
+// MARK: - Entity <-> Domain Mapping
 
 extension TrackEntity {
 
 
-    /// Map SwiftData entity → domain struct.
-    /// `includingArtwork: false` is the bulk-fetch path. The cover was left out
-    /// of the fetch on purpose, and *reading* `artworkData` here would fault it
-    /// straight back in one row at a time — the slow thing, done slower. Views
-    /// ask `ArtworkProvider` for it instead.
+    /// Entity -> domain struct. `includingArtwork: false` is the bulk path: reading
+    /// `artworkData` would fault the cover in row by row. Views use `ArtworkProvider`.
     func toDomain(includingArtwork: Bool = true) -> Track {
         Track(
             id:           id,
@@ -209,12 +174,12 @@ extension TrackEntity {
                 origin:      resolvedOrigin,
                 sourceRef:   sourceRef
             ),
-            isDeleted: isSoftDeleted
+            isDeleted: isSoftDeleted,
+            edit: editData.flatMap { try? JSONDecoder().decode(SongEdit.self, from: $0) }
         )
     }
 
-    /// The stored origin, or what the row's shape says it must have been before
-    /// the field existed.
+    /// Stored origin, or inferred from the row for rows older than the field.
     var resolvedOrigin: TrackOrigin {
         if let raw = originRaw, let origin = TrackOrigin(rawValue: raw) { return origin }
         return FileProvenance.inferOrigin(
@@ -235,9 +200,7 @@ extension TrackEntity {
         discNumber   = track.discNumber
         year         = track.year
         genre        = track.genre
-        // A domain struct from the bulk fetch carries no cover — nil here
-        // means "wasn't loaded", never "delete it". Clearing artwork is done
-        // on the entity directly.
+        // Nil from a bulk-fetched struct means "not loaded", not "delete".
         if let art = track.artworkData { artworkData = art }
         artworkKey   = track.artworkKey
         composer     = track.composer
@@ -259,6 +222,8 @@ extension TrackEntity {
         fileDownloadedAt = track.file.downloadedAt
         originRaw        = track.file.origin.rawValue
         sourceRef        = track.file.sourceRef
+        // Nil keeps the stored recipe; a Track built without one shouldn't wipe it.
+        if let edit = track.edit { editData = try? JSONEncoder().encode(edit) }
     }
 }
 
@@ -296,5 +261,6 @@ extension TrackEntity {
             syncServerModifiedAt: track.sync.serverModifiedAt,
             syncLastSyncedAt:     track.sync.lastSyncedAt
         )
+        editData = track.edit.flatMap { try? JSONEncoder().encode($0) }
     }
 }

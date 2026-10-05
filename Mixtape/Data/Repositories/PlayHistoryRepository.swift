@@ -1,8 +1,4 @@
-// PlayHistoryRepository.swift
-// Mixtape — Data/Repositories
-//
-// Handles reads and writes for PlayHistoryEntity (persistent listen history).
-// Bounded by `historyLimit`, pruning the oldest records automatically.
+// Reads and writes play history, capped at `historyLimit`.
 
 import Foundation
 import SwiftData
@@ -10,16 +6,11 @@ import SwiftData
 @MainActor
 public final class PlayHistoryRepository {
 
-    /// Never stored: the context belongs to whichever account's store is open
-    /// right now. See `ModelStore`.
+    /// Not stored: belongs to the open account's store. See `ModelStore`.
     private var context: ModelContext { ModelStore.shared.context }
-    // Listening stats are only as good as the history behind them, so this is
-    // sized to outlive the user's interest in it: ~11 years at 50 plays a day.
-    // Still bounded — an unbounded table eventually costs a launch.
+    // About 11 years at 50 plays a day. Bounded so it can't slow launch forever.
     private let historyLimit = 200_000
-    // Pruning is the expensive half of `record`, so let the table drift this far
-    // past the cap before paying for it. Trades a little slack for one prune per
-    // ~1000 plays instead of one per play.
+    // Only prune once the table is this far over the cap, so it runs once per ~1000 plays.
     private let pruneSlack = 1_000
 
     public init() {}
@@ -35,13 +26,12 @@ public final class PlayHistoryRepository {
         return try context.fetch(desc).map(\.trackID)
     }
 
-    /// One lightweight play record — just what the stats aggregator needs.
+    /// One play, with just what the stats need.
     public struct PlayRecord: Sendable {
         public let trackID: UUID
         public let playedAt: Date
-        /// How long the listen actually lasted. Zero on rows written before the
-        /// engine started reporting it, and on plays the app never got to
-        /// finalise (quit mid-song) — callers should fall back to track duration.
+        /// Actual listen time. Zero on old rows and unfinalised plays (app quit
+        /// mid-song); fall back to the track duration.
         public let secondsPlayed: TimeInterval
         /// Where the play came from. See `QueueSource.historyRef`.
         public let sourceKind: String?
@@ -50,8 +40,7 @@ public final class PlayHistoryRepository {
         public let deviceID: String
     }
 
-    /// Returns every retained play event (newest first), for listening-stats
-    /// aggregation. Optionally restricts to plays at/after `since`.
+    /// Every retained play, newest first, optionally from `since` on.
     public func fetchAllPlays(since: Date? = nil) throws -> [PlayRecord] {
         var desc = FetchDescriptor<PlayHistoryEntity>(
             sortBy: [SortDescriptor(\.playedAt, order: .reverse)]
@@ -134,10 +123,8 @@ public final class PlayHistoryRepository {
 
     // MARK: - Mutate
 
-    /// Records a newly played track and prunes old entries beyond the history
-    /// limit. `secondsPlayed` is the listen so far — the threshold the engine
-    /// crossed to call this — and is corrected by `finaliseLatestPlay` once the
-    /// user leaves the track.
+    /// Records a play and prunes if needed. `secondsPlayed` is the threshold crossed;
+    /// `finaliseLatestPlay` corrects it when the track ends.
     public func record(trackID: UUID, deviceID: String, secondsPlayed: TimeInterval,
                        source: QueueSource = .none) throws {
         let ref = source.historyRef
@@ -156,12 +143,9 @@ public final class PlayHistoryRepository {
         try pruneIfNeeded()
     }
 
-    /// Writes the real listen time onto the most recent play of `trackID`.
-    ///
-    /// No play id is plumbed through the engine: it logs one row per listen and
-    /// finalises it before the next one starts, so "newest row for this track"
-    /// is unambiguously that row. Only ever grows the figure, so a replay that
-    /// races the flush can't shorten the listen it's correcting.
+    /// Writes the real listen time onto the newest play of `trackID`. The engine
+    /// finalises each play before the next starts, so that's the right row. Only
+    /// increases, so a racing replay can't shorten it.
     public func finaliseLatestPlay(trackID: UUID, secondsPlayed: TimeInterval) throws {
         var desc = FetchDescriptor<PlayHistoryEntity>(
             predicate: #Predicate { $0.trackID == trackID },
@@ -171,9 +155,8 @@ public final class PlayHistoryRepository {
         guard let entry = try context.fetch(desc).first,
               secondsPlayed > entry.secondsPlayed else { return }
         entry.secondsPlayed = secondsPlayed
-        // Back to pending so the next push re-upserts the corrected row. The
-        // pull only ever inserts, so this converges on the device that played
-        // it — the only one that knows how long the listen was.
+        // Back to pending so the next push sends the corrected row. Pulls only insert,
+        // so only the playing device updates it.
         if entry.syncStatus == SyncStatus.synced.rawValue {
             entry.syncStatus = SyncStatus.modified.rawValue
         }
@@ -181,9 +164,7 @@ public final class PlayHistoryRepository {
         try context.save()
     }
 
-    /// Drops the oldest rows once the table has drifted `pruneSlack` past the
-    /// cap. The count is cheap; the fetch-and-delete is not, which is why this
-    /// used to be the most expensive thing about playing a song.
+    /// Drops the oldest rows once the table is `pruneSlack` over the cap.
     private func pruneIfNeeded() throws {
         let count = try context.fetchCount(FetchDescriptor<PlayHistoryEntity>())
         guard count > historyLimit + pruneSlack else { return }

@@ -1,33 +1,9 @@
-// UserLyricsPage.swift
-// Mixtape — Features/Settings
-//
-// The songs whose lyrics the user wrote themselves.
-//
-// Storage used to report this as a number: "Your Lyrics — 3 songs", a size, and
-// a button that deleted all three. A count is the one thing nobody needs to be
-// told; anyone who typed those lyrics knows roughly how many they typed. What
-// they can't do from a count is go back to the one they got wrong — and lyrics
-// are typed in a hurry, from memory, against a song that's still playing, so
-// getting one wrong is the ordinary case rather than the rare one.
-//
-// So the row opens a list, and every song on it opens the same editor that
-// wrote it. That editor already offers Remove, which is why there is no delete
-// control on the rows themselves: the decision to throw away something you typed
-// should be made with the text in front of you, not from a list of titles.
-//
-// The awkward part is that the store can't name its own contents. Its filenames
-// are a one-way hash of title and artist (see `UserLyricsStore`), so the only
-// way to label these is to re-derive the key for every song in the library and
-// see which ones land on a file. Two consequences show up on this page:
-//
-//   · Normalisation folds "Song", "Song (Live)" and "Song (feat. X)" onto one
-//     key, so a single stored set can belong to several rows in the library.
-//     The row says so, because those rows all show the same lyrics and all lose
-//     them together.
-//
-//   · Delete the song and the lyrics stay behind, with nothing left to name
-//     them by. Those are listed at the end as a count and a delete, which is
-//     everything that can honestly be said about them.
+// The songs whose lyrics the user wrote. Each row opens the editor, which has Remove,
+// so there's no delete on the rows.
+// The store's filenames hash title|artist (see `UserLyricsStore`), so entries are found
+// by re-hashing the library. Normalisation folds "Song", "Song (Live)" and "Song (feat. X)"
+// onto one key, and the row says when a set covers several songs. Lyrics whose song was
+// deleted are listed at the end as a count and a delete.
 
 import SwiftUI
 
@@ -37,8 +13,7 @@ struct UserLyricsPage: View {
     @ObservedObject private var store = UserLyricsStore.shared
     let onBack: () -> Void
 
-    /// Built once on appear and after every change, rather than per body pass:
-    /// it hashes the whole library, and the body runs on hover.
+    /// Built on appear and after changes, not in body: it hashes the whole library.
     @State private var entries: [UserLyricsStore.Entry] = []
     @State private var editing: Track?
     @State private var confirmRemoveOrphans = false
@@ -77,8 +52,7 @@ struct UserLyricsPage: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color.mixBackground)
         .onAppear(perform: reload)
-        // The editor writes straight to the store, so the list is rebuilt on the
-        // way out — a set removed in there has to leave this page with it.
+        // The editor writes straight to the store, so rebuild on the way out.
         .sheet(item: $editing, onDismiss: reload) { track in
             LyricsEditorSheet(track: track)
                 .environmentObject(deps)
@@ -117,10 +91,7 @@ struct UserLyricsPage: View {
                 Text(subtitle)
                     .font(.mixSubtext)
                     .foregroundStyle(Color.mixTextSecondary)
-                    // Bounded for the same reason as the push page's: an
-                    // unbounded vertical `fixedSize` measured against the narrow
-                    // settings column locks in a minimum height taller than the
-                    // window. See `mixtape-fixedsize-splitview-balloon`.
+                    // Bounded, like the push page's. See `mixtape-fixedsize-splitview-balloon`.
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -141,13 +112,7 @@ struct UserLyricsPage: View {
 
     // MARK: Rows
 
-    /// A row is one thing: the song, and a way into what was written for it.
-    ///
-    /// No inline delete. `LyricsEditorSheet` already has a Remove button, and it
-    /// is one tap further into the same journey — with the text on screen, which
-    /// is where anyone should be standing when they decide to throw it away. A
-    /// second remove control here would only be quicker at the one thing that
-    /// can't be undone.
+    /// The song and a way into its lyrics. Removal happens in `LyricsEditorSheet`, with the text on screen.
     private func row(for entry: UserLyricsStore.Entry, track: Track) -> some View {
         SettingsButtonRow(title: track.title,
                           subtitle: rowSubtitle(for: entry, track: track),
@@ -158,16 +123,11 @@ struct UserLyricsPage: View {
         }
     }
 
-    /// Artist, when the lyrics were last saved, and — when one stored set covers
-    /// more than one row in the library — how many songs the minus above would
-    /// take them off. That last part is the whole reason it's spelled out: the
-    /// row names one song and quietly speaks for several.
+    /// Artist, last saved, and how many songs share this set when it's more than one.
     private func rowSubtitle(for entry: UserLyricsStore.Entry, track: Track) -> String {
         var parts = [track.artistName]
         if let modified = entry.modified {
-            // The same vocabulary as the Date added column, and no verb: on a
-            // page of lyrics the user typed, there is only one thing a date on
-            // the row could be the date of.
+            // Same wording as the Date added column.
             parts.append(AddedDateText.relative(modified))
         }
         if entry.tracks.count > 1 {
@@ -196,16 +156,11 @@ struct UserLyricsPage: View {
     // MARK: Loading
 
     private func reload() {
-        // Deleted rows are excluded on purpose — a tombstoned song is one the
-        // user has already thrown away, and naming a row after it would be an
-        // orphan wearing a title. Watched-folder songs are included: they never
-        // enter the library, but they play, so they can have lyrics.
+        // Deleted songs excluded. Watched-folder songs included: they play, so they can have lyrics.
         let songs = deps.libraryService.tracks.filter { !$0.isDeleted }
                   + deps.localFiles.tracks
         entries = store.entries(in: songs)
-        // Nothing left to list: the group in Storage disappears with it, so
-        // staying here would leave the user on a page about nothing, with a
-        // back button to a pane that no longer mentions it.
+        // Nothing left: go back, since the Storage row disappears too.
         if entries.isEmpty { onBack() }
     }
 }

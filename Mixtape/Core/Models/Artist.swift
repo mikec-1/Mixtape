@@ -1,8 +1,4 @@
-// Artist.swift
-// Mixtape — Core Domain Models
-//
-// Artist records are derived from track metadata — never fetched from the internet.
-// The bio is auto-generated from aggregated metadata (genres, years, album count).
+// Artists are derived from track metadata.
 
 import Foundation
 

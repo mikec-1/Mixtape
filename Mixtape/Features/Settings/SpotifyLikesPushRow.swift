@@ -1,28 +1,12 @@
-// SpotifyLikesPushRow.swift
-// Mixtape — Features/Settings
-//
-// The way in to the favourites-push page.
-//
-// This row used to do the whole job itself: a confirmation dialog, then a
-// silent run that liked every confident match. It was wrong in a way that only
-// showed up on the second run — with one favourite already saved on Spotify, it
-// still offered to "like 1 song", and liking it changed nothing. The work of
-// deciding what's actually missing belongs on a page that can show its working,
-// so this is now a door, and the page behind it does the checking.
-//
-// It stays additive, which is the promise worth keeping: unhearting something
-// here is not a request to unlike it on Spotify. The two lists have separate
-// histories and no shared record of who removed what.
+// The way into the likes-push page. Additive only: unliking here doesn't unlike on Spotify.
 
 import SwiftUI
 
 struct SpotifyLikesPushRow: View {
 
     @EnvironmentObject private var deps: AppDependencies
-    /// Observed for the connection itself. Note the favourite count below is
-    /// read through `deps`, which is a nested ObservableObject and does not
-    /// republish: a favourite added while this pane is open won't flip the row
-    /// until something else redraws it.
+    /// Observed for the connection. The liked count below comes through `deps`, which doesn't
+    /// republish, so it can lag until something else redraws.
     @ObservedObject var auth: SpotifyAuth
     let onOpen: () -> Void
 

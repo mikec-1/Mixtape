@@ -1,20 +1,6 @@
-// LyricsEditorSheet.swift
-// Mixtape — SharedUI/Components
-//
-// Where someone types, pastes or opens the lyrics for a song the lookup
-// couldn't find — or found wrong.
-//
-// One sheet for both platforms, because the task is identical on both: a box of
-// text and a file picker. `MixSheet` already handles the parts that genuinely
-// differ (footer placement, detents, the phone's close control), so nothing
-// here is `#if`-ed except the pasteboard, which has two different names.
-//
-// The live status line under the box is the point of the design. LRC is a
-// format with an invisible failure mode — one malformed timestamp and the file
-// silently degrades to a plain block of text — so the sheet parses what's in
-// the box as it's typed and says which of the two it is, and how many lines it
-// found. That answer is produced by the same `LyricsService.parse` the player
-// will use, so it can't disagree with what happens after Save.
+// Add or fix lyrics for a song. One sheet for both platforms; `MixSheet` handles
+// the differences. The status line parses as you type with `LyricsService.parse`
+// (same as the player) and says synced vs plain and the line count.
 
 import SwiftUI
 import UniformTypeIdentifiers
@@ -31,23 +17,15 @@ struct LyricsEditorSheet: View {
     @State private var showFilePicker = false
     @State private var fileError: String?
 
-    /// `.lrc` isn't a registered system type, so it's declared by extension.
-    /// The plain-text types stay alongside it: plenty of lyrics arrive as a
-    /// .txt, and a picker that greys those out would be lying about what the
-    /// box below accepts.
+    /// `.lrc` isn't a system type, so declare it. Plain text is accepted too.
     private var allowedTypes: [UTType] {
         [UTType(filenameExtension: "lrc"), .plainText, .text, .utf8PlainText].compactMap { $0 }
     }
 
-    /// What `text` parses to, recomputed when it changes rather than when the
-    /// body runs. The status line reads it twice per pass and the body runs on
-    /// every keystroke, so as a computed property this parsed the whole lyric
-    /// two or three times per character typed.
+    /// Parsed on change, not in body, which runs per keystroke.
     @State private var parsed: TrackLyrics = .empty
 
-    /// Whether this song already had lyrics stored when the sheet opened.
-    /// Cached for the same reason: it's a directory listing, and the title, the
-    /// Save button and the Remove button each asked for it per body pass.
+    /// Cached since it's a directory listing read several times per pass.
     @State private var hadStored = false
 
     private var hasText: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -60,10 +38,7 @@ struct LyricsEditorSheet: View {
                  primary: MixSheetAction("Save", isEnabled: hasText || hadStored) { save() }) {
             content
         }
-        // The editor opens onto whatever is already stored. Deliberately only
-        // the user's own text: pre-filling from a lookup would turn "add the
-        // lyrics this song is missing" into "confirm the ones we guessed", and
-        // saving that would pin a guess in place permanently.
+        // Pre-fill only the user's stored text, never a lookup result.
         .task {
             guard !loaded else { return }
             text = lyricsService.userLyricsText(for: track) ?? ""
@@ -102,8 +77,7 @@ struct LyricsEditorSheet: View {
 
             Spacer(minLength: 0)
 
-            // Only offered once there is something stored to remove — before
-            // that it would be a button that undoes nothing.
+            // Only once something is stored.
             if hadStored {
                 smallButton("Remove", icon: "trash", isDestructive: true) {
                     lyricsService.removeUserLyrics(for: track)
@@ -116,14 +90,8 @@ struct LyricsEditorSheet: View {
     /// Padding applied to the `TextEditor` itself.
     private static let editorPadding: CGFloat = 6
 
-    /// What the text view insets its own text by, on top of `editorPadding`.
-    ///
-    /// The placeholder is a plain `Text` sitting behind the editor, so it only
-    /// lines up with the caret if it's inset by *both* numbers. Hand-picked
-    /// values (the 12/10 this started with) can't line up — they're guessing at
-    /// a platform constant. These are that constant: AppKit's line-fragment
-    /// padding, and on UIKit the same plus `UITextView`'s vertical
-    /// `textContainerInset`.
+    /// The text view's own inset (AppKit line-fragment padding; UIKit adds
+    /// `textContainerInset`). The placeholder needs both to line up with the caret.
     #if os(macOS)
     private static let textInset = CGSize(width: 5, height: 0)
     #else
@@ -147,22 +115,17 @@ struct LyricsEditorSheet: View {
                 .scrollContentBackground(.hidden)
                 .padding(Self.editorPadding)
         }
-        // Takes the sheet's remaining height. Bounded, because `MixSheet`
-        // bounds itself on both platforms — an unbounded greedy editor here is
-        // what grew the playlist sheet to the size of a screen.
+        // Bounded, or the editor grows the sheet to screen size.
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.mixSurface2, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
-    /// Monospaced once the text carries timestamps, so `[00:12.40]` columns
-    /// line up down the left edge the way an .lrc is meant to read.
+    /// Monospaced once there are timestamps.
     private var editorFont: Font {
         .system(size: MixFontScale.size(13), design: text.contains("[") ? .monospaced : .default)
     }
 
-    /// The placeholder shows only when `text` is empty, which is exactly when
-    /// `editorFont` is the default design — but deriving it keeps the two from
-    /// drifting apart if either changes.
+    /// Kept separate from `editorFont` in case either changes.
     private var placeholderFont: Font { .system(size: MixFontScale.size(13)) }
 
     /// What Save is about to produce, in the words the player uses.
@@ -206,15 +169,11 @@ struct LyricsEditorSheet: View {
         fileError = nil
         guard case .success(let url) = result else { return }
 
-        // The picker hands back a security-scoped URL on both platforms; a read
-        // without the claim silently fails on a sandboxed build.
+        // Security-scoped on both platforms; reads fail without it when sandboxed.
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
 
-        // Lyrics files in the wild are frequently not UTF-8 — a lot of the .lrc
-        // corpus is Windows-1252 or Shift-JIS. Falling back beats refusing the
-        // file, and a mangled accent the user can fix in the box beats an
-        // error they can't act on.
+        // Many .lrc files aren't UTF-8, so fall back to other encodings.
         guard let data = try? Data(contentsOf: url) else {
             fileError = "Couldn't read that file."
             return

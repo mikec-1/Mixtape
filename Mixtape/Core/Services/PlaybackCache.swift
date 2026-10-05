@@ -1,24 +1,6 @@
-// PlaybackCache.swift
-// Mixtape — Core/Services
-//
-// One cache for every byte of audio that can be fetched again.
-//
-// There used to be two, and the split was invisible to the person paying for it:
-// `Library/Caches/Music` held songs pulled down from Supabase, and
-// `Library/Caches/OnlineCache` held Discover audio, each with its own size, its
-// own budget, and its own row in Settings. On the Mac that authored the library
-// the first one never filled — nothing is ever downloaded from the server there
-// — so "Playback Cache" read 0 MB forever while the disk quietly filled up under
-// the other name.
-//
-// They are the same kind of thing: a copy we keep so the song starts faster next
-// time, and can throw away without losing anything. So they're one directory,
-// one budget the user can set, and one number.
-//
-// What this is *not*: the offline store (`OfflineStore` — deliberate downloads,
-// never evicted) or the imports directory (`AudioPaths.importsDirectory` — the
-// user's own files, often the only copy in existence). Nothing in here is ever
-// the last copy of anything.
+// One cache for all re-fetchable audio: Supabase downloads and Discover
+// audio share one directory and one user-set budget. Not the offline store
+// (never evicted) or imports (possibly the only copy).
 
 import Foundation
 import CryptoKit
@@ -28,29 +10,22 @@ public enum PlaybackCache {
 
     // MARK: - Location
 
-    /// `Library/Caches/Music`. Purgeable by the OS, excluded from backup, and
-    /// shared by both kinds of cached audio.
+    /// `Library/Caches/Music`: purgeable, not backed up.
     nonisolated public static var directory: URL {
         let dir = AudioPaths.cacheDirectory
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
 
-    /// Where Discover audio used to live. Read on the way in and swept by
-    /// `migrateLegacyOnlineCache()`; never written to again.
+    /// Old Discover cache. Swept by `migrateLegacyOnlineCache()`, never written.
     nonisolated public static var legacyOnlineCacheDirectory: URL {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("OnlineCache", isDirectory: true)
     }
 
-    /// Where a resolver writes while it's still downloading.
-    ///
-    /// Downloads land here first and are moved into the cache only once they're
-    /// complete, because the two are told apart by name and nothing else: a
-    /// half-written file sitting at the name `fileURL(forSourceRef:)` probes is
-    /// indistinguishable from a finished one, and playing it is the "song cuts
-    /// off after twenty seconds" bug. It also keeps a cancelled download from
-    /// counting against the budget.
+    /// Downloads land here and move into the cache when complete, so a
+    /// half-written file is never found at its cache name. Cancelled downloads don't
+    /// count against the budget.
     public static var stagingDirectory: URL {
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("MusicStaging", isDirectory: true)
@@ -60,17 +35,15 @@ public enum PlaybackCache {
 
     // MARK: - Naming
 
-    /// Cache filenames for online audio are derived from the resolver key, so a
-    /// lookup is a `fileExists` and never needs an index to be correct. The
-    /// index that does exist (which video we picked for a song) is an
-    /// optimisation on top, and losing it costs a search, not a file.
+    /// Online cache names derive from the resolver key, so lookup is a
+    /// `fileExists`. The coordinator's index is only an optimisation.
     private static func stem(forSourceRef ref: String) -> String {
         let digest = SHA256.hash(data: Data(ref.utf8))
         return "online-" + digest.prefix(16).map { String(format: "%02x", $0) }.joined()
     }
 
     /// Extensions worth probing when we know the stem but not the container.
-    nonisolated private static let knownExtensions = ["m4a", "mp3", "opus", "webm", "aac", "flac", "wav"]
+    nonisolated private static let knownExtensions = ["m4a", "mp3", "opus", "webm", "aac", "flac", "wav", "aiff", "aif", "ogg", "m4b"]
 
     // MARK: - Lookup
 
@@ -102,9 +75,8 @@ public enum PlaybackCache {
         return nil
     }
 
-    /// Files written by the old Discover cache are named for the video id, not
-    /// the song, so they can only be found through the coordinator's index.
-    /// Registered at launch rather than looked up per call.
+    /// Old Discover files are named by video id and only found via the
+    /// coordinator's index. Registered at launch.
     private static var legacyIndex: [String: URL] = [:]
 
     static func registerLegacyFile(_ url: URL, forSourceRef ref: String) {
@@ -119,8 +91,7 @@ public enum PlaybackCache {
 
     // MARK: - Writing
 
-    /// Files the budget must not evict — the song playing now and whatever is
-    /// queued next. Maintained by the coordinator as playback moves.
+    /// Never evicted: the playing song and what's queued next. Kept by the coordinator.
     public static var pinnedURLs: Set<URL> = []
 
     /// Moves a freshly fetched file into the cache and returns where it landed.
@@ -137,8 +108,7 @@ public enum PlaybackCache {
         return destination
     }
 
-    /// Forgets one song's cached audio, so the next play resolves it fresh.
-    /// Returns true when a file was actually removed.
+    /// Removes one song's cached audio so it resolves fresh. True if a file was removed.
     @discardableResult
     public static func remove(forSourceRef ref: String) -> Bool {
         guard let url = fileURL(forSourceRef: ref) else { return false }
@@ -153,8 +123,7 @@ public enum PlaybackCache {
         return (try? FileManager.default.removeItem(at: url)) != nil
     }
 
-    /// Records a file as just-used, so the budget evicts genuinely cold entries
-    /// rather than whichever one happened to be written first.
+    /// Marks a file as recently used for LRU eviction.
     public static func touch(_ url: URL) {
         var values = URLResourceValues()
         values.contentAccessDate = Date()
@@ -166,8 +135,7 @@ public enum PlaybackCache {
 
     nonisolated static let budgetKey = "mix.playbackCacheBudgetBytes"
 
-    /// How large the cache is allowed to get. User-set; the slider in Settings
-    /// writes this.
+    /// User-set cache size limit (Settings slider).
     nonisolated public static var budgetBytes: Int64 {
         get {
             let stored = UserDefaults.standard.object(forKey: budgetKey) as? NSNumber
@@ -182,8 +150,7 @@ public enum PlaybackCache {
     nonisolated public static let minimumBudgetBytes: Int64 = 256 * 1_024 * 1_024         // 256 MB
     public static let maximumBudgetBytes: Int64 = 50 * 1_024 * 1_024 * 1_024  // 50 GB
 
-    /// Total bytes currently cached, across both the current directory and the
-    /// legacy Discover folder that hasn't been swept yet.
+    /// Total bytes cached, including the unswept legacy folder.
     nonisolated public static var totalBytes: Int64 {
         [directory, legacyOnlineCacheDirectory].reduce(0) { $0 + size(of: $1) }
     }
@@ -195,10 +162,7 @@ public enum PlaybackCache {
         }
     }
 
-    /// The audio in a directory, and only the audio. The index the coordinator
-    /// keeps alongside these files is bookkeeping, not cached music: counting it
-    /// would inflate the number in Settings and evicting it would lose the map
-    /// of which upload each song resolved to.
+    /// Audio files only; the coordinator's index isn't counted or evicted.
     nonisolated private static func audioFiles(in dir: URL) -> [URL] {
         let fm = FileManager.default
         guard let items = try? fm.contentsOfDirectory(
@@ -209,14 +173,10 @@ public enum PlaybackCache {
         return items.filter { knownExtensions.contains($0.pathExtension.lowercased()) }
     }
 
-    /// Evicts the coldest files until the cache fits its budget.
-    ///
-    /// Pinned files are never candidates: evicting the track that is playing to
-    /// make room for the track after it is how a cache turns into a stutter.
+    /// Evicts the coldest unpinned files until the cache fits its budget.
     public static func enforceBudget() { enforceBudget(pinned: pinnedURLs) }
 
-    /// The same, off the main actor: `pinnedURLs` is the coordinator's, so a
-    /// background caller hands in a copy taken on main.
+    /// Off-main variant; the caller passes a copy of `pinnedURLs`.
     nonisolated public static func enforceBudget(pinned: Set<URL>) {
         let fm = FileManager.default
         let keys: [URLResourceKey] = [.fileSizeKey, .contentAccessDateKey, .contentModificationDateKey]
@@ -246,11 +206,7 @@ public enum PlaybackCache {
 
     // MARK: - Maintenance
 
-    /// Empties the cache. Safe by construction — everything here can be fetched
-    /// again.
-    ///
-    /// Returns the number of audio files removed, which is what "Clear" in
-    /// Settings reports back.
+    /// Empties the cache. Returns the number of files removed.
     @discardableResult
     public static func clear() -> Int {
         let fm = FileManager.default
@@ -266,27 +222,22 @@ public enum PlaybackCache {
         return removed
     }
 
-    /// Deletes anything left in staging by a download that was cancelled or died
-    /// with the app. Called at launch — a partial file is never useful later.
+    /// Deletes partial downloads left in staging. Called at launch.
     public static func sweepStaging() {
         let fm = FileManager.default
         guard let items = try? fm.contentsOfDirectory(at: stagingDirectory, includingPropertiesForKeys: nil) else { return }
         for url in items { try? fm.removeItem(at: url) }
     }
 
-    /// Moves whatever the old Discover cache still holds into the shared
-    /// directory, keyed the new way, using the coordinator's index to work out
-    /// which song each video id belonged to.
-    ///
-    /// Anything the index can't explain is deleted rather than kept: an
-    /// unreachable cache file is just disk usage with no way to ever be hit.
+    /// Moves the old Discover cache into the shared directory using the
+    /// coordinator's index. Files the index can't explain are deleted.
     public static func migrateLegacyOnlineCache(index: [String: String]) {
         let fm = FileManager.default
         let legacy = legacyOnlineCacheDirectory
         guard fm.fileExists(atPath: legacy.path(percentEncoded: false)),
               let items = try? fm.contentsOfDirectory(at: legacy, includingPropertiesForKeys: nil) else { return }
 
-        // index maps sourceRef → videoID; invert it to name files by song.
+        // index maps sourceRef -> videoID; invert it to name files by song.
         var refForVideo: [String: String] = [:]
         for (ref, videoID) in index where refForVideo[videoID] == nil { refForVideo[videoID] = ref }
 

@@ -1,8 +1,5 @@
-// MixtapeWidgets.swift
-// The widget extension: the Now Playing widget for the Home and Lock Screens,
-// the novelty ones in WidgetStyles.swift, and the Live Activity. All of them
-// draw from `NowPlayingSnapshot`, which the app writes whenever the song or
-// the play state changes — see NowPlayingSurfaces.
+// Now Playing widget, the novelty styles in WidgetStyles.swift, and the Live
+// Activity. All draw from `NowPlayingSnapshot` (written by NowPlayingSurfaces).
 
 import WidgetKit
 import SwiftUI
@@ -37,10 +34,8 @@ struct NowPlayingProvider: TimelineProvider {
     func getSnapshot(in context: Context, completion: @escaping (NowPlayingEntry) -> Void) {
         completion(NowPlayingEntry(date: .now, song: NowPlayingSnapshot.load() ?? .sample))
     }
-    /// Never refreshed on a schedule: the app reloads the timeline itself, and a
-    /// reload while audio plays doesn't count against the budget. While a song
-    /// plays there's an entry every 15 s to its end, for the drawings that
-    /// can't use a self-running timer — the tape reels and the tonearm.
+    /// No schedule: the app reloads the timeline (free while audio plays). While
+    /// playing, an entry every 15 s drives the reels and tonearm, which can't use a timer.
     func getTimeline(in context: Context, completion: @escaping (Timeline<NowPlayingEntry>) -> Void) {
         let song = NowPlayingSnapshot.load() ?? .idle
         var entries = [NowPlayingEntry(date: .now, song: song)]
@@ -86,7 +81,7 @@ extension NowPlayingSnapshot {
     }
 }
 
-/// "3:07", or "1:02:07" — the same shape the running timer text takes.
+/// "3:07" or "1:02:07", matching the running timer text.
 func clock(_ t: TimeInterval) -> String {
     let s = max(0, Int(t))
     return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60)
@@ -309,9 +304,8 @@ struct NowPlayingLiveActivity: Widget {
         return state
     }
 
-    /// Read at draw time: the app saves the snapshot before it updates the
-    /// activity, and a cover is far past the activity's 4 KB state limit. Only
-    /// if it's still this song — a stranded activity must not wear the next one's.
+    /// Read from the snapshot at draw time since covers exceed the 4 KB activity
+    /// state. Only if it's still this song.
     private func cover(_ state: NowPlayingAttributes.ContentState) -> Data? {
         guard state.hasArtwork, let saved = NowPlayingSnapshot.load(), saved.title == state.title else { return nil }
         return saved.artwork
@@ -350,7 +344,6 @@ struct Cover: View {
             if let image = data.flatMap(UIImage.init(data:)) {
                 Image(uiImage: image).resizable().scaledToFill()
             } else {
-                // The app's own mark — the icon the menu bar and profile use.
                 Image(systemName: "waveform.circle.fill").resizable().scaledToFit()
                     .padding(size * 0.2).foregroundStyle(.white.opacity(0.8))
                     .background(Color.gray.opacity(0.4))
@@ -366,8 +359,7 @@ struct Titles: View {
     var font: Font = .headline
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            // Two lines whatever the bar under it is doing — a running timer
-            // measures differently from a still one and used to squeeze it.
+            // Fixed two lines: a running timer measures differently from a still one.
             Text(song.title).font(font).lineLimit(2).fixedSize(horizontal: false, vertical: true)
             Text(song.artist).font(.subheadline).lineLimit(1).opacity(0.75)
         }
@@ -409,8 +401,7 @@ struct QueueRows: View {
     }
 }
 
-/// Runs on its own while playing — WidgetKit animates a timer interval without
-/// the app — and sits still while paused.
+/// WidgetKit animates it while playing; still while paused.
 struct Bar: View {
     let isPlaying: Bool, elapsed: TimeInterval, duration: TimeInterval, startedAt: Date
     var body: some View {

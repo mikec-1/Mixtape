@@ -1,20 +1,6 @@
-// SettingsView.swift
-// Mixtape — Features/Settings
-//
-// The Settings shell: it decides which pane is on screen and nothing else.
-//
-// This replaced a single 60-row `List`. Everything was reachable, which is not
-// the same as findable — one scroll held the profile, the equalizer, download
-// quality, the sync badge, four destructive developer buttons and the version
-// number, in no particular order. It's now nine named categories, matching the
-// shape both platforms already use for their own settings: a two-column layout
-// on macOS, a root list that pushes on iOS.
-//
-// Splitting things up buries them one level deeper, so search comes with it —
-// see SettingsCategory.swift for the index. A hit doesn't just open the right
-// page, it tints the row it was looking for (SettingsDesign's
-// `settingsHighlight`), because "it's on this page somewhere" is only half an
-// answer.
+// The Settings shell: decides which pane is on screen. Two columns on macOS, a root list
+// that pushes on iOS. Search is indexed in SettingsCategory.swift and a hit tints its row
+// (`settingsHighlight`).
 
 import SwiftUI
 #if os(macOS)
@@ -78,7 +64,7 @@ public struct SettingsView: View {
         shell
             .environment(\.settingsHighlight, highlight)
             .tint(Color.mixPrimary)
-            // A deep link from outside Settings — see SettingsRoute.
+            // A deep link from outside Settings. See SettingsRoute.
             .onChange(of: route.request) { _, request in
                 guard let request else { return }
                 #if os(macOS)
@@ -86,9 +72,7 @@ public struct SettingsView: View {
                 #else
                 path = [request.category]
                 #endif
-                // Left for the pane to consume: the Connections pane needs to
-                // read `opensSpotifyLibrary` after it appears, and clearing it
-                // here would take it away before it got there.
+                // Connections reads `opensSpotifyLibrary` after it appears, so it consumes that itself.
                 if !request.opensSpotifyLibrary { route.consume() }
             }
             .onAppear {
@@ -104,9 +88,7 @@ public struct SettingsView: View {
 
     #if os(macOS)
 
-    /// Two columns inside the content pane: categories pinned left, the chosen
-    /// page on the right. Same shape as System Settings, and it means the list
-    /// of categories never scrolls away from under you.
+    /// Categories pinned left, the chosen page on the right, like System Settings.
     private var shell: some View {
         HStack(spacing: 0) {
             categoryColumn
@@ -120,12 +102,11 @@ public struct SettingsView: View {
             pane(for: visibleSelection)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .background(Color.mixBackground)
+        .background(MixPageBackground())
         .navigationTitle("Settings")
     }
 
-    /// Guards against showing a page that just disappeared — signing out takes
-    /// Account with it, and losing the developer role takes Developer.
+    /// Signing out removes Account and losing the role removes Developer.
     private var visibleSelection: SettingsCategory {
         categories.contains(selection) ? selection : .general
     }
@@ -166,8 +147,7 @@ public struct SettingsView: View {
 
     #else
 
-    /// iOS gets the pattern it already knows: a short list of categories that
-    /// push into their own screens.
+    /// iOS: a list of categories that push their own screens.
     private var shell: some View {
         NavigationStack(path: $path) {
             ZStack {
@@ -248,8 +228,7 @@ public struct SettingsView: View {
         }
     }
 
-    /// Opens the page a hit lives on and points at the row, then lets the tint
-    /// fade — a highlight that stays on forever stops meaning "this one".
+    /// Opens the hit's page and highlights the row, then lets the tint fade.
     private func open(_ entry: SettingsSearchEntry) {
         #if os(macOS)
         selection = entry.category
@@ -287,9 +266,7 @@ public struct SettingsView: View {
 
 // MARK: - Category rows
 
-/// The coloured chip is deliberate, and deliberately confined to this level:
-/// nine distinct hues let you aim at a category without reading, while every
-/// row inside a page stays monochrome.
+/// Coloured chips only at the category level.
 private struct CategoryIcon: View {
     let category: SettingsCategory
     var size: CGFloat = 28
@@ -307,8 +284,7 @@ private struct CategoryIcon: View {
 }
 
 #if os(macOS)
-/// Compact sidebar entry — no summary line, since the page beside it is already
-/// showing what the category holds.
+/// No summary line; the page beside it shows what the category holds.
 private struct SidebarCategoryRow: View {
 
     let category: SettingsCategory
@@ -340,8 +316,7 @@ private struct SidebarCategoryRow: View {
     }
 }
 #else
-/// Full-width entry with its one-line summary, so the root list is scannable
-/// without opening anything.
+/// Includes the one-line summary so the root list is scannable.
 private struct RootCategoryRow: View {
 
     let category: SettingsCategory

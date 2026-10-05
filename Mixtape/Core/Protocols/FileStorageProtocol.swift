@@ -1,9 +1,3 @@
-// FileStorageProtocol.swift
-// Mixtape — Core Protocols
-//
-// Implemented by StubFileStorageService and SupabaseFileStorageService.
-// Handles audio file upload/download to/from Supabase Storage.
-
 import Foundation
 import Combine
 
@@ -30,16 +24,12 @@ public protocol FileStorageProtocol: AnyObject {
 
     // MARK: Upload
 
-    /// Upload the audio file for `track` to remote storage.
-    /// Returns the remote object key (stored back into `track.file.remoteKey`).
-    /// Uses content-addressed key: `audio/<userID>/<fileHash>.<ext>`.
-    /// If the server already has a file with the same hash, returns the existing key (dedup).
+    /// Uploads to `audio/<userID>/<fileHash>.<ext>`, returning the existing key
+    /// if that hash is already there.
     func upload(track: Track, accessToken: String) async throws -> String
 
     // MARK: Download
 
-    /// Download the audio file for `track` to the local sandbox.
-    /// Updates `track.file.localPath` and `track.file.downloadedAt`.
     func download(track: Track, accessToken: String) async throws -> URL
 
     // MARK: Delete
@@ -52,7 +42,6 @@ public protocol FileStorageProtocol: AnyObject {
     /// Returns the local file URL if it exists, nil otherwise.
     func localURL(for track: Track) -> URL?
 
-    /// Remove all locally cached audio files (e.g. user taps "Clear Cache" in Settings).
     func clearLocalCache() throws
 
     /// Total size of the local audio cache in bytes.

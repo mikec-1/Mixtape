@@ -1,23 +1,11 @@
-// OnlineCollectionMenu.swift
-// Mixtape — SharedUI/Components
-//
-// The right-click menu for an album, artist or mix found online.
-//
-// `AlbumActionsMenu` and `ArtistActionsMenu` read their songs out of the
-// library, so on a Discover card for a record you don't own every item would
-// have done nothing. These cards had one or two items instead — Play, Open,
-// Share — against the nine a library album gets. The songs are a fetch here,
-// not a lookup, so each item loads them when it's picked: through the same
-// session cache the detail page uses, so opening the page afterwards is free.
-//
-// Deliberately not here:
-//   * "Open …" — tapping the card already does that.
-//   * Get Info — the detail page is this collection's information.
-//   * Library and Download for an artist — an artist isn't a thing the library
-//     holds, and downloading one would save top tracks nobody asked to keep.
-//   * Remove for a saved mix — the mix page doesn't offer it either; once kept
-//     it's a playlist, and the playlist's own menu deletes it.
-//   * Download for an unsaved mix — the page only offers it once it's kept.
+// Context menu for an album, artist or mix found online. Songs are fetched when
+// an item is picked, through the session cache the detail page also uses.
+// Left out:
+// * Open: tapping the card does that.
+// * Get Info: the detail page is the info.
+// * Library/Download for an artist: not something the library holds.
+// * Remove for a saved mix: it's a playlist then; its own menu deletes it.
+// * Download for an unsaved mix: only offered once kept.
 
 import SwiftUI
 
@@ -30,7 +18,7 @@ struct OnlineCollectionMenu: View {
     }
 
     let collection: Collection
-    /// Off in a page's "…", which sits beside that page's own Share button.
+    /// Off in a page's "...", which sits beside that page's own Share button.
     let showsShare: Bool
     init(_ collection: Collection, showsShare: Bool = true) {
         self.collection = collection
@@ -52,9 +40,7 @@ struct OnlineCollectionMenu: View {
 
             Divider()
 
-            // One batch each, never the single-song calls in a loop: those warm
-            // every song's file before queueing it, so a whole album landed
-            // minutes after the click.
+            // Batch calls, never single-song calls in a loop (those warm each file first).
             Button("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") {
                 run { await $1.onlineCoordinator.playNext($0) }
             }
@@ -100,10 +86,8 @@ struct OnlineCollectionMenu: View {
             deps.showSavedToast(.library)
         }
 
-        // Once its songs are library rows the download state is known, and the
-        // bulk items say exactly what's left. Before that nothing is on disk,
-        // so plain "Download" is the whole truth — it saves on the way, the way
-        // the album page's download button does.
+        // Once saved, the bulk items say what's left. Before that, plain "Download",
+        // which saves on the way.
         if isSaved, let owned = deps.libraryService.album(title: album.title, artistName: album.artistName) {
             BulkDownloadMenuItems(tracks: deps.libraryService.tracks(in: owned),
                                   downloads: deps.downloadManager)
@@ -129,8 +113,7 @@ struct OnlineCollectionMenu: View {
                                   downloads: deps.downloadManager)
         } else if !mix.tracks.isEmpty {
             Button("Add to Library", systemImage: "plus.circle") {
-                // ponytail: a failed save is silent here — the menu has nowhere
-                // to hang the page's alert. Route it through a toast if it bites.
+                // ponytail: a failed save is silent here; route it through a toast if it bites.
                 if deps.importService.saveMix(mix) != nil { deps.showSavedToast(.library) }
             }
         }
@@ -143,8 +126,7 @@ struct OnlineCollectionMenu: View {
 
     // MARK: - Artist
 
-    /// Split the way a track row splits credits: a record by "A & B" offers
-    /// both rather than searching for the whole string and finding nobody.
+    /// Split like a track row's credits, so "A & B" offers both.
     @ViewBuilder
     private func goToArtist(_ names: [String]) -> some View {
         if names.count > 1 {
@@ -170,15 +152,14 @@ struct OnlineCollectionMenu: View {
 
     // MARK: - Songs
 
-    /// A mix with nothing in it has nothing to play; albums and artists can't
-    /// know until they're fetched.
+    /// Only mixes can know they're empty before a fetch.
     private var isEmptyMix: Bool {
         if case .mix(let mix) = collection { return mix.tracks.isEmpty }
         return false
     }
 
-    /// Load the songs, then act on them. `deps` is handed through because the
-    /// menu is gone by the time a fetch comes back.
+    /// Load the songs, then act. `deps` is passed through because the menu is gone
+    /// by the time the fetch returns.
     private func run(_ work: @escaping @MainActor ([OnlineTrack], AppDependencies) async -> Void) {
         let deps = self.deps
         let collection = self.collection

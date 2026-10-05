@@ -1,16 +1,6 @@
-// SpotifyExportView.swift
-// Mixtape — Features/Import
-//
-// The other direction: a Mixtape playlist recreated on Spotify.
-//
-// This sheet exists because the matching is guesswork and guesswork has to be
-// shown. `SpotifyExportService` looks every song up, sorts the results into
-// confident / uncertain / missing, and this displays that split before anything
-// is written — with the uncertain ones unticked, so the default outcome is a
-// playlist containing only songs Mixtape is willing to stand behind.
-//
-// Nothing here can remove or change anything on Spotify. It creates one new
-// playlist and fills it.
+// Recreates a Mixtape playlist on Spotify. Matches are shown as confident,
+// uncertain and missing before anything is written, with uncertain ones unticked.
+// Only creates and fills one new playlist; never changes anything else on Spotify.
 
 import SwiftUI
 
@@ -18,9 +8,8 @@ public struct SpotifyExportView: View {
 
     private let tracks: [Track]
     private let sourceName: String
-    /// The library playlist this came from, when it is one. `nil` for a
-    /// selection of songs that isn't a stored playlist — there is nothing for a
-    /// sync link to point back at, so the keep-in-sync options stay hidden.
+    /// The library playlist this came from, if any. Without one there's nothing to
+    /// sync-link, so those options are hidden.
     private let sourcePlaylistID: UUID?
 
     @EnvironmentObject private var deps: AppDependencies
@@ -35,7 +24,7 @@ public struct SpotifyExportView: View {
     // MARK: - State
 
     private enum Phase: Equatable {
-        /// Connected, but the grant is read-only — see `SpotifyAuth.canWrite`.
+        /// Connected but read-only. See `SpotifyAuth.canWrite`.
         case needsPermission
         case planning
         case reviewing
@@ -46,16 +35,13 @@ public struct SpotifyExportView: View {
 
     @State private var phase: Phase = .planning
     @State private var plan: SpotifyExportService.Plan?
-    /// Track ids that will be sent. Seeded from the confident matches, then
-    /// entirely the user's.
+    /// Track ids to send. Starts as the confident matches.
     @State private var chosen: Set<UUID> = []
     /// Per-song override when someone picks a different candidate.
     @State private var overrides: [UUID: SpotifyTrackMatch] = [:]
     @State private var name: String = ""
     @State private var isPublic = false
-    /// Ticked by default: someone sending a playlist across almost always wants
-    /// the copy to go on matching this one, and the alternative — a snapshot
-    /// that silently rots — is the thing people come back and ask for.
+    /// On by default; people sending a playlist usually want it kept in sync.
     @State private var pushesToSpotify = true
     @State private var pullsFromSpotify = false
     @State private var work: Task<Void, Never>?
@@ -178,22 +164,13 @@ public struct SpotifyExportView: View {
                     .overlay(squareStroke)
                 }
             }
-            // `scroll: false` skips MixSheet's content insets — the scrolling
-            // branch is what applies them — so this pane has to carry the
-            // window margin itself, or it draws edge to edge while the header
-            // above it sits 20pt in.
+            // `scroll: false` skips MixSheet's insets, so add the margin here.
             .padding(.horizontal, MixSheetMetrics.margin)
             .padding(.vertical, MixSheetMetrics.contentVertical)
         }
     }
 
-    /// The same two switches an imported playlist gets, offered here so a sent
-    /// playlist isn't a one-off copy that starts drifting the moment it lands.
-    ///
-    /// Two switches rather than one three-way picker because that is the shape
-    /// of the decision: each end either follows the other or it doesn't, and
-    /// both on is a real arrangement (a merge, not a fight) rather than a
-    /// compromise between two settings.
+    /// The same two sync switches an imported playlist gets. Both on means a merge.
     private var syncOptions: some View {
         VStack(alignment: .leading, spacing: 6) {
             fieldLabel("Keep in sync")
@@ -229,8 +206,7 @@ public struct SpotifyExportView: View {
         .padding(.vertical, 8)
     }
 
-    /// A 4pt corner, not a 12pt one: the sheet's plates are meant to read as
-    /// fields in a window, not as cards in a feed.
+    /// 4pt corners, so these read as fields rather than cards.
     private var squareFill: some View {
         RoundedRectangle(cornerRadius: 4, style: .continuous).fill(Color.mixSurface2)
     }
@@ -246,10 +222,7 @@ public struct SpotifyExportView: View {
             .foregroundStyle(Color.mixTextSecondary)
     }
 
-    /// One plain sentence instead of three tinted pills. "1 matched" said
-    /// nothing on its own — matched to *what*? — and colour here was decoration:
-    /// the counts aren't categories the eye has to sort, they're a total the
-    /// reader checks once before pressing Send.
+    /// One plain summary sentence.
     private func summary(for plan: SpotifyExportService.Plan) -> some View {
         let found = plan.confident.count + plan.uncertain.count
         let total = plan.candidates.count
@@ -261,9 +234,7 @@ public struct SpotifyExportView: View {
             parts.append("\(plan.unchecked.count) couldn't be checked")
         }
 
-        // The reason goes on its own line rather than into the dot-separated
-        // run: it is the one part of this the reader may need to act on, and
-        // it says what to do about it.
+        // The reason on its own line, since it's the actionable part.
         return VStack(alignment: .leading, spacing: 3) {
             Text(parts.joined(separator: " \u{00B7} "))
             if let reason = plan.uncheckedReason {
@@ -288,9 +259,7 @@ public struct SpotifyExportView: View {
                 if isOn { chosen.remove(candidate.track.id) }
                 else    { chosen.insert(candidate.track.id) }
             } label: {
-                // Square, and the same ink as the text. A ring of accent on
-                // every row made the list the loudest thing in the sheet; the
-                // one coloured control here should be the Send button.
+                // Plain checkbox so the Send button stays the only accent.
                 Image(systemName: isOn ? "checkmark.square.fill" : "square")
                     .font(.system(size: 14))
                     .foregroundStyle(isOn ? Color.mixTextPrimary : Color.mixTextTertiary)
@@ -305,9 +274,7 @@ public struct SpotifyExportView: View {
                     .lineLimit(1)
 
                 if let match {
-                    // Only worth printing when it *differs* — repeating the
-                    // same title back is noise, and hiding it when it agrees
-                    // makes every visible line a thing worth looking at.
+                    // Only shown when the match differs from the song.
                     Text(differs(candidate.track, match)
                          ? "\u{2192} \(match.title) \u{00B7} \(match.artist)"
                          : candidate.track.artistName)
@@ -317,8 +284,7 @@ public struct SpotifyExportView: View {
                                          : Color.mixTextTertiary)
                         .lineLimit(1)
                 } else {
-                    // "Not on Spotify" is a claim about the catalogue. Only
-                    // make it when a search actually came back empty.
+                    // Only claim "Not on Spotify" when a search actually came back empty.
                     Text(candidate.uncheckedReason?.phrase ?? "Not on Spotify")
                         .font(.system(size: MixFontScale.size(11)))
                         .foregroundStyle(Color.mixTextTertiary)
@@ -344,9 +310,7 @@ public struct SpotifyExportView: View {
         .opacity(canPick ? 1 : 0.55)
     }
 
-    /// The correction hatch. A wrong guess with the right song two rows down in
-    /// the results is the commonest failure there is, and without this the only
-    /// remedy would be to untick it and add it by hand on Spotify.
+    /// Pick another result when the guess is wrong.
     private func alternativesMenu(for candidate: SpotifyExportService.Candidate) -> some View {
         Menu {
             if let original = candidate.match {
@@ -371,12 +335,8 @@ public struct SpotifyExportView: View {
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
-        // A hard 20pt, never `fixedSize()`. A Menu's ideal width is the width of
-        // its widest item — "Stuff (feat. Travis Scott) · Lil Baby, Travis
-        // Scott" and the rest — so `fixedSize()` made every row demand hundreds
-        // of points it didn't have. The row can't shrink a fixed-size child, so
-        // the content simply drew past the sheet's frame and off both sides of
-        // the window. The trigger is one glyph; only the popup needs the width.
+        // Fixed width, never `fixedSize()`: a Menu's ideal width is its widest item,
+        // which pushed rows past the sheet.
         .frame(width: 20)
     }
 
@@ -388,9 +348,7 @@ public struct SpotifyExportView: View {
                 detail: finishedDetail
             )
             if let url {
-                // Not a `Link`: that hands the https URL to the browser even
-                // when the Spotify app is sitting right there, already signed
-                // in. See `SpotifyAppLink`.
+                // Not a `Link`, so it opens the Spotify app if installed. See `SpotifyAppLink`.
                 Button("Open it in Spotify") { SpotifyAppLink.open(url) }
                     .buttonStyle(.plain).mixHandCursor()
                     .font(.system(size: MixFontScale.size(12.5), weight: .medium))
@@ -400,19 +358,12 @@ public struct SpotifyExportView: View {
         }
     }
 
-    /// Three plain sentences, and only the ones that apply.
-    ///
-    /// The old single line lumped every song that didn't go into one number and
-    /// blamed Spotify for all of them, including the ones the user unticked
-    /// themselves. Those are two different facts and only one of them is a
-    /// problem, so they're now counted apart and said apart.
+    /// Up to three sentences: sent, unticked by the user, and unmatched, counted separately.
     private var finishedDetail: String {
         let sent = chosen.count
         guard let plan else { return songs(sent) + " added." }
 
-        // Unticked means a song that was ready to go and the user took it out.
-        // Everything else that stayed behind had no usable match to begin with:
-        // Spotify didn't have it, or the guess wasn't good enough to pre-tick.
+        // Unticked = ready but removed by the user. Everything else had no usable match.
         let confidentIDs = Set(plan.confident.map(\.track.id))
         let unticked = confidentIDs.subtracting(chosen).count
         let unmatched = plan.candidates.count - sent - unticked
@@ -490,8 +441,7 @@ public struct SpotifyExportView: View {
         do {
             let built = try await service.plan(name: sourceName, tracks: tracks)
             plan   = built
-            // Confident only. An unsure match that arrived pre-ticked would be
-            // a guess the user endorsed by not noticing.
+            // Confident only; an unsure match shouldn't be pre-ticked.
             chosen = Set(built.confident.map(\.track.id))
             phase  = .reviewing
         } catch is CancellationError {
@@ -542,14 +492,9 @@ public struct SpotifyExportView: View {
         }
     }
 
-    /// Records the sync link, if either switch is on.
-    ///
-    /// `syncedIDs` is seeded with exactly the songs that went across, which
-    /// makes it a true record of what both ends agreed on: songs left behind
-    /// because Spotify doesn't have them are outside the agreement, so a later
-    /// merge reads them as local additions rather than as things Spotify
-    /// deleted. Without that seeding the very first sync would delete every
-    /// unmatched song from the user's own playlist.
+    /// Saves the sync link if either switch is on. `syncedIDs` is seeded with exactly
+    /// what went across, so songs Spotify lacks read as local additions later rather
+    /// than as Spotify deletions.
     private func linkForSync(_ outcome: SpotifyExportService.Outcome) {
         guard let playlistID = sourcePlaylistID,
               let direction  = chosenDirection
@@ -564,8 +509,7 @@ public struct SpotifyExportView: View {
         link.syncedIDs  = plan?.candidates
             .filter { chosen.contains($0.track.id) }
             .map(\.track.id) ?? []
-        // Every URI is already in hand from the plan, so the first push has
-        // nothing left to look up.
+        // URIs are already known from the plan.
         link.uriByTrack = plan?.candidates.reduce(into: [String: String]()) { out, candidate in
             guard chosen.contains(candidate.track.id) else { return }
             if let uri = (overrides[candidate.track.id] ?? candidate.match)?.uri {
@@ -591,12 +535,8 @@ public struct SpotifyExportView: View {
 }
 
 
-/// The progress panes, split out so they can observe the service directly.
-///
-/// The parent reaches the service through `AppDependencies`, and a nested
-/// `ObservableObject` doesn't republish through its owner — a pane reading
-/// `service.planned` from up there would render once and then sit still. This
-/// is the same shape as the queue mirror's observation problem.
+/// Progress panes observing the service directly; a nested `ObservableObject`
+/// doesn't republish through `AppDependencies`.
 private struct SpotifyExportProgress: View {
 
     enum Stage { case planning, pushing }
@@ -611,8 +551,7 @@ private struct SpotifyExportProgress: View {
             MixSheetStatus(
                 kind: .busy,
                 title: title,
-                // Songs, not a percentage — the same reasoning as the import
-                // side: "412 of 900" is a number someone can feel.
+                // Songs, not a percentage.
                 detail: (counts?.total ?? 0) > 0
                     ? "\(counts!.done) of \(counts!.total) songs"
                     : "Starting\u{2026}",

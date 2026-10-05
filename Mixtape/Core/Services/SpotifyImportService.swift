@@ -1,10 +1,5 @@
-// SpotifyImportService.swift
-// Mixtape
-//
-// Rebuilds a Spotify playlist locally — same name, cover and songs. Tracks come in
-// as online Tracks (no file), so they import instantly and resolve audio on first
-// play like any Discover track. Fetching happens in SpotifyClient; this is just the
-// "turn a SpotifyPlaylist into library rows" half.
+// Rebuilds a Spotify playlist locally (name, cover, songs). Tracks are online-only and
+// resolve audio on first play like Discover tracks. Fetching lives in SpotifyClient.
 
 import Foundation
 import OSLog
@@ -12,21 +7,12 @@ import OSLog
 @MainActor
 public final class SpotifyImportService {
 
-    /// Bumped to abandon every run in flight, wherever it was started from.
-    ///
-    /// "Clear Everything" has no reference to whichever screen kicked off an
-    /// import — the sheet, or the Settings connection — and a token on the type
-    /// is a great deal less machinery than threading a handle to both. A run
-    /// notices at its next chunk boundary and stops without placing what's left.
+    /// Bumped to stop every run in flight, e.g. by Clear Everything. Runs check it at each chunk.
     public private(set) static var stopGeneration = 0
 
     public static func cancelAllRuns() { stopGeneration += 1 }
 
-    /// Everything the run in progress brought into being, so a stop can undo it.
-    ///
-    /// Only rows this run *created*: a song the library already had is left
-    /// alone, because the user didn't get it from this import and shouldn't lose
-    /// it to cancelling one.
+    /// Rows this run created, so a stop can undo them. Songs already in the library aren't included.
     private var runFreshTrackIDs: [UUID] = []
     private var runCreatedPlaylistIDs: [UUID] = []
 
@@ -37,16 +23,10 @@ public final class SpotifyImportService {
         public var isFinishing = false
     }
 
-    /// Cover downloads allowed in flight at once. Enough to keep the pipe busy,
-    /// few enough that a big import doesn't look like a denial-of-service.
+    /// Cover downloads in flight at once.
     private static let artworkConcurrency = 6
 
-    /// Distinct covers held in memory between playlists. A library migration
-    /// walks the same records over and over — the album a playlist opens with is
-    /// very often the album three other playlists open with — so the cache earns
-    /// its keep across playlists, not just within one. Capped because the whole
-    /// point is to survive a large library, and unbounded growth is how that
-    /// stops being true.
+    /// Covers cached across playlists, since many playlists share albums. Capped to bound memory.
     private static let artworkCacheLimit = 500
 
     private let trackRepo: TrackRepository
@@ -74,6 +54,7 @@ public final class SpotifyImportService {
         _ playlist: SpotifyPlaylist,
         onProgress: ((Progress) -> Void)? = nil
     ) async -> Playlist {
+        SupabaseSyncService.allowBulk("spotify-import")
         let signpost = MixSignpost.importing.beginInterval("import-spotify",
                                                            id: MixSignpost.importing.makeSignpostID())
         let started = CFAbsoluteTimeGetCurrent()
@@ -81,26 +62,16 @@ public final class SpotifyImportService {
             MixSignpost.importing.endInterval("import-spotify", signpost)
             MixLog.importing.notice("import-spotify finished in \(Int((CFAbsoluteTimeGetCurrent() - started) * 1000), privacy: .public) ms")
         }
-        // What the library already holds, snapshotted before anything is
-        // written. `stableTrackID` alone only recognises a song this app saved
-        // from a catalogue that spells it exactly the way Spotify does — an
-        // imported file, or the same song saved from Deezer under a slightly
-        // different title, would land here as a second copy of a song the user
-        // is looking at in their library.
+        // Snapshot of the library before writing. `stableTrackID` alone misses the same song
+        // imported from a file or saved under a slightly different title.
         var owned = libraryService.ownedRecordingIndex
         let created = await addPlaylist(playlist, owned: &owned, onProgress: onProgress)
         finaliseImport()
         return created
     }
 
-    /// Rebuild one playlist, leaving the library-wide bookkeeping to the caller.
-    ///
-    /// `owned` is threaded in rather than rebuilt here because it can't be
-    /// rebuilt here: `libraryService.tracks` only changes when `refresh()` runs,
-    /// so a batch that sensibly defers its refresh would hand every playlist the
-    /// same stale snapshot and re-import songs the previous playlist just added.
-    /// Carrying one index through the whole run fixes that and skips rebuilding
-    /// a full-library index per playlist into the bargain.
+    /// Rebuilds one playlist. `owned` is passed in because `libraryService.tracks` only updates
+    /// on `refresh()`, so a batch needs one index carried through the whole run.
     @discardableResult
     func addPlaylist(
         _ playlist: SpotifyPlaylist,
@@ -126,15 +97,8 @@ public final class SpotifyImportService {
         return created
     }
 
-    /// Import songs straight into Favourites.
-    ///
-    /// Spotify's Liked Songs isn't a playlist — it's the account's saved-songs
-    /// collection, reached through its own endpoint — and Mixtape already has
-    /// the same idea under a different name. Recreating it as an ordinary
-    /// playlist called "Liked Songs" would leave someone with two Favourites,
-    /// one of which doesn't fill the heart in.
-    ///
-    /// Returns how many songs ended up there.
+    /// Imports songs into Favourites. Liked Songs maps onto Favourites instead of becoming
+    /// a second "Liked Songs" playlist. Returns how many songs landed.
     @discardableResult
     func addToFavourites(
         _ tracks: [SpotifyPlaylistTrack],
@@ -142,22 +106,14 @@ public final class SpotifyImportService {
         onProgress: ((Progress) -> Void)? = nil
     ) async -> Int {
         let ids = await importTracks(tracks, owned: &owned, onProgress: onProgress)
-        // Goes through `addTracks` rather than `toggleFavourite` per song
-        // because this path keeps the FavoriteEntity rows in step in one write,
-        // and because toggling something already favourited would un-favourite
-        // it — re-running a migration would empty the hearts it filled.
+        // `addTracks`, not `toggleFavourite`: toggling an existing favourite would remove it on a re-run.
+        SupabaseSyncService.allowBulk("spotify-import")
         libraryService.addTracks(ids: ids, toPlaylist: Playlist.favouritesID)
         return ids.count
     }
 
-    /// Import songs into the library and nowhere else.
-    ///
-    /// This is the saved-album path. Mixtape already derives albums from track
-    /// metadata — `refresh()` builds the Album row out of the songs themselves —
-    /// so creating a playlist named after the record as well would leave someone
-    /// holding the same album twice under two different ideas of what it is.
-    ///
-    /// Returns how many songs were listed.
+    /// Imports songs into the library only (saved albums). Albums are derived from track
+    /// metadata, so no playlist is made. Returns how many songs were listed.
     @discardableResult
     func addToLibrary(
         _ tracks: [SpotifyPlaylistTrack],
@@ -165,14 +121,8 @@ public final class SpotifyImportService {
         onProgress: ((Progress) -> Void)? = nil
     ) async -> Int {
         let ids = await importTracks(tracks, owned: &owned, onProgress: onProgress)
-        // Saving the record is what holds these songs in the library, exactly
-        // as it does for an album saved from Discover. Nothing else would:
-        // they're metadata-only rows, nobody liked them, and by the paragraph
-        // above they deliberately get no playlist of their own.
-        //
-        // Grouped rather than one call per song because a compilation is
-        // several records wearing one Spotify album, and because `persist()`
-        // is a whole-dictionary write.
+        // Saving the album is what keeps these songs in the library. Grouped per album because
+        // a compilation spans several records and `persist()` writes the whole dictionary.
         var byAlbum: [String: (title: String, artist: String, ids: [UUID])] = [:]
         for (track, id) in zip(tracks, ids) {
             let key = track.albumTitle + "\u{1}" + track.artistName
@@ -185,14 +135,9 @@ public final class SpotifyImportService {
         return ids.count
     }
 
-    /// Turn fetched Spotify tracks into library rows, returning their ids in the
-    /// order they were given — reusing an existing row wherever the library
-    /// already holds the song.
-    ///
-    /// Placement is left to the caller: the same songs go to a new playlist, or
-    /// to Favourites, depending on what was ticked — and `SpotifyFollowService`
-    /// calls it with a followed playlist's current contents, which is the same
-    /// question asked a second time.
+    /// Turns fetched Spotify tracks into library rows, returning ids in the given order and
+    /// reusing existing rows. Placement is up to the caller (playlist, Favourites, or
+    /// `SpotifyFollowService`).
     func importTracks(
         _ items: [SpotifyPlaylistTrack],
         owned: inout LibraryTrackIndex,
@@ -205,18 +150,8 @@ public final class SpotifyImportService {
         var fresh: [UUID] = []
         ids.reserveCapacity(total)
 
-        // Worked in chunks, for two reasons that turn out to be the same one.
-        //
-        // This runs on the main actor, and the body of the loop has no
-        // suspension points at all — so importing two thousand songs used to
-        // hold the main thread for the entire run. That's the beach ball, and
-        // it's also why the progress it was faithfully reporting never drew:
-        // SwiftUI never got the chance. Chunking gives the artwork fetch and the
-        // `Task.yield()` below back to the run loop regularly, so the window
-        // stays alive and the bar actually moves.
-        //
-        // Fetching covers a chunk at a time also means the first songs land
-        // seconds in rather than after every cover in the library is in hand.
+        // Chunked so the main actor yields to the run loop between chunks (the progress bar
+        // redraws) and the first songs land before every cover is fetched.
         let chunkSize = 50
 
         let generation = Self.stopGeneration
@@ -228,15 +163,10 @@ public final class SpotifyImportService {
             let artwork = await fetchArtwork(for: chunk)
 
             for (position, item) in chunk.enumerated() {
-                // Stopping between items isn't enough when one of them is a
-                // five-thousand-song Liked Songs. Whatever got this far is kept
-                // and placed — a stop should leave the library short, not
-                // inconsistent.
+                // Also checked inside an item, for huge ones. What's done so far is still placed.
                 if Task.isCancelled { break }
 
-                // Already in the library: use *that* row and leave it completely
-                // alone — its file, its artwork and its downloaded copy all stay
-                // whatever the user made them.
+                // Already in the library: reuse that row and leave it untouched.
                 if let existing = owned.match(title: item.title,
                                               artistName: item.artistName,
                                               duration: item.duration) {
@@ -258,28 +188,22 @@ public final class SpotifyImportService {
                 try? trackRepo.save(track) // stableTrackID dedupes re-imports
                 ids.append(track.id)
                 fresh.append(track.id)
-                // A playlist that lists the same song twice under two spellings
-                // is still one song in the library.
+                // Same song listed twice under two spellings.
                 owned.insert(track)
 
                 completed += 1
             }
 
-            // Once per chunk rather than once per song: two thousand writes to
-            // an @Published property is its own kind of freeze.
+            // Once per chunk to avoid thousands of @Published writes.
             onProgress?(Progress(completed: completed, total: total))
             await Task.yield()
         }
 
-        // Let the bar paint its own last frame before the write below, which is
-        // one big synchronous save rather than something progress can be
-        // reported from. It covers the caller's placement write too — that one
-        // is the larger of the two on a library-sized import.
+        // Let the bar paint its last frame before the big synchronous save.
         onProgress?(Progress(completed: completed, total: total, isFinishing: true))
         await Task.yield()
 
-        // A wipe that landed mid-run means there is nothing to add these to —
-        // reporting them now is how a cleared library comes back half-full.
+        // Library was wiped mid-run, nothing to add these to.
         guard Self.stopGeneration == generation else { return [] }
         runFreshTrackIDs.append(contentsOf: fresh)
         return ids
@@ -296,21 +220,13 @@ public final class SpotifyImportService {
         public var itemName: String
         public var songsCompleted: Int
         public var songsTotal: Int
-        /// The same question asked of the whole job rather than of this item:
-        /// songs done across every item, out of every song selected. For one
-        /// item this is the item's own count, which is why the display only
-        /// draws a second bar when there's more than one.
-        /// Which half of the work the count refers to. Fetching a 2,000-song
-        /// Liked Songs is forty round trips before the first song is imported,
-        /// and a bar that sat at zero for all of it read as a hang.
+        /// Which half of the work the count refers to, so the bar moves while fetching.
         public var phase: Phase = .importing
 
         public enum Phase: Sendable { case fetching, importing, finishing }
 
-        /// The same question asked of the whole job rather than of this item:
-        /// songs done across every item, out of every song selected. For one
-        /// item this equals the item's own count, which is why the display only
-        /// draws a second bar when there's more than one.
+        /// Songs done across the whole job. Equals the item's count for one item, so the
+        /// second bar only shows for several.
         public var overallCompleted: Int = 0
         public var overallTotal: Int = 0
     }
@@ -327,42 +243,22 @@ public final class SpotifyImportService {
         /// Songs added across all of them, counting a song once per item that
         /// listed it.
         public var songCount = 0
-        /// Items that couldn't be read, and why. A migration keeps going past
-        /// these — one unreadable playlist shouldn't cost someone the other
-        /// fifty-nine.
+        /// Items that couldn't be read, and why. The migration continues past them.
         public var failures: [Failure] = []
         /// True when the run stopped early because it was cancelled.
         public var wasCancelled = false
-        /// Where each imported item landed, keyed by `SpotifyLibraryItem.id`.
-        ///
-        /// Only what a follow link needs: which local playlist now stands for
-        /// which Spotify source. Liked Songs maps to Favourites. Saved albums
-        /// aren't here — an album's track list is fixed, so following one would
-        /// be a check that can never come back with anything.
+        /// Local playlist per imported item, keyed by `SpotifyLibraryItem.id`, for follow links.
+        /// Liked Songs maps to Favourites. Albums are left out since their track list is fixed.
         public var destinations: [String: UUID] = [:]
-        /// Ids of the items that finished, including albums — which have no
-        /// destination playlist and so can't be recognised from `destinations`.
-        /// The import ledger is written from this.
+        /// Finished item ids, including albums. The import ledger is written from this.
         public var completedItemIDs: [String] = []
-        /// Spotify's track ids per finished item, for the ledger's exact
-        /// "+9 −2". Only knowable here — this is the one place that reads
-        /// every track of every chosen item.
+        /// Spotify track ids per finished item, for the ledger's "+9 -2".
         public var sourceTrackIDs: [String: [String]] = [:]
     }
 
-    /// Bring a chosen set of Spotify library items across, one after another.
-    ///
-    /// Sequential on purpose. The parallelism that matters is already inside
-    /// each item — bounded cover downloads — and running whole playlists
-    /// concurrently would multiply the request rate against Spotify's limit
-    /// while making the progress display meaningless and the dedup index a
-    /// contended mess. Songs shared between playlists are recognised because one
-    /// `LibraryTrackIndex` is carried through the entire run.
-    ///
-    /// Cancellation is honoured between items and inside each fetch, and a
-    /// stopped run is undone: every song and playlist this run created is
-    /// removed again by `rollbackRun`. Stop means stop, not "keep the half you
-    /// got" — see the comment there for what it deliberately doesn't touch.
+    /// Imports the chosen Spotify items one at a time. Sequential to stay under Spotify's
+    /// rate limit and keep progress readable; one `LibraryTrackIndex` dedups across the run.
+    /// A stopped run is undone by `rollbackRun`.
     public func migrate(
         _ items: [SpotifyLibraryItem],
         using client: SpotifyClient,
@@ -376,8 +272,7 @@ public final class SpotifyImportService {
         runFreshTrackIDs = []
         runCreatedPlaylistIDs = []
 
-        // Spotify's own counts, for a total to measure against before a single
-        // item has been read. Corrected as real track lists arrive.
+        // Spotify's counts, corrected as real track lists arrive.
         let grandTotal = items.reduce(0) { $0 + $1.trackCount }
         var songsDone  = 0
 
@@ -388,9 +283,10 @@ public final class SpotifyImportService {
                 result.wasCancelled = true
                 break
             }
+            // Per item, so a long run keeps the confirmation open.
+            SupabaseSyncService.allowBulk("spotify-import")
 
-            // Announce the item before fetching it, so a big playlist doesn't
-            // sit on the previous one's name while it downloads.
+            // Announce the item before fetching so a big playlist doesn't show the previous name.
             func report(_ done: Int, _ total: Int,
                         phase: MigrationProgress.Phase = .importing) {
                 onProgress?(MigrationProgress(
@@ -400,10 +296,7 @@ public final class SpotifyImportService {
                     songsCompleted: done,
                     songsTotal:     total,
                     phase:          phase,
-                    // Songs, not items. Counting finished items instead made a
-                    // sixty-playlist job jump in sixtieths and a one-item job
-                    // never move at all, when the honest measure — how many of
-                    // the songs you asked for are in — was there all along.
+                    // Counts songs, not items.
                     overallCompleted: songsDone + (phase == .fetching ? 0 : done),
                     overallTotal:     max(grandTotal, songsDone + total)
                 ))
@@ -411,9 +304,7 @@ public final class SpotifyImportService {
             report(0, item.trackCount, phase: .fetching)
 
             do {
-                // `fetchContents` reports as it pages. The callback arrives off
-                // the main actor, so it hops back rather than reporting from
-                // wherever the client happens to be.
+                // `fetchContents` reports off the main actor while paging, so hop back.
                 let index      = offset + 1
                 let itemCount  = items.count
                 let itemName   = item.name
@@ -457,10 +348,7 @@ public final class SpotifyImportService {
 
                 await Task.yield()
 
-                // Cancelling *inside* an item returns from the import normally,
-                // so without this the loop would fall off the end with
-                // `wasCancelled` never set — which for the commonest import of
-                // all, a single Liked Songs, meant a stop that kept everything.
+                // A cancel inside an item returns normally, so set `wasCancelled` here.
                 if Task.isCancelled || Self.stopGeneration != generation {
                     result.wasCancelled = true
                     break
@@ -473,8 +361,7 @@ public final class SpotifyImportService {
                 result.songCount     += total
 
             } catch {
-                // Cancelling mid-fetch surfaces as a thrown error, which isn't a
-                // failure worth reporting as one.
+                // Cancelling mid-fetch throws; not a real failure.
                 if Task.isCancelled {
                     result.wasCancelled = true
                     break
@@ -487,12 +374,6 @@ public final class SpotifyImportService {
         }
 
         // A stopped import leaves nothing behind.
-        //
-        // It used to keep whatever had already landed, on the reasoning that a
-        // half-migration someone chose to stop is a result rather than a mess.
-        // In practice it isn't: pressing Stop 600 songs into a 2,200-song run
-        // meant 600 songs you didn't ask for and now have to find and delete by
-        // hand. Stop means undo.
         if result.wasCancelled {
             rollbackRun()
             result.importedCount = 0
@@ -506,47 +387,31 @@ public final class SpotifyImportService {
         return result
     }
 
-    /// Takes back everything this run created: the songs it added, and any
-    /// playlist it made to hold them.
-    ///
-    /// Songs the library already had are untouched — `runFreshTrackIDs` only
-    /// ever collects rows this run brought into existence, so a cancelled import
-    /// can't take a song the user has had for a year with it. Favourites and
-    /// All Songs clean themselves up, because `deleteTracks` removes the rows
-    /// every playlist's list points at.
+    /// Removes the songs and playlists this run created. `runFreshTrackIDs` only holds new rows,
+    /// and `deleteTracks` cleans up Favourites and All Songs.
     private func rollbackRun() {
         let tracks    = runFreshTrackIDs
         let playlists = runCreatedPlaylistIDs
         runFreshTrackIDs = []
         runCreatedPlaylistIDs = []
 
+        SupabaseSyncService.allowBulk("import-stop")
         if !tracks.isEmpty { libraryService.deleteTracks(ids: tracks) }
         libraryService.deletePlaylists(ids: playlists)
         if !tracks.isEmpty || !playlists.isEmpty {
-            MixLog.importing.debug("[SpotifyImport] \u{21A9} Stopped — removed \(tracks.count) song(s) and \(playlists.count) playlist(s)")
+            MixLog.importing.debug("[SpotifyImport] Stopped, removed \(tracks.count) song(s) and \(playlists.count) playlist(s)")
         }
     }
 
-    /// The library-wide work that only needs doing once, however many playlists
-    /// arrived. `refresh()` re-reads and cross-references the entire library, so
-    /// running it per playlist means running it sixty times to reach the state
-    /// one run would have reached.
+    /// Library-wide work done once per run, since `refresh()` re-reads the whole library.
     func finaliseImport() {
         libraryService.refresh()
-        // These tracks never touch ImportService, so their artist rows are
-        // created by `refresh()` wearing an album cover. Fetch the real photos.
+        // These tracks skip ImportService, so fetch real artist photos.
         libraryService.scheduleArtistImageBackfill()
     }
 
-    /// Album thumbnails aligned to `tracks` (nil where missing), each distinct
-    /// image downloaded once.
-    ///
-    /// Playlists are full of albums, and an album is one cover: a record with
-    /// twelve tracks on the playlist used to mean twelve identical downloads,
-    /// all launched at the same instant, because the old version added one task
-    /// per *track*. Asking per distinct URL instead — and only for the ones not
-    /// already in hand — is most of the difference between importing a library
-    /// and being throttled off Spotify while trying to.
+    /// Album thumbnails aligned to `tracks` (nil where missing). Each distinct URL is
+    /// downloaded once, skipping ones already cached.
     private func fetchArtwork(for tracks: [SpotifyPlaylistTrack]) async -> [Data?] {
         var result = [Data?](repeating: nil, count: tracks.count)
 
@@ -567,9 +432,7 @@ public final class SpotifyImportService {
         }
         guard !missing.isEmpty else { return result }
 
-        // Shrunk before it is cached or stored: a Spotify import is thousands
-        // of covers, and every one of them stays resident in the library's
-        // published rows once it lands.
+        // Downsampled before caching; thousands of covers stay resident in the library rows.
         let downloaded = await mapConcurrently(missing, limit: Self.artworkConcurrency) { [session] url in
             let raw = try? await session.data(from: url).0
             return ImageDownsampler.artworkJPEG(from: raw)
@@ -578,9 +441,7 @@ public final class SpotifyImportService {
         for (url, data) in zip(missing, downloaded) {
             guard let data else { continue }
             for index in wanted[url] ?? [] { result[index] = data }
-            // Past the cap we stop remembering rather than start forgetting:
-            // whatever a long migration has already seen is likelier to come
-            // round again than whatever it hasn't reached yet.
+            // Past the cap, keep what's cached rather than evicting it.
             if artworkCache.count < Self.artworkCacheLimit { artworkCache[url] = data }
         }
         return result

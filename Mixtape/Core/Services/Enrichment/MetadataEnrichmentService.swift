@@ -1,15 +1,10 @@
-// MetadataEnrichmentService.swift
-// Mixtape — Core/Services/Enrichment
-//
-// Orchestrates the metadata enrichment pipeline:
-//
-//   1. Check whether enrichment is warranted (missing artist/album/artwork/year)
-//   2. Parse the filename for title + artist hints
-//   3. Build the best possible iTunes query from filename hints + existing partial tags
-//   4. Fetch and score iTunes results  (word-overlap similarity, title-weighted)
-//   5. Return the top EnrichmentCandidate, or a filename-only fallback
-//
-// This service is stateless and Sendable — safe to share across concurrency domains.
+// Metadata enrichment pipeline:
+// 1. Check whether enrichment is needed (missing artist/album/artwork/year)
+// 2. Parse the filename for title + artist hints
+// 3. Build an iTunes query from those hints and partial tags
+// 4. Fetch and score iTunes results (title-weighted word overlap)
+// 5. Return the best EnrichmentCandidate, or a filename-only fallback
+// Stateless and Sendable.
 
 import Foundation
 import OSLog
@@ -29,19 +24,11 @@ public final class MetadataEnrichmentService: Sendable {
 
     // MARK: - Public API
 
-    /// Whether an iTunes lookup could still add anything to `meta`.
-    ///
-    /// Import asks before deciding whether the review sheet has a lookup to
-    /// run, so a fully-tagged file never sets one going.
+    /// Whether an iTunes lookup could add anything, so fully tagged files skip it.
     public func canImprove(_ meta: ParsedMetadata) -> Bool { needsEnrichment(meta) }
 
-    /// The best candidate available without touching the network — embedded
-    /// tags where the file has them, the filename reading where it doesn't.
-    ///
-    /// This is what the review sheet opens with, immediately, while `enrich`
-    /// runs behind it. It is deliberately the same shape as the answer: if the
-    /// lookup finds nothing, or the user is offline, what's already on screen
-    /// is the final answer and nothing has to change.
+    /// Best candidate without the network: embedded tags, else the filename. The review sheet
+    /// shows this while `enrich` runs, so offline or no-match results need no change.
     public func localCandidate(url: URL, existing: ParsedMetadata) -> EnrichmentCandidate {
         // A file with real tags: they're better evidence than its name.
         guard needsEnrichment(existing) else {
@@ -76,8 +63,7 @@ public final class MetadataEnrichmentService: Sendable {
         )
     }
 
-    /// Returns an `EnrichmentCandidate` when the track is missing metadata or artwork,
-    /// or `nil` when everything already looks complete.
+    /// A candidate when metadata or artwork is missing, nil when complete.
     public func enrich(url: URL, existing: ParsedMetadata) async -> EnrichmentCandidate? {
         guard needsEnrichment(existing) else { return nil }
 
@@ -85,17 +71,14 @@ public final class MetadataEnrichmentService: Sendable {
         let parsed = filenameParser.parse(url)
         let filenameStem = url.deletingPathExtension().lastPathComponent
 
-        // 2. Best query inputs:
-        //    Prefer embedded tag if it differs from the raw filename stem (i.e. the parser
-        //    found a real tag), otherwise fall through to the filename parse result.
+        // 2. Prefer a real embedded tag (differs from the filename stem), else the filename parse.
         let hasEmbeddedTitle  = existing.title != filenameStem && !existing.title.isEmpty
         let hasEmbeddedArtist = existing.artistName != "Unknown Artist"
 
         let rawQueryTitle: String? = hasEmbeddedTitle ? existing.title : parsed.title
         let queryArtist:   String? = hasEmbeddedArtist ? existing.artistName : parsed.artistName
 
-        // Strip version modifiers (slowed, sped up, reverb, nightcore, remix, etc.)
-        // so the iTunes search targets the canonical song name.
+        // Strip version modifiers (slowed, sped up, remix...) to search for the original song.
         let queryTitle: String? = rawQueryTitle.map { filenameParser.stripVersionModifiers($0) }
 
         // 3. Without at least a title guess we can't do anything useful
@@ -113,14 +96,8 @@ public final class MetadataEnrichmentService: Sendable {
                               searchTitle: queryTitle,
                               artist: queryArtist)
 
-        // "Artist - Title" is what the parser assumes, but "Title - Artist" is
-        // just as common in the wild and the two are indistinguishable from the
-        // string alone — which is how a Tate McRae song arrives at the review
-        // sheet filed as an artist called "Get What I Want".
-        //
-        // Only worth asking when both halves came from the filename. Real
-        // embedded tags say which is which, and swapping those would be
-        // inventing a problem the file doesn't have.
+        // "Title - Artist" is as common as "Artist - Title", so also try the flipped reading.
+        // Only when both halves came from the filename.
         let alternate: Reading? = {
             guard !hasEmbeddedTitle, !hasEmbeddedArtist,
                   let flippedTitle = parsed.artistName,
@@ -131,18 +108,15 @@ public final class MetadataEnrichmentService: Sendable {
                            artist: flippedArtist)
         }()
 
-        // 4. Query iTunes — fall back gracefully if network is unavailable
+        // 4. Query iTunes, falling back if offline.
         var reading = primary
         let scoredBest: (ITunesTrackResult, Double)?
         do {
             if let hit = try await bestMatch(for: primary) {
                 scoredBest = hit
             } else if let alternate, let hit = try await bestMatch(for: alternate) {
-                // The catalogue recognised the other reading and not this one,
-                // and — because both gates ran — it recognised the *pair*, not
-                // just a song that happens to share the name. That's the only
-                // evidence available about which half of the filename is which.
-                MixLog.importing.debug("[Enrichment] Swapped reading matched — filename was 'Title - Artist'")
+                // The catalogue matched the flipped pair and not the original.
+                MixLog.importing.debug("[Enrichment] Swapped reading matched, filename was 'Title - Artist'")
                 scoredBest = hit
                 reading    = alternate
             } else {
@@ -157,11 +131,9 @@ public final class MetadataEnrichmentService: Sendable {
                                        source: .filenameOnly)
         }
 
-        // 5. No confident iTunes match — return filename-only candidate with
-        //    the original title. Neither reading was recognised, so there is no
-        //    reason to prefer the flipped one; the parser's assumption stands.
+        // 5. No confident match: filename-only candidate, keeping the parser's reading.
         guard let (best, confidence) = scoredBest else {
-            MixLog.importing.debug("[Enrichment] No result above threshold \(Self.minConfidence) — using filename only")
+            MixLog.importing.debug("[Enrichment] No result above threshold \(Self.minConfidence), using filename only")
             // Use the RAW (un-stripped) title so the track keeps its original name
             return EnrichmentCandidate(title: primary.rawTitle,
                                        artistName: primary.artist,
@@ -170,11 +142,8 @@ public final class MetadataEnrichmentService: Sendable {
                                        source: .filenameOnly)
         }
 
-        // 6. Good iTunes match found.
-        //     Keep the user's ORIGINAL title (e.g. "Mist slowed") — it accurately
-        //     describes their file. Pull everything else (artist, album, artwork,
-        //     year, genre) from iTunes.
-        //     Fetch the Deezer artist profile photo in parallel.
+        // 6. Match found. Keep the user's original title (e.g. "Mist slowed") and take the rest
+        // from iTunes. The Deezer artist photo is fetched in parallel.
         let originalTitle = reading.rawTitle
         let artworkURL = best.artworkUrl100
             .flatMap { itunesClient.artworkURL(from: $0, size: 600) }
@@ -200,33 +169,27 @@ public final class MetadataEnrichmentService: Sendable {
 
     // MARK: - Helpers
 
-    /// One interpretation of which half of a filename is the song and which is
-    /// the performer. `"A - B"` yields two of these, and only the catalogue can
-    /// say which one is right.
+    /// One reading of which half of "A - B" is the song and which the artist.
     private struct Reading {
-        /// Un-stripped — what the file says, and what stays on the track.
+        /// Un-stripped, as the file says. This stays on the track.
         let rawTitle:    String
         /// Version modifiers removed, for the catalogue query only.
         let searchTitle: String
         let artist:      String?
     }
 
-    /// Searches iTunes for one reading and returns its best scoring result,
-    /// or nil when nothing clears the identity gates and `minConfidence`.
-    /// Throws only on network failure, which the caller treats differently
-    /// from "no match".
+    /// Best iTunes result for one reading that passes the identity gates and `minConfidence`.
+    /// Throws only on network failure.
     private func bestMatch(for reading: Reading) async throws -> (ITunesTrackResult, Double)? {
         let results = try await itunesClient.search(title: reading.searchTitle,
                                                     artist: reading.artist)
         MixLog.importing.debug("[Enrichment] iTunes returned \(results.count) results for title='\(reading.searchTitle)' artist='\(reading.artist ?? "nil")'")
 
-        // Pre-filter: exclude result types that clearly don't match the intent.
-        // If the user's file isn't labelled "instrumental" or "karaoke", they don't
-        // want those versions — even if they happen to share the same title.
+        // Drop instrumental/karaoke results unless the query asks for them.
         let queryLower = reading.searchTitle.lowercased()
         let queryIsInstrumental = queryLower.contains("instrumental") || queryLower.contains("karaoke")
         let filteredResults = results.filter { r in
-            if queryIsInstrumental { return true }   // user wants that type — keep all
+            if queryIsInstrumental { return true }  // user wants that type, keep all
             let name = r.trackName.lowercased()
             return !name.contains("instrumental") &&
                    !name.contains("karaoke")      &&
@@ -235,16 +198,11 @@ public final class MetadataEnrichmentService: Sendable {
         }
         MixLog.importing.debug("[Enrichment] After type-filter: \(filteredResults.count) / \(results.count) results remain")
 
-        // Identity gates. Scoring alone can't do this job — it's a weighted
-        // blend, so a perfect title drags a completely wrong artist over the
-        // line at 0.65. That is how a Kanye West file came back as AURORA's
-        // "Runaway", and how an unreleased Tate McRae song came back as a
-        // Morgan Wallen collab. A near-miss is not a match; when nothing here
-        // is genuinely the same song, the filename is the better answer.
+        // Identity gates. The weighted score lets a perfect title carry a wrong artist,
+        // so both must independently match.
         let plausible = filteredResults.filter { r in
             guard titlesDescribeSameSong(result: r.trackName, query: reading.searchTitle) else { return false }
-            // Nothing to check against for a single-component filename — the
-            // title is the only evidence the file offers.
+            // Single-component filename: the title is the only evidence.
             guard let artist = reading.artist else { return true }
             return artistsMatch(r.artistName, artist)
         }
@@ -264,13 +222,8 @@ public final class MetadataEnrichmentService: Sendable {
 
     // MARK: - Identity gates
 
-    /// Is `result` the same song the file is named after?
-    ///
-    /// Extra words on the catalogue side are ordinary — "(feat. X)", a
-    /// subtitle, an edition marker. Extra words on the *user's* side are the
-    /// warning sign: the file says "Get What I Want", the nearest catalogue
-    /// entry is "What I Want", and those are different songs by different
-    /// people. Jaccard can't see that asymmetry — it scored that pair 0.75.
+    /// Extra words on the catalogue side ("(feat. X)", editions) are fine. Extra words on
+    /// the file's side mean a different song ("Get What I Want" vs "What I Want").
     private func titlesDescribeSameSong(result: String, query: String) -> Bool {
         let queryWords  = words(filenameParser.stripVersionModifiers(query))
         let resultWords = words(stripFeaturedGroup(filenameParser.stripVersionModifiers(result)))
@@ -278,21 +231,14 @@ public final class MetadataEnrichmentService: Sendable {
         return queryWords.isSubset(of: resultWords)
     }
 
-    /// Do these two artist names refer to the same act?
-    ///
-    /// Containment rather than similarity, because both directions are normal:
-    /// the file says "Tyler" for "Tyler, The Creator", and the catalogue says
-    /// "Morgan Wallen & Tate McRae" for a file credited to Tate McRae. What it
-    /// rejects is the case that matters — no overlap at all.
+    /// Containment either way ("Tyler" vs "Tyler, The Creator"). Rejects no overlap at all.
     private func artistsMatch(_ result: String, _ query: String) -> Bool {
         let a = words(result), b = words(query)
         guard !a.isEmpty, !b.isEmpty else { return false }
         return a.isSubset(of: b) || b.isSubset(of: a)
     }
 
-    /// Drops a trailing "(feat. …)" group from a catalogue title. Bracketed
-    /// forms only: a bare "with" is a word in plenty of real titles
-    /// ("Dancing With Myself"), and cutting there compares half a song.
+    /// Drops a trailing bracketed "(feat. ...)". Bare "with" is left since it appears in real titles.
     private func stripFeaturedGroup(_ title: String) -> String {
         title.replacingOccurrences(
             of: #"\s*[\(\[]\s*(feat\.?|ft\.?|featuring|with)\s[^\)\]]*[\)\]]?\s*$"#,
@@ -301,8 +247,7 @@ public final class MetadataEnrichmentService: Sendable {
         ).trimmingCharacters(in: .whitespaces)
     }
 
-    /// Meaningful normalised words. One-character tokens are dropped — they're
-    /// mostly apostrophe debris ("it's" → "it s") — unless that empties the set.
+    /// Normalised words. One-character tokens (apostrophe debris) are dropped unless that empties the set.
     private func words(_ s: String) -> Set<String> {
         let all = Set(normalize(s).components(separatedBy: " ").filter { !$0.isEmpty })
         let meaningful = all.filter { $0.count > 1 }
@@ -317,11 +262,8 @@ public final class MetadataEnrichmentService: Sendable {
         meta.year        == nil
     }
 
-    /// Composite confidence score for an iTunes result against the query.
-    /// Title is weighted 65%, artist 35%.
-    ///
-    /// Both sides are stripped of version modifiers before comparison so that
-    /// "Blinding Lights" (iTunes) scores well against "Blinding Lights" (stripped query).
+    /// Confidence for an iTunes result: title 65%, artist 35%. Both sides have version
+    /// modifiers stripped first.
     private func score(result: ITunesTrackResult,
                        queryTitle: String,
                        queryArtist: String?) -> Double {

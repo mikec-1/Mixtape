@@ -1,31 +1,13 @@
-// TextEditingFocus.swift
-// Mixtape — SharedUI/Components
-//
-// "A text field has the keyboard right now."
-//
-// The Mac's ⌘⌫ is a hidden `Button` in the window (`MacDeleteCommand`), and a
-// key equivalent on a button beats whatever is being typed into: with the caret
-// in the playlist's search field, ⌘⌫ — which means "clear this line" in every
-// other Mac text field — was offering to delete the song that happened to be
-// selected behind it.
-//
-// A shortcut can't ask who the first responder is, but it can be disabled, and
-// a disabled key equivalent isn't swallowed: the event carries on down the
-// responder chain and the field does the ordinary thing with it. So fields say
-// when they're being typed into, and the app-wide destructive shortcut stands
-// down for as long as that's true.
-//
-// Fields register by identity rather than flipping a shared flag, because focus
-// moving from one field to another fires the new field's `true` and the old
-// field's `false` in an order nobody controls — and a lost `false` would leave
-// ⌘⌫ dead for the rest of the session.
+// Tracks whether a text field has focus, so the Mac's ⌘⌫ (a hidden button,
+// `MacDeleteCommand`) can be disabled and fall through to the field.
+// Fields register by identity: focus moving between fields fires true and
+// false in no fixed order, and a lost false would leave ⌘⌫ dead.
 
 import Combine
 import SwiftUI
 
 extension View {
-    /// Marks this view as a text field holding (or not holding) the keyboard.
-    /// A no-op on iOS, which has no key equivalents to defend against.
+    /// Marks this view as holding the keyboard. No-op on iOS.
     func mixEditingFocus(_ isFocused: Bool) -> some View {
         modifier(MixEditingFocus(isFocused: isFocused))
     }
@@ -33,12 +15,8 @@ extension View {
 
 #if os(macOS)
 
-/// The set of fields currently being typed into, app-wide.
-///
-/// A singleton rather than something handed down the environment: the fields
-/// that need it are scattered across sheets, popovers and the command palette's
-/// own overlay, and a shared view that crashes wherever an ancestor forgot to
-/// inject something is a worse trade than one global with two members.
+/// Fields being typed into, app-wide. A singleton because the fields are spread
+/// across sheets, popovers and the command palette.
 @MainActor
 final class MacTextEditingMonitor: ObservableObject {
 

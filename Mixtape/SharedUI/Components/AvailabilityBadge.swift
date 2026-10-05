@@ -1,9 +1,5 @@
-// AvailabilityBadge.swift
-// Mixtape — SharedUI/Components
-//
-// The row marker for "where does this song's audio live". One view for both
-// platforms' SwiftUI rows; the Mac's AppKit table draws the same decision from
-// the same `TrackAvailability.badge*` properties (see NativeTrackTable).
+// Row marker for where a song's audio lives. The AppKit table draws the same
+// `TrackAvailability.badge*` values.
 
 import SwiftUI
 

@@ -1,14 +1,10 @@
-// FavoriteRepository.swift
-// Mixtape — Data/Repositories
-
 import Foundation
 import SwiftData
 
 @MainActor
 public final class FavoriteRepository {
 
-    /// Never stored: the context belongs to whichever account's store is open
-    /// right now. See `ModelStore`.
+    /// Not stored: belongs to the open account's store. See `ModelStore`.
     private var context: ModelContext { ModelStore.shared.context }
 
     public init() {}
@@ -39,13 +35,7 @@ public final class FavoriteRepository {
         try context.saveBatched()
     }
 
-    /// Favourites a whole selection in one fetch and one save.
-    ///
-    /// Called per song, `add(trackID:)` is a predicate fetch *and* a full
-    /// `context.save()` each time — importing 2,200 Liked Songs meant 2,200 of
-    /// each, on the main thread, after the progress bar had already reached the
-    /// end. That was the second freeze: the one that happened when the import
-    /// looked finished.
+    /// Favourites a whole selection with one fetch and one save.
     public func add(trackIDs: [UUID], deviceID: String) throws {
         guard !trackIDs.isEmpty else { return }
         let existing = Set(try allFavouritedIDs())
@@ -61,11 +51,7 @@ public final class FavoriteRepository {
         try remove(trackIDs: [trackID])
     }
 
-    /// Unhearts a whole selection in one fetch and one save — the mirror of
-    /// `add(trackIDs:)`, and for the same reason. Removing 2,100 imported songs
-    /// went through the single-id version, so it was 2,100 predicate fetches and
-    /// 2,100 commits on the main thread: the app was unresponsive for the whole
-    /// of it.
+    /// Unhearts a whole selection with one fetch and one save.
     public func remove(trackIDs: [UUID]) throws {
         let doomed = Set(trackIDs)
         guard !doomed.isEmpty else { return }
@@ -87,9 +73,8 @@ public final class FavoriteRepository {
 
     // MARK: - Sync Rebuild
 
-    /// Atomically replaces all FavoriteEntity records with the given ordered list.
-    /// Called after pullPlaylists() merges a new Favourites track_ids array from the server.
-    /// Preserves addedAt for IDs that were already locally hearted; uses Date() for new ones.
+    /// Replaces all favourites with this ordered list, after a pull. Keeps `addedAt`
+    /// for ids already hearted; new ones get now.
     public func rebuildFromIDs(_ ids: [UUID], deviceID: String) throws {
         // Build a lookup of existing addedAt values so we don't lose timestamps.
         var existingAddedAt: [UUID: Date] = [:]

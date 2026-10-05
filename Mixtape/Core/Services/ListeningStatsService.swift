@@ -1,10 +1,5 @@
-// ListeningStatsService.swift
-// Mixtape — Core/Services
-//
-// Pure read-side aggregation over the persistent play history ("Year in
-// Mixtape"). No new schema, no writes — it joins PlayHistory play events
-// against the in-memory library to produce top tracks/artists, estimated
-// minutes and a by-hour distribution.
+// Read-only stats over play history ("Year in Mixtape"): top tracks and
+// artists, minutes, and plays by hour.
 
 import Foundation
 import OSLog
@@ -185,9 +180,7 @@ public final class ListeningStatsService {
     /// Past this place a rank stops meaning anything, so it isn't shown.
     private let rankDepth = 50
 
-    /// Wipes the account's play history on the server too. Set by
-    /// `AppDependencies` once the sync service exists — without it, a reset is
-    /// undone the next time another device pushes the plays it still holds.
+    /// Wipes history on the server too, or other devices push it back. Set by AppDependencies.
     public var remoteWipe: (() -> Void)?
 
     /// What has to follow a wipe the user asked for: rebuild derived state, republish the
@@ -209,14 +202,8 @@ public final class ListeningStatsService {
         }
     }
 
-    /// Erases everything the stats are computed from: the play log, and the
-    /// snapshots of played tracks that never lived in the library.
-    ///
-    /// Deleting your music does NOT do this, and shouldn't — history is a record
-    /// of what you listened to, not of what you own, and re-importing a song
-    /// should not resurrect zeroed play counts. But it does mean a wiped library
-    /// can still report top artists, which is only ever what someone wants when
-    /// they asked for it explicitly.
+    /// Erases the play log and snapshots of played tracks that aren't in the library.
+    /// Deleting music doesn't do this; history is what you listened to.
     public func resetHistory() {
         artistPlaysCache = nil
         do { try history.deleteAll() } catch {
@@ -228,9 +215,8 @@ public final class ListeningStatsService {
         }
     }
 
-    /// Clearing history from a page: the wipe plus everything that has to follow it, so
-    /// every Clear button has the same consequences. `resetHistory` is the mechanical
-    /// half, for callers that announce their own reset.
+    /// The wipe plus everything that follows it, so every Clear button behaves the same.
+    /// `resetHistory` is the bare wipe for callers that announce their own reset.
     public func clearHistory() async {
         resetHistory()
         await afterClear?()
@@ -251,8 +237,7 @@ public final class ListeningStatsService {
         let plays = start.map { s in rows.filter { $0.playedAt >= s } } ?? rows
         guard !plays.isEmpty else { return ListeningStats.empty }
 
-        // Resolve a play's track against the library first, then the online-track
-        // snapshot store — so Discover plays count toward stats too.
+        // Library first, then online-track snapshots, so Discover plays count too.
         let snapshotMap = mixMainActivity("stats-compute ▸ fetch-snapshots") {
             (try? snapshots?.fetchAll()) ?? [:]
         }
@@ -270,9 +255,7 @@ public final class ListeningStatsService {
             if hour >= 0 && hour < 24 { playsByHour[hour] += 1 }
             playsByDay[calendar.startOfDay(for: play.playedAt), default: 0] += 1
             devicePlays[play.deviceID, default: 0] += 1
-            // The real listen when the play recorded one; rows written before
-            // the engine reported it, and plays the app never finalised, fall
-            // back to the track's full length.
+            // Recorded listen time, else the track's full length (older or unfinalised rows).
             if play.secondsPlayed > 0 {
                 estimatedSeconds += play.secondsPlayed
             } else if let track = resolve(play.trackID) {
@@ -306,9 +289,7 @@ public final class ListeningStatsService {
             resolve(id).map { TrackStat(track: $0, playCount: countByTrack[id] ?? 0, movement: trackMoves[id]) }
         }
 
-        // Artists, albums and genres are read off each song once, not once per play.
-        // The cover is carried as a track id rather than bytes: this runs over every
-        // song ever played, and only ten of them end up on screen.
+        // Grouped per song, not per play. Covers are track ids, not bytes; only ten get drawn.
         typealias Group = (name: String, detail: String, count: Int, cover: UUID?)
         func add(_ key: String, _ name: String, _ detail: String, _ count: Int, _ cover: UUID,
                  to groups: inout [String: Group]) {
@@ -317,9 +298,7 @@ public final class ListeningStatsService {
             if entry.cover == nil { entry.cover = cover }
             groups[key] = entry
         }
-        // Each credited artist counted separately: "Dave, Stormzy" is two
-        // artists, and bucketing it whole both hid them from the stats and fed
-        // the recommendation seeds a name no catalogue can resolve.
+        // Each credited artist counts separately: "Dave, Stormzy" is two artists.
         func artistGroups(_ counts: [UUID: Int]) -> [String: Group] {
             var out: [String: Group] = [:]
             for (id, count) in counts {
@@ -463,9 +442,8 @@ public final class ListeningStatsService {
 
     // MARK: - Log
 
-    /// One page of the log, newest first, resolved to songs. `rows` is how many plays the
-    /// page held before songs that are gone were dropped, so a short page isn't
-    /// necessarily the last one.
+    /// One page of the log, newest first. `rows` counts plays before deleted songs were
+    /// dropped, so a short page isn't necessarily the last.
     public func historyPage(limit: Int = 100, offset: Int = 0) -> (plays: [HistoryPlay], rows: Int) {
         let rows = (try? history.fetchPlays(limit: limit, offset: offset)) ?? []
         guard !rows.isEmpty else { return ([], 0) }

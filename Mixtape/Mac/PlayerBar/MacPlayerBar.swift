@@ -1,37 +1,20 @@
-// MacPlayerBar.swift
-// Mixtape — Mac/PlayerBar
-//
-// Persistent now-playing bar pinned to the bottom of the main window.
-//
-// Layout (3-column at 72px tall):
-//   Left  (260px) — artwork + track title / artist  (crossfades on track change)
-//   Center (flex) — transport controls + progress scrubber
-//   Right  (200px) — volume slider
-//
-// Controls:
-//   • Shuffle / Repeat buttons wired to QueueService (toggle / cycle)
-//   • Active-state indicator dot under shuffle and repeat
-//   • TransportButton component with hover-background + per-button hover state
-//   • PlayPauseButton scales up slightly on hover
-//   • Now-playing section crossfades when the current track changes
+// Now-playing bar pinned to the bottom of the main window: track info on the
+// left, transport + scrubber in the centre, volume and extras on the right.
 
 #if os(macOS)
 import SwiftUI
 
 struct MacPlayerBar: View {
 
-    /// The bar's own height, excluding the hairline above it. Named because
-    /// bottom-anchored overlays on the root have to clear it and were otherwise
-    /// each carrying their own copy of 72.
+    /// Bar height without the hairline, for overlays that have to clear it.
     static let height: CGFloat = 72
 
     @EnvironmentObject private var engine:      PlaybackEngine
     @EnvironmentObject private var appState:    MacAppState
     @EnvironmentObject private var deps:        AppDependencies
     @EnvironmentObject private var coordinator: OnlinePlaybackCoordinator
-    /// See MacQueuePanelView: `engine.queue` is a plain `let`, so shuffle and
-    /// repeat state has to be observed on the service itself for the buttons to
-    /// light up the moment they are pressed.
+    /// Observed directly: `engine.queue` is a plain `let`, so shuffle/repeat
+    /// changes don't publish through the engine.
     @EnvironmentObject private var queueService: QueueService
 
 
@@ -40,17 +23,11 @@ struct MacPlayerBar: View {
             Divider()
                 .overlay(Color.mixSeparator.opacity(appState.karaokeActive ? 0.4 : 1))
 
-            // Three columns, and the outer two are *equally* flexible rather
-            // than fixed. That is what keeps the transport controls on the
-            // window's centre line while the now-playing block takes whatever
-            // room is left — which, on a normal window, is a good 200pt more
-            // than the 260 this used to hand it. A song called "FRANCHISE
-            // (feat. Future, Young Thug & M.I.A.) - REMIX" was being cut to
-            // "FRANCHISE (feat. Futu…" with half the bar sitting empty.
-            //
-            // The centre is the least flexible of the three (a bounded range),
-            // so the stack sizes it first and splits the remainder between the
-            // sides — equal shares, so nothing shifts when the song changes.
+            // Above the bar, so it reads as the Jam the whole player belongs to.
+            JamStrip(jam: deps.jam, hPadding: 20)
+
+            // Outer columns are equally flexible so the transport stays centred and the
+            // title gets the leftover width. The centre is bounded, so it's sized first.
             HStack(spacing: 20) {
                 nowPlayingSection
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -65,7 +42,7 @@ struct MacPlayerBar: View {
             .padding(.horizontal, 20)
             .frame(height: Self.height)
 
-            // Spotify's strip: which device the controls above are driving.
+            // Which device the controls are driving.
             // ponytail: grows the bar 24pt while showing, so toasts placed off
             // `height` sit a little low; fold it into `height` if that shows.
             WithActiveRemote(continuity: deps.continuity) { remote in
@@ -74,31 +51,14 @@ struct MacPlayerBar: View {
                 }
             }
         }
-        // Flat, not a material, and on purpose.
-        //
-        // A `Material` at the bottom edge of the window has nothing of the
-        // app's behind it to blend with, so AppKit blends it against what is
-        // behind the *window* — the desktop. The bar came out blue over a blue
-        // wallpaper and grey over a grey one, changing colour as the window
-        // moved, for no reason the app could explain. Exactly the bug the
-        // sidebar had before it stopped being an NSVisualEffectView; see the
-        // note on the sidebar background in `MacRootView`.
-        //
-        // An opaque colour *under* the material wouldn't fix it, because
-        // behind-window blending never samples in-window content. The band has
-        // to take a real colour: `mixSurface` over `mixBackground` still reads
-        // as raised, and now reads the same everywhere the window sits.
-        // Opaque either way — a see-through bar over moving lyrics is
-        // unreadable. In karaoke the fill is the album's own colour under the
-        // same scrim the backdrop uses, so the bar continues the wash instead
-        // of cutting a grey band across it.
+        // Flat, not a Material: at the window edge a material blends with the desktop
+        // behind the window. Opaque: a see-through bar over moving lyrics is unreadable.
+        // In karaoke it takes the album tint under the backdrop's scrim.
         .background {
             if appState.karaokeActive {
                 ZStack {
                     (karaokeTint ?? Color(white: 0.12))
-                    // Only a light scrim: the tint is already the backdrop's own
-                    // colour, mixed and darkened the same way, so a heavy black
-                    // wash here just brought back the slab it replaced.
+                    // Light scrim only; the tint is already darkened like the backdrop.
                     Color.black.opacity(0.22)
                 }
             } else {
@@ -110,8 +70,7 @@ struct MacPlayerBar: View {
         .onChange(of: queueService.currentTrack?.id) { _, _ in refreshKaraokeTint() }
     }
 
-    /// The second stop of the karaoke gradient — the colour it has reached by
-    /// the bottom of the window, which is where the bar sits.
+    /// The karaoke gradient's bottom colour, where the bar sits.
     @State private var karaokeTint: Color? = nil
 
     private func refreshKaraokeTint() {
@@ -143,25 +102,18 @@ struct MacPlayerBar: View {
                             .help(track.displayTitle)
 
                             if track.isExplicit { MixExplicitBadge() }
+                            if track.origin == .edit { MixEditBadge() }
                         }
 
                         MixArtistLine(targets: artistTargets(for: track))
                     }
 
-                    // No spacer before it: the mark belongs to the song's name,
-                    // so it sits at the end of the name rather than pinned to a
-                    // column edge the title may never reach. Spotify's does the
-                    // same, and it's the difference between "is this saved?" and
-                    // "is *that* saved?".
-                    //
-                    // One control, one meaning: in your library or not. The heart
-                    // lives in the right-click menu — `toggleFavourite` refuses a
-                    // song that isn't saved yet, so it can't be the primary
-                    // affordance here anyway.
+                    // Right after the title (Spotify style). Library in/out only; the heart is in the
+                    // right-click menu since `toggleFavourite` needs a saved song.
                     NowPlayingSaveButton(trackID: track.id, size: 13)
                         .padding(.leading, 2)
                 }
-                .id(track.id)           // forces SwiftUI to re-create on track change → transition fires
+                .id(track.id)  // recreated per track so the transition runs
                 .transition(.opacity)
                 .contextMenu { nowPlayingMenu(track: track, favoured: favoured) }
             } else {
@@ -185,16 +137,12 @@ struct MacPlayerBar: View {
     }
 
 
-    /// Navigation target for the artist line. Kept for the context-menu
-    /// "Go to Artist" action, which routes to the primary artist.
+    /// For the context menu's "Go to Artist" (primary artist).
     private func artistTarget(for track: Track) -> (() -> Void)? {
         artistTargets(for: track).first?.action
     }
 
-    /// One tappable target per individual artist on the track, and the
-    /// title's album target. Both rules live in `TrackLinks` — the queue, the
-    /// Recent list and the lyrics header ask the same questions of the same
-    /// track and have to get the same answers.
+    /// Per-artist targets plus the album target. Rules live in `TrackLinks`.
     private func artistTargets(for track: Track) -> [(name: String, action: () -> Void)] {
         TrackLinks.artists(for: track, appState: appState)
     }
@@ -207,9 +155,8 @@ struct MacPlayerBar: View {
         deps.libraryService.track(id: track.id) != nil && !SavedAlbumsService.shared.albumOnlyIDs.contains(track.id)
     }
 
-    /// Right-click menu for the now-playing track in the player bar. Mirrors the
-    /// Discover row menu, plus favourite + navigation. Library/queue actions for
-    /// an unsaved (online) track route through the coordinator.
+    /// Right-click menu for the current track. Unsaved online tracks route
+    /// through the coordinator.
     @ViewBuilder
     private func nowPlayingMenu(track: Track, favoured: Bool) -> some View {
         Button(engine.state.isPlaying ? "Pause" : "Play",
@@ -217,12 +164,8 @@ struct MacPlayerBar: View {
             engine.togglePlayPause()
         }
 
-        // Queue actions, whatever is playing. An unsaved Discover track has to go
-        // through the coordinator so a stream gets resolved for it; a library row
-        // goes straight onto the queue, and the engine resolves it online on
-        // arrival if it has no audio of its own. Only the coordinator branch used
-        // to exist, which left songs imported from a Spotify playlist link — real
-        // library rows — with no queue actions at all.
+        // Unsaved Discover tracks go through the coordinator to resolve a stream;
+        // library rows go straight onto the queue.
         if let online = coordinator.currentOnlineTrack, !isInLibrary(track) {
             Button("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") {
                 Task { await coordinator.playNext(online) }
@@ -244,9 +187,7 @@ struct MacPlayerBar: View {
         }
 
         Divider()
-        // Favouriting needs a library row — `toggleFavourite` refuses anything
-        // else — so on an unsaved Discover song this was a menu item that looked
-        // live and did nothing. "Add to Library" above is the offer there.
+        // Favouriting needs a library row; unsaved songs get Add to Library instead.
         if isInLibrary(track) {
             Button(favoured ? "Remove from Liked Songs" : "Add to Liked Songs",
                    systemImage: favoured ? "heart.slash" : "heart") {
@@ -263,6 +204,12 @@ struct MacPlayerBar: View {
             Button("Wrong Version? Re-resolve", systemImage: "arrow.triangle.2.circlepath") {
                 Task { await deps.reResolve(track) }
             }
+        }
+        if track.canEdit {
+            Button("Edit Song…", systemImage: "slider.horizontal.3") { appState.editTrack = track }
+        }
+        if track.edit != nil {
+            Button("Post…", systemImage: "paperplane") { appState.postTrack = track }
         }
         Divider()
         // A Discover song keeps its Deezer id, which makes the shorter link.
@@ -335,7 +282,7 @@ struct MacPlayerBar: View {
     private var rightSection: some View {
         HStack(spacing: 8) {
 
-            // ── Volume ────────────────────────────────────────────────────
+            // Volume
             Image(systemName: engine.volume < 0.01 ? "speaker.fill" : "speaker.wave.1.fill")
                 .accessibilityHidden(true)
                 .font(.system(size: 12))
@@ -358,7 +305,7 @@ struct MacPlayerBar: View {
                 .font(.system(size: 12))
                 .foregroundStyle(Color.mixTextTertiary)
 
-            // ── Speed / Sleep timer menu ──────────────────────────────────
+            // Speed / Sleep timer menu
             Menu {
                 Section("Playback Speed") {
                     ForEach([0.5, 0.75, 1.0, 1.25, 1.5, 2.0], id: \.self) { rate in
@@ -385,8 +332,7 @@ struct MacPlayerBar: View {
                 }
             } label: {
                 Group {
-                    // The rate itself rather than a tinted gauge, so a changed
-                    // speed doesn't rest on colour alone.
+                    // Shows the rate, not just a colour.
                     if engine.sleepTimerRemaining == nil && engine.playbackRate != 1.0 {
                         Text(String(format: "%g×", Double(engine.playbackRate)))
                             .font(.system(size: 11, weight: .semibold).monospacedDigit())
@@ -406,15 +352,21 @@ struct MacPlayerBar: View {
             .accessibilityLabel("Playback speed and sleep timer")
             .help("Playback speed & sleep timer")
 
-            // ── Divider ───────────────────────────────────────────────────
+            // Divider
             Divider()
                 .frame(height: 18)
                 .padding(.horizontal, 2)
 
-            // ── Devices (continuity) ──────────────────────────────────────
+            // Devices (continuity)
             MacDevicesButton(continuity: deps.continuity, downloads: deps.downloadManager)
 
-            // ── Lyrics button ─────────────────────────────────────────────
+            if let track = queueService.currentTrack, track.canEdit {
+                BarIconButton(icon: "slider.horizontal.3", isActive: false, help: "Edit Song") {
+                    appState.editTrack = track
+                }
+            }
+
+            // Lyrics button
             BarIconButton(
                 icon: "quote.bubble",
                 isActive: appState.lyricsPresented,
@@ -426,10 +378,8 @@ struct MacPlayerBar: View {
             // Popover only in windowed mode; fullscreen is hosted by MacRootView.
             .popover(isPresented: Binding(
                 get: { appState.lyricsPresented && !appState.lyricsFullscreen },
-                // Only treat a dismiss as "close lyrics" when we're still in
-                // windowed mode. If lyricsFullscreen just flipped to true, the
-                // popover is dismissing to hand off to the fullscreen overlay —
-                // keep lyricsPresented so the overlay stays up.
+                // Only close lyrics on dismiss in windowed mode; a switch to fullscreen
+                // dismisses the popover too.
                 set: { if !$0 && !appState.lyricsFullscreen { appState.lyricsPresented = false } }
             ), arrowEdge: .top) {
                 MacLyricsView()
@@ -438,7 +388,7 @@ struct MacPlayerBar: View {
                     .environmentObject(deps)
             }
 
-            // ── Queue button ──────────────────────────────────────────────
+            // Queue button
             BarIconButton(
                 icon: "list.bullet",
                 isActive: appState.rightPanel == .queue,
@@ -447,7 +397,7 @@ struct MacPlayerBar: View {
                 appState.toggleQueue()
             }
 
-            // ── Now Playing / Inspector toggle ────────────────────────────
+            // Now Playing / Inspector toggle
             BarIconButton(
                 icon: "sidebar.right",
                 isActive: appState.rightPanel == .nowPlaying,
@@ -463,15 +413,11 @@ struct MacPlayerBar: View {
 }
 
 // MARK: - TransportButton
-//
-// A unified skip / mode button with:
-//   • Hover: subtle rounded-rect background
-//   • Active (shuffle on / repeat not .off): accent color + indicator dot
+// Skip/mode button: hover plate, accent colour + dot when active.
 
 private struct TransportButton: View {
     let icon:       String
-    /// Spoken name. The SF Symbol name is not one — VoiceOver reads an
-    /// unlabelled icon button as "button" and nothing else.
+    /// Spoken name for VoiceOver.
     let label:      String
     var size:       CGFloat = 14
     var isActive:   Bool    = false
@@ -481,12 +427,8 @@ private struct TransportButton: View {
     @State private var isHovered = false
 
     var body: some View {
-        // The button's 28×28 icon frame is the *only* thing that participates in
-        // the HStack's vertical centering, so its icon center sits exactly on the
-        // transport row's centerline — matching the dot-less PlayPauseButton.
-        // The active-indicator dot is drawn as a bottom-anchored overlay with a
-        // negative offset, so it hangs *below* the icon without changing the
-        // layout height or shifting the icon's center.
+        // Only the 28x28 icon takes part in vertical centring; the dot is an overlay
+        // hanging below it so it doesn't shift the icon.
         Button(action: action) {
             Image(systemName: icon)
                 .font(.system(size: size, weight: isActive ? .semibold : .regular))
@@ -511,8 +453,7 @@ private struct TransportButton: View {
         .disabled(isDisabled)
         .onHover { isHovered = $0 }
         .accessibilityLabel(label)
-        // The active dot is the only visual saying shuffle/repeat is on, and it
-        // is not something VoiceOver can see.
+        // The dot is invisible to VoiceOver.
         .accessibilityAddTraits(isActive ? .isSelected : [])
     }
 
@@ -535,9 +476,7 @@ private struct PlayPauseButton: View {
             switch engine.state {
             case .playing, .paused: engine.togglePlayPause()
             default:
-                // Stopped, but a queue can still be sitting there waiting —
-                // filled by "Add to Queue" before anything was ever played.
-                // togglePlayPause starts it from the top.
+                // Stopped with a queue waiting: start from the top.
                 if !engine.queue.queue.isEmpty { engine.togglePlayPause() }
             }
         } label: {
@@ -555,10 +494,7 @@ private struct PlayPauseButton: View {
                 Image(systemName: playPauseIcon)
                     .font(.system(size: 14, weight: .bold))
                     .foregroundStyle(.white)
-                    // A right-pointing triangle's geometric centroid sits left of
-                    // its optical center, so play.fill reads as shifted-left in the
-                    // circle. Nudge it right ~1.5pt to optically center it. pause.fill
-                    // and hourglass are symmetric and stay perfectly centered.
+                    // Optical centring: nudge the play triangle right.
                     .offset(x: playPauseIcon == "play.fill" ? 1.5 : 0)
                     .mixBounce(value: engine.state.isPlaying)
             }
@@ -600,9 +536,7 @@ private struct MacDevicesButton: View {
 }
 
 // MARK: - BarIconButton
-//
-// Small icon button used in the right section of the player bar.
-// Active state shows the icon in accent colour.
+// Small right-section icon button; accent colour when active.
 
 private struct BarIconButton: View {
     let icon:     String
@@ -631,8 +565,7 @@ private struct BarIconButton: View {
         .buttonStyle(.plain).mixHandCursor()
         .onHover { isHovered = $0 }
         .help(help)
-        // The tooltip is already the button's name in words — an icon-only
-        // button has nothing else for VoiceOver to read.
+        // Icon-only button: VoiceOver reads the tooltip text.
         .accessibilityLabel(help)
         .accessibilityAddTraits(isActive ? .isSelected : [])
     }
@@ -642,9 +575,7 @@ private struct BarIconButton: View {
 
 struct MacProgressScrubber: View {
 
-    /// Passed in rather than taken from the environment: this is the one view in
-    /// the bar that has to redraw on every tick, and holding the clock here
-    /// keeps the tick from reaching anything else. See `PlaybackClock`.
+    /// Passed in so only this view redraws on each tick. See `PlaybackClock`.
     @ObservedObject var clock: PlaybackClock
 
     @EnvironmentObject private var engine: PlaybackEngine
@@ -668,6 +599,7 @@ struct MacProgressScrubber: View {
             )
             .tint(Color.mixPrimary)
             .disabled(engine.duration == 0)
+            .overlay { CommentDots(queue: engine.queue, duration: engine.duration, inset: 8, color: .mixTextPrimary) }
             .accessibilityLabel("Playback position")
             .accessibilityValue("\(formatTime(isDragging ? dragValue : clock.currentTime)) of \(formatTime(engine.duration))")
 

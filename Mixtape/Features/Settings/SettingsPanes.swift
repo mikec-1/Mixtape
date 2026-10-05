@@ -1,11 +1,8 @@
-// SettingsPanes.swift
-// Mixtape — Features/Settings
-//
-// One view per settings category. Each pane owns the sheets and confirmations
-// its own rows raise, so nothing has to be threaded back up to the shell — the
-// shell only decides which pane is on screen.
+// One view per settings category. Each pane owns its own sheets and confirmations;
+// the shell only picks which pane is on screen.
 
 import SwiftUI
+import UserNotifications
 #if os(macOS)
 import AppKit
 #endif
@@ -21,20 +18,17 @@ struct AccountPane: View {
     @EnvironmentObject private var appState: MacAppState
     #endif
     @AppStorage(ProfileStatsService.sharingDefaultsKey) private var shareListeningActivity = true
+    @AppStorage(Analytics.optInKey) private var helpImprove = false
     @State private var showFindPeople = false
     #if os(iOS)
     @State private var showAccount = false
     @State private var showMyProfile = false
     #endif
 
-    /// The real `profiles` row for the signed-in user, once it arrives. The handle
-    /// on that row is what other people see, and it can differ from the display
-    /// name held locally — so the page opens on the local guess and corrects
-    /// itself rather than making you wait for a round trip to press a button.
+    /// The real `profiles` row once it arrives. The page opens on the local guess and corrects itself.
     @State private var resolvedProfile: UserProfile?
 
-    /// The signed-in user seen as a `profiles` row — the shape the profile page
-    /// takes for everyone.
+    /// The signed-in user as a `profiles` row.
     private var myProfile: UserProfile? {
         guard let user = vm.currentUser else { return nil }
         if let resolved = resolvedProfile, resolved.id == user.id { return resolved }
@@ -69,8 +63,7 @@ struct AccountPane: View {
             }
 
             SettingsGroup {
-                // The only reliable way to know what you're publishing is to look
-                // at the same page everyone else gets.
+                // Shows the same page everyone else sees.
                 if myProfile != nil {
                     SettingsButtonRow(id: "account.myProfile",
                                       title: "My Profile",
@@ -119,10 +112,17 @@ struct AccountPane: View {
                             Task { await deps.profileStatsService.setSharing(newValue, userID: id) }
                         }
                     }
+                SettingsToggleRow(id: "account.analytics",
+                                  title: "Help Improve Mixtape",
+                                  subtitle: "Sends which songs you skip and which searches find nothing. Off by default.",
+                                  icon: "chart.bar",
+                                  isOn: $helpImprove)
+                    .onChange(of: helpImprove) { _, on in
+                        Task { await deps.authService.updateAnalyticsOptIn(on) }
+                    }
             }
 
-            // Account housekeeping the website owns, Spotify-style: one place,
-            // reached from here and from the avatar menu.
+            // Account housekeeping the website owns, also reached from the avatar menu.
             SettingsGroup(title: "On the Web") {
                 SettingsLinkRow(id: "account.web", title: "Account Overview",
                                 subtitle: "Devices, sign-in methods and privacy on mixtaped.tech.",
@@ -149,9 +149,7 @@ struct AccountPane: View {
         }
         .sheet(isPresented: $showFindPeople) {
             #if os(macOS)
-            // The profile is a page in the main window, not something to view
-            // through a 420pt porthole — so the sheet hands the choice back and
-            // closes rather than pushing inside itself.
+            // Profiles open as a page in the main window, so the sheet hands the choice back and closes.
             FindPeopleView(authService: deps.authService) { profile in
                 appState.showProfile(profile)
             }
@@ -189,7 +187,7 @@ struct AccountPane: View {
             }
         }
         #endif
-        .confirmationDialog("Sign Out", isPresented: $vm.showSignOutConfirm, titleVisibility: .visible) {
+        .mixConfirmationDialog("Sign Out", isPresented: $vm.showSignOutConfirm, titleVisibility: .visible) {
             Button("Sign Out", role: .destructive) { Task { await vm.signOut() } }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -212,6 +210,10 @@ struct GeneralPane: View {
     #if os(macOS)
     @StateObject private var launchAtLogin = LaunchAtLogin.shared
     @AppStorage(MacMenuBarPlayer.visibleKey) private var showsMenuBarPlayer = true
+    /// The value waiting on the restart prompt.
+    @State private var accelerationChange: Bool?
+    #else
+    @AppStorage(HardwareAcceleration.key) private var hardwareAcceleration = true
     #endif
     var body: some View {
         SettingsPage(title: "General") {
@@ -221,18 +223,31 @@ struct GeneralPane: View {
                                   icon: "circle.lefthalf.filled",
                                   selection: $theme.appearance,
                                   options: AppAppearance.allCases) { $0.title }
-                    // The macOS pop-up caches its styling across an appearance
-                    // flip and renders with the old look until touched.
-                    // Rebuilding it on each change is the fix.
+                    // Observed directly: the macOS pop-up keeps its old styling across an appearance flip.
                     .id(theme.appearance)
             }
 
+            SettingsGroup(title: "Background") {
+                SettingsRow(id: "general.backdrop",
+                            title: "Background Colour",
+                            subtitle: "Mixes a colour into the background of the whole app.",
+                            icon: "paintpalette") {
+                    ColorPicker("Background Colour", selection: backdropColour, supportsOpacity: false)
+                        .labelsHidden()
+                }
+                BackdropSwatches(theme: theme)
+                if theme.backdrop != nil {
+                    SettingsPickerRow(id: "general.backdropMotion",
+                                      title: "Movement",
+                                      subtitle: "Floating lets the colour drift around and off the edges.",
+                                      icon: "wind",
+                                      selection: backdropMotion,
+                                      options: BackdropMotion.allCases) { $0.title }
+                }
+            }
+
             SettingsGroup(title: "Interface", footer: theme.preset.detail) {
-                // The preset first, and the three axes under it. Almost nobody
-                // wants to reason about density, motion and effects separately
-                // — they want the app smaller, or calmer, or both — but the
-                // people who do want one without the others were the reason
-                // this isn't a single three-way switch.
+                // The preset first, then the three axes for anyone who wants one without the others.
                 SettingsPickerRow(id: "general.preset",
                                   title: "Look",
                                   icon: "sparkles",
@@ -269,6 +284,17 @@ struct GeneralPane: View {
                                   title: "Show All Songs",
                                   icon: MixtapeIcons.playlist,
                                   isOn: $meta.showsAllSongs)
+
+                SettingsPickerRow(id: "general.importsTo",
+                                  title: "Add Imported Songs To",
+                                  subtitle: "Songs from your files, YouTube and Spotify links. All Songs doesn't like them.",
+                                  icon: "square.and.arrow.down",
+                                  selection: $meta.importDestination,
+                                  options: ImportDestination.allCases) { $0.title }
+            }
+
+            SettingsGroup(title: "Notifications") {
+                NotificationToggleRow()
             }
 
             #if os(iOS)
@@ -307,18 +333,148 @@ struct GeneralPane: View {
                                   isOn: launchAtLogin.binding)
             }
             #endif
+
+            #if os(macOS)
+            SettingsGroup(title: "Compatibility") {
+                SettingsToggleRow(id: "general.hardwareAcceleration",
+                                  title: "Hardware Acceleration",
+                                  subtitle: "Uses the GPU to draw backgrounds and effects and to split stems. "
+                                          + "Turn it off if Mixtape flickers or draws glitches.",
+                                  icon: "cpu",
+                                  isOn: Binding(get: { HardwareAcceleration.isOn },
+                                                set: { accelerationChange = $0 }))
+            }
+            #else
+            SettingsGroup(title: "Compatibility",
+                          footer: hardwareAcceleration == HardwareAcceleration.isOn ? nil
+                                : "Takes effect the next time Mixtape opens.") {
+                SettingsToggleRow(id: "general.hardwareAcceleration",
+                                  title: "Hardware Acceleration",
+                                  subtitle: "Uses the GPU to draw backgrounds and effects. "
+                                          + "Turn it off if Mixtape flickers or draws glitches.",
+                                  icon: "cpu",
+                                  isOn: $hardwareAcceleration)
+            }
+            #endif
         }
         #if os(macOS)
         .onAppear { launchAtLogin.refresh() }
+        .mixConfirmationDialog("Restart Mixtape?",
+                               isPresented: Binding(get: { accelerationChange != nil },
+                                                    set: { if !$0 { accelerationChange = nil } }),
+                               titleVisibility: .visible,
+                               presenting: accelerationChange) { on in
+            Button("Restart") { HardwareAcceleration.restart(on: on) }
+            Button("Cancel", role: .cancel) {}
+        } message: { on in
+            Text("Hardware acceleration turns \(on ? "on" : "off") when Mixtape restarts.")
+        }
         #endif
     }
 
-    /// Custom is arrived at, not chosen — so it's only in the list when that's
-    /// where the three axes already are. A Picker whose selection isn't among
-    /// its options draws blank, which is the one thing this has to avoid.
+    /// Custom is only listed when the axes already match it; a Picker with an unlisted selection draws blank.
     private var presetOptions: [MixAppearancePreset] {
         theme.preset == .custom ? MixAppearancePreset.allCases
                                 : MixAppearancePreset.selectable
+    }
+
+    /// Unset shows the brand orange, so opening the picker starts somewhere.
+    private var backdropColour: Binding<Color> {
+        Binding(get: { theme.backdrop.map { Color(hex: $0.hex) } ?? BrandAccent.color },
+                set: { theme.backdrop = MixBackdrop(hex: MixBackdrop.hex(of: $0),
+                                                    motion: theme.backdrop?.motion ?? .still) })
+    }
+
+    private var backdropMotion: Binding<BackdropMotion> {
+        Binding(get: { theme.backdrop?.motion ?? .still },
+                set: { motion in
+                    guard let hex = theme.backdrop?.hex else { return }
+                    theme.backdrop = MixBackdrop(hex: hex, motion: motion)
+                })
+    }
+}
+
+/// Banners on this device. Turning it on asks the system, or opens its settings when they're blocked there.
+private struct NotificationToggleRow: View {
+
+    @AppStorage(InviteNotifier.enabledKey) private var enabled = false
+    @State private var blocked = false
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        SettingsToggleRow(id: "general.notifications",
+                          title: "Notifications",
+                          subtitle: blocked ? "Turned off in \(Self.settingsName)."
+                                            : "Messages, Jams near you, new releases and your recap.",
+                          icon: "bell",
+                          isOn: Binding(get: { enabled }, set: { on in
+                              guard on else { return InviteNotifier.shared.disable() }
+                              enabled = true
+                              Task {
+                                  if await !InviteNotifier.shared.enable(), let url = InviteNotifier.systemSettingsURL {
+                                      openURL(url)
+                                  }
+                                  await load()
+                              }
+                          }))
+        .task { await load() }
+        .onReceive(NotificationCenter.default.publisher(for: Self.becameActive)) { _ in
+            Task { await load() }
+        }
+    }
+
+    private func load() async {
+        blocked = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus == .denied
+        if blocked { enabled = false }
+    }
+
+    #if os(macOS)
+    private static let settingsName = "System Settings"
+    private static let becameActive = NSApplication.didBecomeActiveNotification
+    #else
+    private static let settingsName = "Settings"
+    private static let becameActive = UIApplication.didBecomeActiveNotification
+    #endif
+}
+
+/// None plus the preset colours, one tap each.
+private struct BackdropSwatches: View {
+
+    @ObservedObject var theme: ThemeManager
+
+    var body: some View {
+        HStack(spacing: 8) {
+            swatch(name: "No Colour", hex: nil)
+            ForEach(MixBackdrop.presets, id: \.1) { swatch(name: $0.0, hex: $0.1) }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, SettingsMetrics.rowPadH)
+        .padding(.vertical, SettingsMetrics.rowPadV)
+    }
+
+    private func swatch(name: String, hex: String?) -> some View {
+        let selected = theme.backdrop?.hex == hex
+        return Button {
+            theme.backdrop = hex.map { MixBackdrop(hex: $0, motion: theme.backdrop?.motion ?? .still) }
+        } label: {
+            Circle()
+                .fill(hex.map { Color(hex: $0) } ?? Color.mixSurface2)
+                .overlay {
+                    if hex == nil {
+                        Image(systemName: "slash.circle")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(Color.mixTextSecondary)
+                    }
+                }
+                .frame(width: 24, height: 24)
+                .padding(3)
+                .overlay(Circle().strokeBorder(selected ? Color.mixTextPrimary : .clear, lineWidth: 2))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain).mixHandCursor()
+        .help(name)
+        .accessibilityLabel(name)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 
@@ -326,9 +482,7 @@ struct GeneralPane: View {
 
 struct PlaybackPane: View {
 
-    // Handed in rather than reached for through AppDependencies: only these two
-    // republish, and a picker bound to an object nobody observes shows a stale
-    // value after every change.
+    // Passed in because only these two republish; a picker bound through `deps` goes stale.
     @ObservedObject var engine:    PlaybackEngine
     @ObservedObject var equalizer: AudioEqualizer
     @AppStorage("playback.crossfadeOnSkip") private var crossfadeOnSkip = false
@@ -337,26 +491,21 @@ struct PlaybackPane: View {
     @AppStorage("playback.autoplay")        private var autoplay = true
     @AppStorage("playback.smartShuffle")    private var smartShuffle = false
 
-    /// Counted on appear rather than observed: both lists are written from a
-    /// context menu somewhere else in the app, and nothing else in Settings cares.
+    /// Counted on appear: both lists are written from context menus elsewhere.
     @State private var hiddenCount  = SuggestionFeedback.hiddenSongs.count
     @State private var blockedCount = SuggestionFeedback.blockedArtists.count
 
-    /// Not `@AppStorage`: a private session is stored as an expiry, so the switch
-    /// reflects "is one running" rather than a saved Bool.
+    /// A private session is stored as an expiry, so this reflects whether one is running.
     @State private var privateSession = PrivateSession.isActive
 
     #if os(iOS)
     @State private var showEqualizer = false
     #endif
 
-    /// Same key as `ResolverPreferences.preferCensored`, read here through
-    /// `@AppStorage` so the row redraws when it changes. The resolvers read the
-    /// default directly — they run off the main actor and have no view to bind.
+    /// Same key as `ResolverPreferences.preferCensored`. The resolvers read the default directly.
     @AppStorage("mixtape.resolver.preferCensored") private var preferCensored = false
 
-    /// The speeds offered in Settings. The player's own speed menu can land
-    /// between these, so the row snaps to the nearest rather than showing blank.
+    /// The player's own speed menu can land between these, so the row snaps to the nearest.
     private static let speeds: [PlaybackSpeed] = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
         .map(PlaybackSpeed.init)
 
@@ -371,7 +520,7 @@ struct PlaybackPane: View {
         )
     }
 
-    /// "2 songs and 1 artist" — named in the plural the counts actually need.
+    /// "2 songs and 1 artist", with correct plurals.
     private var suggestionFeedbackSubtitle: String {
         func part(_ count: Int, _ noun: String) -> String? {
             count == 0 ? nil : "\(count) \(noun)\(count == 1 ? "" : "s")"
@@ -443,8 +592,7 @@ struct PlaybackPane: View {
                                   isOn: $smartShuffle)
             }
 
-            // Hidden only when there is nothing hidden: a row whose whole subject
-            // is an empty list has nothing to say.
+            // Hidden when nothing is hidden.
             if hiddenCount > 0 || blockedCount > 0 {
                 SettingsGroup(title: "Suggestions") {
                     SettingsButtonRow(id: "playback.suggestionFeedback",
@@ -486,10 +634,7 @@ struct PlaybackPane: View {
             }
 
             #if os(macOS)
-            // Inline on macOS — the ten-band EQ fits the wider layout, and
-            // hiding it behind a sheet on a desktop would be odd. It carries its
-            // own header and padding, so it gets the card's border rather than
-            // being wrapped in a SettingsGroup that would title it twice.
+            // Inline on macOS. It has its own header, so it gets a card border instead of a SettingsGroup.
             EqualizerView(equalizer: equalizer)
                 .clipShape(RoundedRectangle(cornerRadius: SettingsMetrics.cardRadius,
                                             style: .continuous))
@@ -533,8 +678,7 @@ struct PlaybackPane: View {
     }
 }
 
-/// A speed the picker can bind to. `Float` isn't `Identifiable`, and rounding
-/// the raw rate into a label at display time loses the selection.
+/// A bindable speed. `Float` isn't `Identifiable`, and rounding to a label loses the selection.
 struct PlaybackSpeed: Identifiable, Hashable {
     let value: Double
     var id: Double { value }
@@ -547,8 +691,12 @@ struct DownloadsPane: View {
 
     @ObservedObject var manager: DownloadManager
     @EnvironmentObject private var exportManager: ExportManager
+    @EnvironmentObject private var deps: AppDependencies
     @ObservedObject private var prefetch = PlaybackPrefetchSettings.shared
     @State private var confirmRequality = false
+    @State private var confirmResave = false
+
+    private var editCount: Int { deps.libraryService.tracks.lazy.filter { $0.origin == .edit }.count }
     #if os(iOS)
     @State private var showFolderPicker = false
     #endif
@@ -563,11 +711,7 @@ struct DownloadsPane: View {
                                                      set: { manager.downloadQuality = $0 }),
                                   options: DownloadQuality.allCases) { $0.title }
 
-                // Named for the condition it fires on, because that's what makes
-                // it obvious why it disappears below: Wi-Fi Only blocks metered
-                // downloads outright (see `isConnectedForDownload`), so there is
-                // no mobile-data download left for this to lower. A switch that
-                // provably can't fire is worse than no switch.
+                // Wi-Fi Only blocks metered downloads outright, so there'd be nothing for this to lower.
                 if !manager.downloadOnWifiOnly {
                     SettingsToggleRow(id: "downloads.autoAdjust",
                                       title: "Lower Quality on Mobile Data",
@@ -577,9 +721,7 @@ struct DownloadsPane: View {
                                                     set: { manager.autoAdjustQuality = $0 }))
                 }
 
-                // Songs already on disk keep the quality they were written at,
-                // so without this the picker looks broken to anyone whose
-                // library was downloaded before they found it.
+                // Songs on disk keep the quality they were written at.
                 if manager.offlineCount > 0 {
                     SettingsButtonRow(id: "downloads.redownload",
                                       title: "Re-download at This Quality",
@@ -587,17 +729,27 @@ struct DownloadsPane: View {
                         confirmRequality = true
                     }
                 }
+
+                SettingsPickerRow(id: "downloads.editQuality",
+                                  title: "Song Edit Quality",
+                                  subtitle: "\(manager.editQuality.detail) Edits you've already saved keep theirs.",
+                                  icon: "slider.horizontal.3",
+                                  selection: Binding(get: { manager.editQuality },
+                                                     set: { manager.editQuality = $0 }),
+                                  options: EditQuality.allCases) { $0.title }
+
+                if editCount > 0 {
+                    SettingsButtonRow(id: "downloads.resaveEdits",
+                                      title: "Re-save Edits at This Quality",
+                                      icon: "arrow.triangle.2.circlepath") {
+                        confirmResave = true
+                    }
+                }
             }
 
             SettingsGroup(title: "Automatic Downloads") {
-                // "Imported" means arrived from outside — a file or folder
-                // import, a Spotify transfer, a saved or restored share. It does
-                // not mean "any new playlist", which would fire for every
-                // playlist a fresh sign-in pulls down.
-                //
-                // What it switches on is the same standing choice the green
-                // button on a playlist page makes, so it shows there afterwards
-                // and can be switched off there one playlist at a time.
+                // "Imported" means file/folder import, Spotify transfer, or a saved/restored share,
+                // not every playlist a sign-in pulls down. Same choice as the playlist page's download button.
                 SettingsToggleRow(id: "downloads.autoImported",
                                   title: "Keep Imported Playlists Offline",
                                   subtitle: "Playlists you import or save are downloaded automatically, including songs added to them later.",
@@ -606,10 +758,7 @@ struct DownloadsPane: View {
                                                 set: { manager.autoDownloadImportedPlaylists = $0 }))
             }
 
-            // Not "downloads" in the keep-it-forever sense — these fill the
-            // playback cache, which is temporary and evicted under a budget.
-            // They live here anyway because what they cost is a download, and
-            // this is the page someone opens when they're thinking about that.
+            // These fill the playback cache, which is temporary, but they cost a download so they live here.
             SettingsGroup(title: "Smooth Playback",
                           footer: "Songs are fetched before you reach them, so the queue plays without a pause between tracks. Fetched songs go to the playback cache, not your offline library.") {
                 SettingsPickerRow(id: "downloads.queueDepth",
@@ -630,9 +779,7 @@ struct DownloadsPane: View {
             SettingsGroup(title: "Network") {
                 SettingsToggleRow(id: "downloads.wifiOnly",
                                   title: "Download on Wi-Fi Only",
-                                  // Ethernet counts. The setting is about not
-                                  // spending mobile data, and a Mac on a cable
-                                  // isn't spending any — see `isUnmetered`.
+                                  // Ethernet counts: the setting is about mobile data. See `isUnmetered`.
                                   subtitle: "A wired connection counts as Wi-Fi.",
                                   icon: "wifi",
                                   isOn: Binding(get: { manager.downloadOnWifiOnly },
@@ -689,6 +836,12 @@ struct DownloadsPane: View {
         } message: {
             Text("\(manager.offlineCount) song\(manager.offlineCount == 1 ? "" : "s") will be fetched again and stored at the quality above. They won't play offline until that finishes. Songs you imported yourself aren't touched.")
         }
+        .alert("Re-save edits at \(manager.editQuality.title) quality?", isPresented: $confirmResave) {
+            Button("Cancel", role: .cancel) {}
+            Button("Re-save") { Task { await deps.resaveEdits() } }
+        } message: {
+            Text("Each edit is made again from the song it came from. Names, likes and playlists stay as they are.")
+        }
         #if os(iOS)
         .sheet(isPresented: $showFolderPicker) {
             IOSFolderPicker { url in
@@ -711,12 +864,10 @@ struct StoragePane: View {
     @ObservedObject private var lyricsStore = UserLyricsStore.shared
 
     @State private var confirmRemoveDownloads = false
-    /// The list of songs whose lyrics the user wrote takes the whole pane when
-    /// it's up, the same arrangement Connections uses for its sub-pages.
+    /// The user-lyrics list takes the whole pane, like Connections' sub-pages.
     @State private var showUserLyrics = false
     @State private var showMergeDuplicates = false
-    /// Index into `budgetStops`, because a linear slider from 256 MB to 50 GB
-    /// spends nine tenths of its travel on sizes nobody picks.
+    /// Index into `budgetStops`; a linear 256 MB-50 GB slider would waste most of its travel.
     @State private var budgetStop: Double = 0
 
     private static let budgetStops: [Int64] = {
@@ -728,8 +879,7 @@ struct StoragePane: View {
         min(max(Int(value.rounded()), 0), budgetStops.count - 1)
     }
 
-    /// The stop closest to what's stored, so the slider opens where the user
-    /// left it even if the value was written by an older build.
+    /// The nearest stop to the stored value, which an older build may have written.
     private static func nearestStop(to bytes: Int64) -> Double {
         let index = budgetStops.enumerated().min {
             abs($0.element - bytes) < abs($1.element - bytes)
@@ -769,9 +919,7 @@ struct StoragePane: View {
                 }
             }
 
-            // Everything below is disposable — it re-fetches on demand. Grouped
-            // apart from downloads for exactly that reason: one costs you
-            // offline playback, the others cost you a moment's wait.
+            // Everything below re-fetches on demand, unlike downloads.
             SettingsGroup(title: "Caches") {
                 cacheRow(id: "storage.playback",
                          title: "Playback Cache",
@@ -807,15 +955,11 @@ struct StoragePane: View {
                 }
             }
 
-            // Also not a cache: text the user typed, which no lookup will ever
-            // hand back. It sits beside the library group for that reason —
-            // clearing it costs something that can't be re-fetched.
+            // Not a cache: typed text can't be re-fetched.
             if lyricsStore.count > 0 {
                 SettingsGroup(title: "Your Lyrics",
                               footer: "Lyrics you added yourself, for songs the app couldn't find or got wrong. They're kept on this device and shown instead of any lyrics found online.") {
-                    // A count is the one thing the person who typed these
-                    // already knows. What they can't do from a count is go back
-                    // to the one they got wrong, so the row opens the list.
+                    // Opens the list so a wrong one can be fixed.
                     SettingsButtonRow(id: "storage.userLyrics",
                                       title: "Your Lyrics",
                                       subtitle: "\(lyricsStore.count) song\(lyricsStore.count == 1 ? "" : "s")",
@@ -828,9 +972,7 @@ struct StoragePane: View {
                 }
             }
 
-            // Not a cache: this is the user's own library, and the only thing
-            // that undoes an import that ran before duplicates were caught on
-            // the way in.
+            // Not a cache: this changes the user's library.
             SettingsGroup(title: "Library",
                           footer: "Songs you already owned can end up in your library twice after importing a playlist. This finds them and keeps one copy of each — you see the list before anything is removed.") {
                 SettingsButtonRow(id: "storage.mergeDuplicates",
@@ -844,9 +986,7 @@ struct StoragePane: View {
         .onAppear { budgetStop = Self.nearestStop(to: PlaybackCache.budgetBytes) }
         .onChange(of: budgetStop) { _, new in
             PlaybackCache.budgetBytes = Self.budgetStops[Self.clampStop(new)]
-            // Lowering the limit should take effect now, not at the end of the
-            // next download — otherwise the number above the slider disagrees
-            // with the number in the row right beside it.
+            // Apply a lower limit now, not after the next download.
             let pinned = PlaybackCache.pinnedURLs
             Task {
                 await Task.detached(priority: .utility) { PlaybackCache.enforceBudget(pinned: pinned) }.value
@@ -1002,12 +1142,9 @@ struct ConnectionsPane: View {
 
     @ObservedObject private var scrobbler = LastFmScrobbler.shared
     @State private var showLastFm = false
-    /// The Spotify library picker takes the whole pane when it's up, rather
-    /// than opening a window over the app. See SpotifyConnectionView.
+    /// The Spotify library picker takes the whole pane. See SpotifyConnectionView.
     @State private var showSpotifyLibrary = false
-    /// Same arrangement for choosing which favourites to push. Two flags rather
-    /// than one enum because they are never both up, and the pane reads more
-    /// plainly as a list of things that can replace it.
+    /// Same for the likes-push page. Two flags since they're never both up.
     @State private var showSpotifyLikesPush = false
 
     #if os(iOS)
@@ -1040,9 +1177,7 @@ struct ConnectionsPane: View {
         }
         .mixAnimation(.easeOut(duration: 0.18), value: showSpotifyLibrary)
         .mixAnimation(.easeOut(duration: 0.18), value: showSpotifyLikesPush)
-        // Arriving here from "Import Spotify Library" elsewhere in the app:
-        // SettingsView has already selected this pane, and the last step is
-        // ours. See SettingsRoute.
+        // Arriving from "Import Spotify Library" elsewhere: open the picker. See SettingsRoute.
         .onAppear {
             guard route.request?.opensSpotifyLibrary == true else { return }
             showSpotifyLibrary = true
@@ -1052,8 +1187,7 @@ struct ConnectionsPane: View {
 
     private var pane: some View {
         SettingsPage(title: "Connections") {
-            // Spotify first: it's the connection that brings music in, and the
-            // one most people are here for.
+            // Spotify first: it's the connection most people are here for.
             SpotifyConnectionGroup(auth: deps.spotifyAuth,
                                    openLibrary: { showSpotifyLibrary = true },
                                    openLikesPush: { showSpotifyLikesPush = true })
@@ -1093,9 +1227,7 @@ struct ConnectionsPane: View {
     }
 
     #if os(iOS)
-    /// iOS can't run yt-dlp, so Discover playback goes through a resolver server
-    /// (a Mac on the network, or the hosted one). This is where you find out
-    /// whether that's working.
+    /// iOS can't run yt-dlp, so Discover plays through a resolver server. Shows whether it's working.
     @ViewBuilder
     private var streamingGroup: some View {
         SettingsGroup(title: "Streaming") {
@@ -1126,9 +1258,8 @@ struct ConnectionsPane: View {
                 }
             }
 
-            // Developer-only manual override, gated by the same Supabase role as
-            // Developer Tools. The bearer token is never sent to a typed address
-            // (see RemoteResolverService).
+            // Developer-only override, gated by the same role as Developer Tools. The bearer token
+            // is never sent to a typed address (see RemoteResolverService).
             if vm.isDeveloper {
                 DisclosureGroup(isExpanded: $showResolverAdvanced) {
                     HStack(spacing: 10) {
@@ -1164,8 +1295,7 @@ struct ConnectionsPane: View {
         resolverTesting = true
         resolverTestResult = nil
         Task {
-            // Keep the spinner up long enough to read even when the health
-            // check returns near-instantly.
+            // Keep the spinner up long enough to read.
             async let probe = resolverStatus.refresh()
             try? await Task.sleep(for: .milliseconds(450))
             let source = await probe
@@ -1236,9 +1366,7 @@ enum ResolverTestResult {
 struct AboutPane: View {
 
     #if os(macOS)
-    // When ON, Sparkle subscribes to the "beta" channel and receives opt-in
-    // development builds ahead of stable. Read by UpdaterController via the
-    // same key.
+    // Subscribes Sparkle to the "beta" channel. UpdaterController reads the same key.
     @AppStorage(UpdaterController.receiveDevelopmentBuildsKey) private var receiveDevelopmentBuilds = false
     #endif
 
@@ -1297,6 +1425,8 @@ struct AboutPane: View {
 struct DeveloperPane: View {
 
     @ObservedObject var vm: SettingsViewModel
+    @EnvironmentObject private var deps: AppDependencies
+    @State private var recapError: String?
 
     var body: some View {
         SettingsPage(title: "Developer",
@@ -1311,17 +1441,30 @@ struct DeveloperPane: View {
                     }
                 }
             }
+            SettingsGroup(title: "Recap",
+                          footer: "Only on this device. Nothing is saved, so the real recap still arrives on the 1st.") {
+                SettingsButtonRow(title: "Preview This Month's Recap",
+                                  icon: "play.rectangle.fill") {
+                    Task {
+                        recapError = await deps.recap.previewThisMonth()
+                            .map { "Needs \(RecapMath.minimumPlays) plays this month, you have \($0)." }
+                    }
+                }
+                if let recapError { SettingsErrorRow(message: recapError) }
+                SettingsButtonRow(title: "Demo Recap",
+                                  icon: "sparkles.rectangle.stack.fill") {
+                    deps.recap.demoRecap()
+                }
+            }
         }
     }
 }
 
 // MARK: - Danger Zone
 
-/// Everything that loses something for good lives here and nowhere else, so no
-/// ordinary page carries a red button you could hit while changing a toggle.
-/// Ordered by reach: this device, then the library on every device, then the
-/// account. Deleting the account finishes on mixtaped.tech — the one place it's
-/// implemented, next to the data export you'd want to run first.
+/// Everything that loses something for good lives here, so no ordinary page has a red button.
+/// Ordered by reach: this device, the library everywhere, the account. Account deletion
+/// finishes on mixtaped.tech, next to the data export.
 struct DangerZonePane: View {
 
     @ObservedObject var vm: SettingsViewModel
@@ -1378,10 +1521,7 @@ struct DangerZonePane: View {
                 }
                 if let error = vm.resetStatsError { SettingsErrorRow(message: error) }
 
-                // Only when there is something to clean. Deleting a playlist
-                // takes its orphans with it now, so for most libraries this
-                // row never appears — it exists for the ones stranded before
-                // that was true.
+                // Only when there's something to clean; deleting a playlist already takes its orphans.
                 if vm.orphanCount > 0 {
                     if vm.isCleaningOrphans {
                         SettingsBusyRow(title: "Removing songs…")
@@ -1457,7 +1597,7 @@ struct DangerZonePane: View {
                 }
             }
         }
-        .confirmationDialog("Reset All Settings",
+        .mixConfirmationDialog("Reset All Settings",
                             isPresented: $confirmResetSettings,
                             titleVisibility: .visible) {
             Button("Reset Settings", role: .destructive) {
@@ -1467,7 +1607,7 @@ struct DangerZonePane: View {
         } message: {
             Text("Every preference goes back to its default, including appearance, playback, downloads, and the equalizer. Your music, playlists, downloaded songs, and Last.fm connection are left alone.")
         }
-        .confirmationDialog("Remove Your Lyrics",
+        .mixConfirmationDialog("Remove Your Lyrics",
                             isPresented: $confirmRemoveLyrics,
                             titleVisibility: .visible) {
             Button("Remove Lyrics", role: .destructive) { lyricsStore.removeAll() }
@@ -1475,7 +1615,7 @@ struct DangerZonePane: View {
         } message: {
             Text("The lyrics you added for \(lyricsStore.count) song\(lyricsStore.count == 1 ? "" : "s") will be deleted. Those songs go back to whatever the app can find online, which for most of them is nothing.")
         }
-        .confirmationDialog("Reset Listening History",
+        .mixConfirmationDialog("Reset Listening History",
                             isPresented: $vm.showResetStatsConfirm,
                             titleVisibility: .visible) {
             Button("Reset History", role: .destructive) { Task { await vm.resetListeningStats() } }
@@ -1483,7 +1623,7 @@ struct DangerZonePane: View {
         } message: {
             Text("Every play is forgotten: top artists, top songs and minutes all go back to zero, here and on your public profile. Your music, playlists and liked songs are untouched.")
         }
-        .confirmationDialog("Remove Leftover Songs",
+        .mixConfirmationDialog("Remove Leftover Songs",
                             isPresented: $vm.showCleanOrphansConfirm,
                             titleVisibility: .visible) {
             Button("Remove \(vm.orphanCount) Song\(vm.orphanCount == 1 ? "" : "s")", role: .destructive) {
@@ -1493,7 +1633,7 @@ struct DangerZonePane: View {
         } message: {
             Text("These songs came from playlists you deleted and nothing else in your library holds them — they're in no playlist and not liked. Deleting a playlist takes them with it now; this clears the ones left over from before.")
         }
-        .confirmationDialog("Delete All Playlists",
+        .mixConfirmationDialog("Delete All Playlists",
                             isPresented: $vm.showDeletePlaylistsConfirm,
                             titleVisibility: .visible) {
             Button("Delete All Playlists", role: .destructive) { Task { await vm.deleteAllUserPlaylists() } }
@@ -1501,7 +1641,7 @@ struct DangerZonePane: View {
         } message: {
             Text("All your created playlists will be permanently deleted from every device. All Songs and Liked Songs will remain. Your music is unaffected.")
         }
-        .confirmationDialog("Delete All Music",
+        .mixConfirmationDialog("Delete All Music",
                             isPresented: $vm.showDeleteTracksConfirm,
                             titleVisibility: .visible) {
             Button("Delete All Music", role: .destructive) { Task { await vm.deleteAllTracks() } }
@@ -1509,7 +1649,7 @@ struct DangerZonePane: View {
         } message: {
             Text("All tracks, albums, and artists will be permanently deleted from every device. Your playlists will remain but be empty.")
         }
-        .confirmationDialog("Clear Everything",
+        .mixConfirmationDialog("Clear Everything",
                             isPresented: $vm.showClearLibraryConfirm,
                             titleVisibility: .visible) {
             Button("Clear Everything", role: .destructive) { Task { await vm.clearLibrary() } }
@@ -1517,7 +1657,7 @@ struct DangerZonePane: View {
         } message: {
             Text("This permanently deletes all music, albums, artists, playlists, liked songs, files and listening history — from the server and every device — and empties your public profile. Your account itself stays.")
         }
-        .confirmationDialog("Sign Out Everywhere",
+        .mixConfirmationDialog("Sign Out Everywhere",
                             isPresented: $confirmSignOutEverywhere,
                             titleVisibility: .visible) {
             Button("Sign Out Everywhere", role: .destructive) { Task { await vm.signOutEverywhere() } }
@@ -1525,7 +1665,7 @@ struct DangerZonePane: View {
         } message: {
             Text("Every device and browser signed in as \(handle) is signed out, including this one. Your library is kept.")
         }
-        .confirmationDialog("Delete \(handle)?",
+        .mixConfirmationDialog("Delete \(handle)?",
                             isPresented: $confirmDeleteAccount,
                             titleVisibility: .visible) {
             Button("Continue on mixtaped.tech") {

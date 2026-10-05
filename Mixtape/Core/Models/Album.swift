@@ -1,6 +1,3 @@
-// Album.swift
-// Mixtape — Core Domain Models
-
 import Foundation
 
 public struct Album: Identifiable, Codable, Hashable, Sendable {

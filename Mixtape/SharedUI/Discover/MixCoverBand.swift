@@ -1,22 +1,11 @@
-// MixCoverBand.swift
-// Mixtape — SharedUI/Discover
-//
-// The colour a mix wears, and the band it wears it on.
-//
-// Four album covers arranged in a square is accurate but drab: every mix looks
-// like every other mix, and next to an album grid they don't read as places.
-// Spotify solves it by painting the mix its own colour and printing the name on
-// it. Same here — with the colour derived from the mix's id, so a mix keeps the
-// same colour on the landing, on its page, and next week when it's rebuilt from
-// the same seed.
+// A mix's colour and its name band. The colour comes from the mix's id, so
+// it's the same everywhere and across weekly rebuilds.
 
 import SwiftUI
 
 enum MixCoverStyle {
 
-    /// Deliberately literal rather than themed: this is the one place in the app
-    /// that's supposed to be loud, and a token would follow the appearance and
-    /// stop being the mix's own colour.
+    /// Literal colours, not tokens, so they don't change with the appearance.
     private static let palette: [(r: Double, g: Double, b: Double)] = [
         (0.91, 0.25, 0.33),   // red
         (0.95, 0.48, 0.14),   // orange
@@ -28,8 +17,7 @@ enum MixCoverStyle {
         (0.75, 0.58, 0.12)    // gold
     ]
 
-    /// The raw components, so the baked cover (`MixCoverArt`) can paint the same
-    /// band in Core Graphics that the card paints in SwiftUI.
+    /// Raw components so `MixCoverArt` paints the same band in Core Graphics.
     static func rgb(for id: String) -> (r: Double, g: Double, b: Double) {
         var hash: UInt64 = 0xcbf2_9ce4_8422_2325
         for byte in id.utf8 {
@@ -50,8 +38,7 @@ struct MixCoverBand: View {
 
     let title: String
     let accent: Color
-    /// The cover's edge length — everything here scales off it so one band works
-    /// for a 168pt card and a 260pt hero.
+    /// Cover edge length; everything scales off it.
     let side: CGFloat
 
     var body: some View {

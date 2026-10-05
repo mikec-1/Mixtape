@@ -1,19 +1,7 @@
-// MacLyricsPopover.swift
-// Mixtape — Mac/PlayerBar
-//
-// Lyrics view shown from the macOS player bar, styled after Spotify's full
-// lyrics view: large bold lines, the active line bright, others dimmed, over an
-// album-art–tinted background. Reuses LyricsService (the same resolver as iOS):
-// embedded tags → .lrc sidecar → LRCLIB. Synced lyrics get karaoke-style
-// highlighting + autoscroll + tap-to-seek; otherwise plain lyrics; otherwise an
-// empty state.
-//
-// Two presentation modes, driven by MacAppState.lyricsFullscreen (persisted):
-//   • Windowed — a fixed-size popover from the player bar.
-//   • Fullscreen — fills the main content column (between sidebar, toolbar,
-//     player bar and right panel), like Spotify, over a solid album-tinted
-//     background. Hosted by MacRootView's detail column.
-// The header's expand/collapse button toggles between them.
+// Player-bar lyrics, Spotify style: big lines, active one bright, synced
+// highlighting + autoscroll + tap-to-seek, else plain text, else empty state.
+// Uses LyricsService (tags > .lrc > LRCLIB).
+// Windowed (popover) or fullscreen (content column), via MacAppState.lyricsFullscreen.
 
 #if os(macOS)
 import SwiftUI
@@ -26,14 +14,7 @@ struct MacLyricsView: View {
 
     @State private var isLoading = false
 
-    /// Read straight from the service rather than mirrored into `@State`.
-    ///
-    /// The mirror was why lyrics the user had just saved didn't appear until
-    /// the popover was closed and reopened: `LyricsService.cache` is
-    /// `@Published`, so writing to it *did* re-run this body — but the body
-    /// then drew a `@State` copy that only `refresh()` ever updated. One source
-    /// of truth means a save shows up on the next frame, from anywhere,
-    /// without anything having to remember to re-read.
+    /// Read straight from the service (`@Published`) so saved lyrics show immediately.
     private var lyrics: TrackLyrics? {
         guard let track = engine.queue.currentTrack else { return nil }
         return lyricsService.cached(for: track)
@@ -41,15 +22,12 @@ struct MacLyricsView: View {
     @State private var tint: [Color] = []
 
     private var fullscreen: Bool { appState.lyricsFullscreen }
-    /// Big, Spotify-style type in fullscreen; compact in the popover. Scaled by
-    /// the user's zoom, clamped so the words always fit the column.
+    /// Scaled by the user's zoom, clamped to fit the column.
     @AppStorage("lyricsZoom") private var zoom: Double = 1
     private var lineFont: CGFloat { (fullscreen ? 40 : 26) * zoom }
     private var hPadding: CGFloat { fullscreen ? 80 : 28 }
 
-    /// Per-song timing correction, in seconds: positive holds the lyrics back.
-    /// Keyed like the user's own lyrics, so it follows the song rather than the
-    /// library row.
+    /// Per-song timing offset in seconds; positive holds lyrics back. Keyed like user lyrics.
     @State private var offset: TimeInterval = 0
 
     var body: some View {
@@ -63,10 +41,7 @@ struct MacLyricsView: View {
         .modifier(LyricsFrame(fullscreen: fullscreen))
         .onAppear { refresh() }
         .onChange(of: engine.queue.currentTrack?.id) { _, _ in refresh() }
-        // The editor is put up by MacRootView, from the main window — see
-        // `MacAppState.lyricsEditorTrack`. Its closing is what re-runs this
-        // body, which is how a just-saved set of lyrics reaches the screen
-        // without the popover being closed and reopened.
+        // MacRootView presents the editor; its closing re-runs this body.
         .onChange(of: appState.lyricsEditorTrack == nil) { _, closed in
             if closed { refresh() }
         }
@@ -76,9 +51,7 @@ struct MacLyricsView: View {
 
     @ViewBuilder
     private var background: some View {
-        // In karaoke the backdrop is painted by the root, behind the player bar
-        // as well as the words — the bar fades out there, and a gradient that
-        // stopped at the top of it left a black band where it had been.
+        // In karaoke the root paints the backdrop, behind the player bar too.
         if appState.karaokeActive {
             Color.clear
         } else {
@@ -87,23 +60,17 @@ struct MacLyricsView: View {
     }
 
     private var windowedBackground: some View {
-        // Solid, fully opaque fill — an album-tinted gradient (no translucency,
-        // so nothing behind shows through), darkened for white-text legibility.
+        // Opaque album-tinted gradient, darkened for white text.
         ZStack {
             LinearGradient(
                 colors: tint.isEmpty
                     ? [Color(white: 0.16), Color(white: 0.10)]
                     : [tint[0], tint.count > 1 ? tint[1] : tint[0]],
-                // Karaoke breathes: the gradient's axis drifts over 14s and
-                // back, so the screen is never quite still. Everywhere else the
-                // points are fixed — a popover-sized gradient sliding under the
-                // words is just movement in the corner of the eye.
+                // Axis drifts in karaoke only.
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
-            // Lighter in fullscreen: with the sidebar and panel gone the
-            // gradient is the whole screen, and a 0.45 scrim washed every
-            // record down to the same grey.
+            // Lighter scrim in fullscreen so covers don't all go grey.
             Color.black.opacity(fullscreen ? 0.28 : 0.45)
         }
         .mixAnimation(.easeInOut(duration: 0.5), value: tint)
@@ -111,10 +78,7 @@ struct MacLyricsView: View {
     }
 
     // MARK: - Header links
-    //
-    // Lyrics are an overlay, not a page: leaving them up while the page you
-    // asked for opens underneath means the click looks like it did nothing.
-    // Both modes close — the fullscreen one already did, via `showOnlineArtist`.
+    // Lyrics are an overlay, so navigating away closes them.
 
     private func closingLyrics(_ go: @escaping () -> Void) -> () -> Void {
         { appState.lyricsPresented = false; go() }
@@ -143,10 +107,7 @@ struct MacLyricsView: View {
                             font:  .system(size: fullscreen ? 20 : 15, weight: .bold),
                             color: .white,
                             target: albumTarget)
-                // Every name on the record, same as the player bar: the header
-                // used to print the stored credit, which for a Discover song is
-                // the headliner alone. Each one is its own link now, as it is
-                // in the bar this panel hangs off.
+                // Every credited name, each a link, like the player bar.
                 if engine.queue.currentTrack != nil {
                     MixArtistLine(targets: artistTargets,
                                   font:  .system(size: fullscreen ? 15 : 12),
@@ -155,9 +116,14 @@ struct MacLyricsView: View {
             }
             Spacer()
 
-            // Add / edit the user's own lyrics. Present whatever is on screen:
-            // a wrong LRCLIB match is as worth correcting as a missing one, and
-            // the header is the only chrome the fullscreen mode keeps.
+            if let track = engine.queue.currentTrack, let lyrics, lyrics.hasAny {
+                headerButton(icon: MixtapeIcons.share, help: "Share lyrics as a card") {
+                    appState.lyricCard = LyricCardRequest(track: track, lyrics: lyrics)
+                    appState.lyricsPresented = false
+                }
+            }
+
+            // Add/edit user lyrics, even over a found match.
             if engine.queue.currentTrack != nil {
                 headerButton(
                     icon: "square.and.pencil",
@@ -165,10 +131,7 @@ struct MacLyricsView: View {
                 ) { appState.lyricsEditorTrack = engine.queue.currentTrack }
             }
 
-            // Timing + text size live behind one control rather than five in a
-            // row: they're adjustments you make once and forget, and spelling
-            // them all out crowded the header next to the things you actually
-            // reach for (edit, fullscreen, karaoke, close).
+            // Timing and text size in one menu.
             if fullscreen {
                 headerButton(icon: "slider.horizontal.3",
                              help: "Lyrics timing and size",
@@ -186,9 +149,7 @@ struct MacLyricsView: View {
                 help: fullscreen ? "Exit fullscreen" : "Fullscreen"
             ) { withMixAnimation(.easeInOut(duration: 0.25)) { appState.toggleLyricsFullscreen() } }
 
-            // Karaoke. Fullscreen only: it is fullscreen *plus* clearing the
-            // window, so there is nothing for it to mean from a popover. Lit
-            // while it is on — the control that got you here gets you out.
+            // Fullscreen only; lit while on.
             if fullscreen {
                 headerButton(
                     icon: "music.mic",
@@ -197,7 +158,7 @@ struct MacLyricsView: View {
                 ) { withMixAnimation(.easeInOut(duration: 0.3)) { appState.toggleKaraoke() } }
             }
 
-            // Close (fullscreen only — the popover dismisses by clicking away).
+            // Fullscreen only; the popover dismisses by clicking away.
             if fullscreen {
                 headerButton(icon: "xmark", help: "Close lyrics") {
                     appState.lyricsPresented = false
@@ -300,10 +261,7 @@ struct MacLyricsView: View {
                             fontSize: lineFont, hPadding: hPadding, offset: offset) { time in
                 engine.seek(to: time)
             }
-            // The list runs the full height of the window in karaoke so lines
-            // rise into view rather than appearing out of a dead strip — which
-            // means the bottom one would otherwise sit right on the player bar
-            // until the next scroll nudged it clear.
+            // Bottom margin in karaoke so the last line clears the player bar.
             .contentMargins(.bottom, appState.karaokeActive ? MacPlayerBar.height + 64 : 0,
                             for: .scrollContent)
         } else if let plain = lyrics?.plain, !plain.isEmpty {
@@ -352,10 +310,7 @@ struct MacLyricsView: View {
 
     // MARK: - Resolution
 
-    /// Kicks off whatever this track still needs. It no longer *publishes* the
-    /// lyrics — `resolve` writes them into the service's cache and `lyrics`
-    /// reads them back out — so all that's left here is the artwork tint and
-    /// the spinner.
+    /// Starts lyric resolution (the view reads the cache), artwork tint and spinner.
     private func refresh() {
         tint = ArtworkColors.dominantColors(from: engine.queue.currentTrack?.displayArtwork)
         guard let track = engine.queue.currentTrack else {
@@ -394,9 +349,7 @@ private struct LyricsFrame: ViewModifier {
 
 private struct MacSyncedLyrics: View {
     let lines: [LyricLine]
-    /// Observed here rather than passed as a number, so the tick that moves the
-    /// highlight stops at this view instead of redrawing the popover's header,
-    /// artwork and buttons with it. See `PlaybackClock`.
+    /// Observed here so clock ticks only redraw this view. See `PlaybackClock`.
     @ObservedObject var clock: PlaybackClock
     /// Stops the per-frame sweep redrawing a line that isn't moving.
     let isPlaying: Bool
@@ -411,21 +364,15 @@ private struct MacSyncedLyrics: View {
 
     @State private var hovered: Int? = nil
 
-    /// Karaoke drops the hover highlight: the pointer is hidden while the
-    /// screen is idle, so a lit line there points at nothing.
+    /// Karaoke drops the hover highlight since the pointer is hidden.
     @EnvironmentObject private var appState: MacAppState
 
-    /// Per-word spans, so the active line can be swept rather than flipped on.
-    /// Held in state because this view's body re-runs on every clock tick, and
-    /// the spans only change when the lyrics do.
+    /// Per-word spans, cached since body runs every tick.
     @State private var words: [[LyricWord]] = []
 
     private var activeIndex: Int? {
         guard !lines.isEmpty else { return nil }
-        // No lead. A line stays active until the next one actually begins, so
-        // the singer finishing the last word of a line still has that line lit.
-        // Leading the match moved on early and left the new line grey for a
-        // second or two, which read as the lyrics skipping ahead.
+        // No lead: a line stays active until the next begins.
         let now = now()
         var idx: Int? = nil
         for (i, line) in lines.enumerated() {
@@ -434,8 +381,7 @@ private struct MacSyncedLyrics: View {
         return idx
     }
 
-    /// What the list should be centred on: an instrumental's dots while it's
-    /// playing, otherwise the line being sung.
+    /// Instrumental dots while playing, else the sung line.
     private var scrollTarget: String? {
         let next = (activeIndex ?? -1) + 1
         if next < lines.count,
@@ -455,10 +401,7 @@ private struct MacSyncedLyrics: View {
                     Color.clear.frame(height: 40)
 
                     ForEach(Array(lines.enumerated()), id: \.element.id) { i, line in
-                        // Only present while it's actually playing (plus a beat of lead-in
-                        // so the entry animation has somewhere to start). Outside that the
-                        // row doesn't exist at all — three dim dots parked mid-song read as
-                        // a stray bullet list.
+                        // Only exists while playing (plus a lead-in).
                         if let gap = LyricSync.instrumentalGap(before: i, lines: lines, words: words),
                            clock.currentTime - offset >= gap.start - 0.2, clock.currentTime - offset < gap.end {
                             TimelineView(.animation(paused: !isPlaying)) { _ in
@@ -471,10 +414,7 @@ private struct MacSyncedLyrics: View {
                         }
                         Group {
                             if i == activeIndex, i < words.count, !words[i].isEmpty {
-                                // Only the line being sung is drawn word by
-                                // word: it's the only one whose fill moves, and
-                                // a whole song of per-word views would redraw
-                                // on every frame for nothing.
+                                // Only the active line draws per word.
                                 TimelineView(.animation(paused: !isPlaying)) { _ in
                                     WordSweepLine(
                                         words: words[i],

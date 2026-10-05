@@ -1,15 +1,11 @@
-// AlbumLibraryButtons.swift
-// Mixtape — SharedUI/Components
-//
-// Spotify's two album controls: add to library, and download. Shared by the
-// local album page and the Discover album pages on both platforms.
+// Add-to-library and download controls for local and Discover album pages.
 
 import SwiftUI
 
 struct AlbumSaveButton: View {
     let title: String
     let artistName: String
-    /// Runs when the album is added — the Discover page imports its songs here.
+    /// Discover imports its songs here.
     var onSave: (() -> Void)? = nil
 
     @ObservedObject private var saved = SavedAlbumsService.shared
@@ -37,8 +33,7 @@ struct AlbumDownloadButton: View {
     let ids: [UUID]
     @ObservedObject var downloads: DownloadManager
     let library: LibraryService
-    /// Runs before downloading — the Discover page saves the album first so
-    /// there are library rows to download.
+    /// Discover saves the album first so there are rows to download.
     var prepare: (() async -> Void)? = nil
 
     @State private var confirmRemove = false
@@ -65,8 +60,9 @@ struct AlbumDownloadButton: View {
         .buttonStyle(.plain)
         .frame(width: 40, height: 40)
         .accessibilityLabel(fraction != nil ? "Stop download" : done ? "Remove download" : "Download")
-        .confirmationDialog("Remove these downloads?", isPresented: $confirmRemove) {
+        .mixConfirmationDialog("Remove these downloads?", isPresented: $confirmRemove) {
             Button("Remove Downloads", role: .destructive) { ids.forEach(downloads.removeDownload(for:)) }
+            Button("Cancel", role: .cancel) {}
         }
     }
 }

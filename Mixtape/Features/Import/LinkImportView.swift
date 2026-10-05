@@ -1,26 +1,12 @@
-// LinkImportView.swift
-// Mixtape — Features/Import
-//
-// Paste a Spotify or YouTube link, get the song.
-//
-// One field handles both — `MusicLink` works out which service it is, and a
-// link pasted into the "wrong" one still imports. The sheet is still opened
-// *per service* because a single "Add from a Link" entry left no sign that
-// YouTube was supported at all; naming both in the menu is the only place the
-// user looks. Everything below the title is the same code either way.
-//
-// Shown from the macOS "+" menu and the iOS Add Music sheet. The only
-// platform-specific parts are the keyboard hints and the sheet frame.
+// Paste a Spotify or YouTube link, get the song. `MusicLink` detects the
+// service, so either sheet accepts either link; there's one per service only so
+// the menu names both. Used by the macOS "+" menu and iOS Add Music.
 
 import SwiftUI
 
 public struct LinkImportView: View {
 
-    /// Which service the sheet was opened for. Affects wording only.
-    ///
-    /// `Identifiable` so callers can drive the sheet with `.sheet(item:)` — two
-    /// menu entries opening one sheet is a choice of *which*, not two
-    /// independent booleans that could both be true.
+    /// The service the sheet was opened for. Wording only. `Identifiable` for `.sheet(item:)`.
     public enum Service: Identifiable {
         case spotify
         case youTube
@@ -52,6 +38,11 @@ public struct LinkImportView: View {
     }
 
     @EnvironmentObject private var deps: AppDependencies
+    #if os(macOS)
+    @EnvironmentObject private var appState: MacAppState
+    #else
+    @EnvironmentObject private var appState: IOSAppState
+    #endif
     @Environment(\.dismiss) private var dismiss
 
     private enum Phase: Equatable {
@@ -65,6 +56,8 @@ public struct LinkImportView: View {
 
     @State private var link = ""
     @State private var phase: Phase = .input
+    /// New songs from this sheet, reviewed once it closes.
+    @State private var imported: [Track] = []
     @FocusState private var fieldFocused: Bool
 
     public init(service: Service) {
@@ -78,24 +71,21 @@ public struct LinkImportView: View {
             title: service.title,
             subtitle: service.blurb,
             size: .compact,
-            primary: primaryAction
+            primary: primaryAction,
+            secondary: secondaryAction
         ) {
             content
         }
         .onAppear { fieldFocused = true }
+        // Two sheets can't be up at once, so the review waits for this one to go.
+        .onDisappear {
+            for track in imported { appState.enqueueReview(MetadataReviewItem(imported: track)) }
+        }
     }
 
     // MARK: - Sub-views
 
-    /// One field and whatever the last attempt has to say about itself.
-    ///
-    /// This used to be three full-page states behind a `switch` — a 120pt
-    /// circle over a centred heading, then a page that was nothing but a
-    /// spinner, then a page that was nothing but a checkmark. Each one threw
-    /// away the field and replaced the sheet wholesale, which is a lot of
-    /// motion for "we are looking it up". The field stays put now and the
-    /// outcome arrives underneath it; the wait shows up in the footer button,
-    /// where the thing you pressed is.
+    /// The field, with the last attempt's result underneath and progress in the footer button.
     private var content: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
@@ -109,9 +99,7 @@ public struct LinkImportView: View {
                     .onSubmit(start)
                     .mixSheetField()
 
-                // Explicit rather than reading the clipboard on appear: iOS
-                // shows the user a "pasted from" banner either way, and a
-                // banner they didn't ask for reads as the app snooping.
+                // Explicit paste so iOS doesn't show a clipboard banner unprompted.
                 Button("Paste") {
                     if let clipboard = Self.clipboardString() { link = clipboard }
                 }
@@ -124,9 +112,7 @@ public struct LinkImportView: View {
         }
     }
 
-    /// The result of the last attempt, inline. Nothing here is load-bearing —
-    /// when there's nothing to say, there's nothing drawn, and the sheet is
-    /// just a field.
+    /// The last attempt's result, if any.
     @ViewBuilder
     private var statusLine: some View {
         switch phase {
@@ -134,8 +120,7 @@ public struct LinkImportView: View {
             EmptyView()
 
         case .working:
-            // No progress fraction: this is one song, and the resolve is of
-            // unknown length.
+            // One song of unknown length, so no progress fraction.
             MixSheetStatus(kind: .busy,
                            title: "Finding the song\u{2026}",
                            detail: "The audio is downloaded, not linked, so give it a few seconds.")
@@ -152,18 +137,22 @@ public struct LinkImportView: View {
         }
     }
 
-    /// One button that reads the phase, rather than a different button per page.
-    /// After a successful import it becomes "Add Another", so the sheet stays
-    /// open for the second link — which is how anyone actually uses this.
+    /// Driven by the phase. After success it becomes Done.
     private var primaryAction: MixSheetAction {
         if case .finished = phase {
-            return MixSheetAction("Add Another") {
-                link = ""
-                phase = .input
-                fieldFocused = true
-            }
+            return MixSheetAction("Done") { dismiss() }
         }
         return MixSheetAction("Add Song", isEnabled: canImport, isBusy: phase == .working, action: start)
+    }
+
+    /// Replaces Cancel after success.
+    private var secondaryAction: MixSheetAction? {
+        guard case .finished = phase else { return nil }
+        return MixSheetAction("Import Another") {
+            link = ""
+            phase = .input
+            fieldFocused = true
+        }
     }
 
     // MARK: - Actions
@@ -178,6 +167,7 @@ public struct LinkImportView: View {
         Task {
             do {
                 let outcome = try await deps.linkImport.importTrack(from: link)
+                if !outcome.alreadySaved { imported.append(outcome.track) }
                 phase = .finished(title: outcome.track.title,
                                   artist: outcome.track.artistName,
                                   alreadySaved: outcome.alreadySaved)

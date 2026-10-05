@@ -1,10 +1,4 @@
-// Clipboard.swift
-// Mixtape — Core/Utilities
-//
-// One copy-to-clipboard, because AppKit and UIKit spell it differently and there
-// were three identical private copies of this shading into each other. AppKit
-// also needs the `clearContents()` that UIKit doesn't — the kind of detail that
-// gets dropped in the fourth copy.
+// Cross-platform copy to clipboard. AppKit also needs `clearContents()`.
 
 import Foundation
 

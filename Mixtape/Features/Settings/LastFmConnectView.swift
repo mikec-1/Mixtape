@@ -1,13 +1,8 @@
-// LastFmConnectView.swift
-// Mixtape — Features/Settings
-//
-// Sheet that walks the user through connecting their Last.fm account using the
-// desktop web-auth flow:
-//   1. Paste API key + shared secret (from last.fm/api/account/create).
-//   2. "Connect" → opens the Last.fm authorize page in the browser.
-//   3. After approving there, "Finish connecting" → fetches + stores the session key.
-//
-// When already connected it shows the username and a Disconnect / Forget option.
+// Sheet for connecting Last.fm via the desktop web-auth flow:
+// 1. Paste API key + shared secret (from last.fm/api/account/create).
+// 2. "Connect" opens the authorize page in the browser.
+// 3. "Finish connecting" fetches and stores the session key.
+// When connected it shows the username and Disconnect / Forget.
 
 import SwiftUI
 
@@ -46,8 +41,6 @@ struct LastFmConnectView: View {
     }
 
     /// Three steps, one button: connect, come back from the browser, finish.
-    /// Each of those used to be its own full-width block inside the form, which
-    /// left two buttons on screen at once with no sign which one was next.
     private var primaryAction: MixSheetAction {
         if scrobbler.isConfigured {
             return MixSheetAction("Done") { dismiss() }
@@ -120,8 +113,7 @@ struct LastFmConnectView: View {
                         .font(.mixCaption)
                         .foregroundStyle(Color.mixTextSecondary)
 
-                    // Only a way back to a page they already have open — it
-                    // shouldn't compete with the step that's actually next.
+                    // Secondary: it only reopens a page they already have.
                     Button("Re-open the authorize page") {
                         Task { await connect() }
                     }

@@ -1,5 +1,5 @@
 // MacEmptyLibraryView.swift
-// Mixtape — Mac/Shared
+// Mixtape - Mac/Shared
 //
 // Empty-state view shown when a library section has no content.
 
@@ -79,8 +79,7 @@ struct MacEmptyLibraryView: View {
                 ) { result in
                     guard case .success(let urls) = result else { return }
                     Task { @MainActor in
-                        for url in urls {
-                            let r = await deps.importService.importTrack(from: url)
+                        for r in await deps.importService.importTracks(from: urls) {
                             if case .imported(_, let review) = r {
                                 appState.enqueueReview(review)
                             }
@@ -90,17 +89,16 @@ struct MacEmptyLibraryView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.mixBackground)
+        .background(MixPageBackground())
     }
 }
 
 // MARK: - Shared Artwork View
 
-/// Reusable artwork thumbnail — shows a music-note placeholder when artworkData is nil.
+/// Shows a music-note placeholder when there's no artwork.
 struct MacArtworkView: View {
     let data:         Data?
-    /// The row this cover belongs to, for rows whose blob the bulk fetch
-    /// skipped. Consulted only when `data` is nil — see `ArtworkProvider`.
+    /// For rows whose blob the bulk fetch skipped; only used when `data` is nil.
     var artworkRef:   ArtworkRef? = nil
 
     let size:         CGFloat?   // nil = fills available space
@@ -108,8 +106,7 @@ struct MacArtworkView: View {
 
     var body: some View {
         Group {
-            // Bytes in hand draw now; a row identity is resolved and decoded
-            // off the render path — see `AsyncArtworkImage`.
+            // Bytes draw now; a ref resolves off the render path (`AsyncArtworkImage`).
             if let data, !data.isEmpty, let img = mixImage(from: data, displaySize: size) {
                 img
                     .resizable()

@@ -1,18 +1,5 @@
-// FilenameParser.swift
-// Mixtape — Core/Services/Enrichment
-//
-// Extracts artist, title, and track number from common audio filename conventions.
-//
-// Supported patterns (in order of detection):
-//   "01 - Artist - Title"      → trackNumber=1, artist, title
-//   "01. Title"                → trackNumber=1, title only
-//   "Artist - Title"           → artist, title  (most common)
-//   "Title (feat. Artist)"     → title with featured artist stripped
-//   "Title"                    → title only
-//
-// stripVersionModifiers(_:) removes common user-added version suffixes such as
-// "(slowed)", "(slowed + reverb)", "(sped up)", "(nightcore)", etc. so that
-// iTunes lookups target the canonical song name.
+// Reads artist, title and track number from filenames like:
+// "01 - Artist - Title", "01. Title", "Artist - Title", "Title (feat. X)", "Title".
 
 import Foundation
 
@@ -51,7 +38,7 @@ public struct FilenameParser: Sendable {
             return ParsedFilename()
 
         case 1:
-            // Single component — treat as title, strip any "(feat. X)" suffix for the title
+            // One component: it's the title.
             let title = stripFeaturing(from: parts[0])
             return ParsedFilename(title: title, artistName: nil, trackNumber: trackNumber)
 
@@ -93,25 +80,11 @@ public struct FilenameParser: Sendable {
 
     // MARK: - Version modifier stripping
 
-    /// Removes common user-appended version/edit tags from a title so that the
-    /// result can be used as a cleaner iTunes search query.
-    ///
-    /// Handles three forms:
-    ///   A. Parenthetical  — "Song (slowed + reverb)", "Song [nightcore]"
-    ///   B. Dash-suffix    — "Song - Sped Up", "Song - slowed"
-    ///   C. Bare-suffix    — "Song slowed", "Song slowed reverb"  ← most common in the wild
-    ///
-    /// Applied repeatedly until stable so stacked tags like "Song (slowed) reverb" collapse fully.
-    ///
-    /// Examples:
-    ///   "Mist slowed"                        → "Mist"
-    ///   "Blinding Lights (slowed + reverb)"  → "Blinding Lights"
-    ///   "Levitating - Sped Up"               → "Levitating"
-    ///   "Someone You Loved (Nightcore Remix)" → "Someone You Loved"
-    ///   "drivers license (acoustic version)"  → "drivers license"
+    /// Strips user-added version tags so the iTunes lookup hits the real song:
+    /// "Song (slowed + reverb)", "Song - Sped Up", "Song slowed".
+    /// Repeats until stable so stacked tags go too.
     public func stripVersionModifiers(_ title: String) -> String {
-        // Keywords that mark a non-canonical version of a song.
-        // Order matters: longer/more-specific phrases before their substrings.
+        // Longer phrases before their substrings.
         let kw = [
             // Slowed variants (most common bare-suffix case)
             #"slowed\s*\+\s*reverb"#,
@@ -153,12 +126,11 @@ public struct FilenameParser: Sendable {
             #"version"#,
         ].joined(separator: "|")
 
-        // Pattern A: ( keyword … ) or [ keyword … ] — parenthetical, anywhere
+        // A: bracketed, anywhere.
         let parenPattern = #"\s*[\(\[]\s*(?:"# + kw + #")[^\)\]]*[\)\]]"#
         // Pattern B: " - keyword" at end of string
         let dashPattern  = #"\s+-\s*(?:"# + kw + #")\s*$"#
-        // Pattern C: bare " keyword" at end of string (no surrounding punctuation).
-        // We require at least one real word before it so we don't strip single-word titles.
+        // C: bare keyword at the end, only after another word.
         let barePattern  = #"(?<=\S)\s+(?:"# + kw + #")\s*$"#
 
         var result = title
@@ -174,7 +146,7 @@ public struct FilenameParser: Sendable {
                 .trimmingCharacters(in: .whitespaces)
             if result == prev { break }
         }
-        // Safety: never return empty string — fall back to original
+        // Never return empty.
         return result.isEmpty ? title : result
     }
 }

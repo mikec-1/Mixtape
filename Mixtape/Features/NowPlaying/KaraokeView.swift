@@ -1,20 +1,5 @@
-// KaraokeView.swift
-// Mixtape — Features/NowPlaying
-//
-// The lyrics, alone, at reading-across-the-room size, over the record's own
-// colours. Synced lyrics only: without per-line timings there is nothing to
-// sing along *to*, and the Now Playing panel is the right place for a wall of
-// static text.
-//
-// Nothing here is new machinery. The word sweep is `WordSweepLine`, the
-// per-word spans are `LyricSync`, the instrumental dots are `LyricGapDots` and
-// the scroll-and-highlight is `SyncedLyricsView` at its larger size — the same
-// view the panel draws, with the type scale turned up. macOS has had this since
-// the lyrics popover learned to go fullscreen (`MacLyricsView`); this is the
-// iPhone half of it, presented over Now Playing rather than beside a player bar.
-//
-// Visual only. There is no vocal removal: the streaming path is an `AVPlayer`
-// pointed at a remote file, with nowhere to put a filter.
+// Synced lyrics full screen over the record's colours (iPhone). Reuses
+// `SyncedLyricsView` at a larger size; macOS has `MacLyricsView`. Visual only, no vocal removal.
 
 #if os(iOS)
 import SwiftUI
@@ -22,8 +7,7 @@ import SwiftUI
 struct KaraokeView: View {
 
     @EnvironmentObject private var engine: PlaybackEngine
-    /// `engine.queue` is a plain `let`, so track changes don't republish
-    /// through the engine — the same reason Now Playing observes the service.
+    /// Observed directly: `engine.queue` doesn't republish through the engine.
     @EnvironmentObject private var queueService: QueueService
     @Environment(\.dismiss) private var dismiss
 
@@ -31,14 +15,12 @@ struct KaraokeView: View {
 
     @State private var colors: [Color] = ArtworkColors.fallback
 
-    /// Shared with the macOS lyrics view, so a size set on one is the size on
-    /// the other.
+    /// Shared with the macOS lyrics view.
     @AppStorage("lyricsZoom") private var zoom: Double = 1
     /// Per-song timing correction, in seconds: positive holds the lyrics back.
     @State private var offset: TimeInterval = 0
 
-    /// Transport, seek bar and header fade out while nothing is being touched —
-    /// the same three seconds macOS gives its karaoke chrome.
+    /// Chrome fades after three seconds idle, like macOS.
     @State private var awake = true
     /// VoiceOver can't reach controls that have faded out, so they never do.
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
@@ -81,8 +63,7 @@ struct KaraokeView: View {
         }
         // Anywhere that isn't a lyric or a button brings the chrome back.
         .contentShape(Rectangle())
-        // A tap gesture would miss a scroll; this fires the moment a finger
-        // lands and doesn't take the drag away from the lyrics list.
+        // Fires on touch-down without stealing the lyrics list's scroll.
         .simultaneousGesture(DragGesture(minimumDistance: 0).onChanged { _ in
             if !awake { wake() }
         })
@@ -125,9 +106,7 @@ struct KaraokeView: View {
 
     // MARK: Chrome
 
-    /// Opaque and darkened. The lyrics are the only thing on screen, so the
-    /// background's whole job is to stay out of their way while still being
-    /// this record's colour rather than a grey box.
+    /// Opaque and darkened, but still this record's colour.
     private var background: some View {
         ZStack {
             LinearGradient(colors: colors.isEmpty ? ArtworkColors.fallback : colors,
@@ -146,8 +125,7 @@ struct KaraokeView: View {
                     .font(.system(size: MixFontScale.size(17), weight: .bold))
                     .foregroundStyle(.white)
                     .lineLimit(1)
-                // Every name on the record, not the stored credit — a Discover
-                // song stores the headliner alone. Same rule as the player bar.
+                // Every name on the record, not the stored credit. Same rule as the player bar.
                 if let track {
                     Text(ImportService.displayArtists(title: track.title,
                                                       artistName: track.artistName)
@@ -174,9 +152,7 @@ struct KaraokeView: View {
         .padding(.bottom, 8)
     }
 
-    /// One control for the two adjustments, the way the macOS lyrics header
-    /// does it: four bare steppers say nothing about where they are now or how
-    /// to get back to normal.
+    /// One control for both adjustments, like the macOS lyrics header.
     private var tuning: some View {
         Button {
             withMixAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
@@ -195,8 +171,7 @@ struct KaraokeView: View {
         .accessibilityLabel("Lyrics timing and size")
     }
 
-    /// The card itself, hung under the header rather than presented as a sheet:
-    /// a sheet would cover the lyrics it is adjusting.
+    /// Hung under the header, not a sheet, so it doesn't cover the lyrics.
     private var tuningCard: some View {
         VStack(spacing: 16) {
             tuningRow(title: "Timing",
@@ -308,16 +283,14 @@ struct KaraokeView: View {
             .padding(.horizontal, 24)
             .padding(.bottom, 12)
         }
-        // Collapsed rather than merely hidden: the lyrics grow down into the
-        // space, the way they take over the player bar on macOS.
+        // Collapsed so the lyrics grow into the space.
         .frame(height: awake ? nil : 0, alignment: .top)
         .opacity(awake ? 1 : 0)
         .clipped()
         .allowsHitTesting(awake)
     }
 
-    /// Just enough transport to not have to leave. Skipping is the one thing
-    /// you reach for mid-song, and pausing is the other.
+    /// Minimal transport: pause and skip.
     private var transport: some View {
         HStack(spacing: 36) {
             transportButton("backward.fill", label: "Previous") {

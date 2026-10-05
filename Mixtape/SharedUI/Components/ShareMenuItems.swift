@@ -1,10 +1,5 @@
-// ShareMenuItems.swift
-// Mixtape — SharedUI/Components
-//
-// "Copy Link" and "Share" for anything with a mixtaped.tech link, the same two
-// items in every menu. Flat rather than a Share submenu: copying is what people
-// reach for, and on macOS `ShareLink` already draws its own services submenu.
-// On iOS "Share…" opens Mixtape's own sheet (`MixShareSheet`), not the system one.
+// "Copy Link" and "Share" for anything with a mixtaped.tech link. Flat, not
+// a submenu. "Share..." opens `MixShareSheet`, not the system sheet.
 
 import SwiftUI
 #if os(iOS)
@@ -32,15 +27,23 @@ struct ShareItem {
     var artwork: Artwork = .none
     /// Artists are drawn in a circle, as everywhere else in the app.
     var isRound = false
+    /// Songs, so a card sent in Messages can play.
+    var track: OnlineTrack? = nil
+    /// A finished picture that is the share itself. It goes to people as a photo, not a link card.
+    var image: Data? = nil
+    /// Runs as the link goes out, for a link that only opens for others once it's public.
+    var beforeLink: (() -> Void)? = nil
 
     static func track(_ t: Track) -> ShareItem {
         ShareItem(url: MixtapeLink.track(t), noun: "Song", title: t.displayTitle, subtitle: t.displayArtistName,
-                  artwork: .stored(t.artworkData, .track(t.id)))
+                  artwork: .stored(t.artworkData, .track(t.id)),
+                  track: OnlineTrack(title: ImportService.bareTitle(t.title), artistName: t.artistName,
+                                     albumTitle: t.albumTitle, duration: t.duration))
     }
 
     static func track(_ t: OnlineTrack) -> ShareItem {
         ShareItem(url: MixtapeLink.track(t), noun: "Song", title: t.title, subtitle: t.displayArtistName,
-                  artwork: .remote(t.artworkURL))
+                  artwork: .remote(t.artworkURL), track: t)
     }
 
     static func album(_ a: Album) -> ShareItem {
@@ -77,6 +80,12 @@ struct ShareItem {
                   subtitle: "Playlist", artwork: .playlist(p.id))
     }
 
+    /// The recap card as a picture; the link opens the recap on the site.
+    static func recap(_ png: Data, title: String, username: String, shareID: String?) -> ShareItem {
+        ShareItem(url: shareID.map(MixtapeLink.recap) ?? MixtapeLink.web("@\(username)"),
+                  noun: "Recap", title: title, subtitle: "@\(username)", image: png)
+    }
+
     /// The cover picked for the dub, which may not be the playlist's.
     static func dub(_ p: Playlist, sharedID: UUID, for name: String, artwork: Data?) -> ShareItem {
         ShareItem(url: MixtapeLink.playlist(sharedID), noun: "Dub", title: p.name,
@@ -84,7 +93,7 @@ struct ShareItem {
     }
 }
 
-/// For links that are known up front — songs, albums, artists.
+/// Links known up front: songs, albums, artists.
 struct ShareMenuItems: View {
     let item: ShareItem
 
@@ -99,9 +108,15 @@ struct ShareMenuItems: View {
         } label: {
             Label("Copy \(item.noun) Link", systemImage: "link")
         }
-        // iOS only. On macOS the system picker offers a list of services the
-        // user doesn't have and drops a link into apps this one can't follow
-        // up on — copying the link is the whole feature there.
+        // iOS sends from the share sheet's own row.
+        #if os(macOS)
+        if deps.authService.currentUser != nil {
+            Button { ShareSheet.sendTo(item, deps: deps) } label: {
+                Label(ShareSheet.sendTitle, systemImage: "paperplane")
+            }
+        }
+        #endif
+        // iOS only; on macOS copying the link is enough.
         #if os(iOS)
         Button { ShareSheet.present(item, deps: deps) } label: {
             Label(ShareSheet.title, systemImage: MixtapeIcons.share)
@@ -110,8 +125,7 @@ struct ShareMenuItems: View {
     }
 }
 
-/// For a playlist, whose link only exists once its shared row does — so both
-/// items do their work when pressed, never while the menu is being drawn.
+/// A playlist's link exists only once shared, so both items work on press.
 struct PlaylistShareMenuItems: View {
     let playlist: Playlist
 
@@ -119,12 +133,16 @@ struct PlaylistShareMenuItems: View {
 
     var body: some View {
         Group {
-            Button { share(copy: true) } label: {
+            Button { share(.copy) } label: {
                 Label("Copy Playlist Link", systemImage: "link")
             }
             #if os(iOS)
-            Button { share(copy: false) } label: {
+            Button { share(.sheet) } label: {
                 Label(ShareSheet.title, systemImage: MixtapeIcons.share)
+            }
+            #else
+            Button { share(.send) } label: {
+                Label(ShareSheet.sendTitle, systemImage: "paperplane")
             }
             #endif
         }
@@ -132,7 +150,9 @@ struct PlaylistShareMenuItems: View {
         .disabled(deps.authService.currentUser == nil || playlist.isSystem)
     }
 
-    private func share(copy: Bool) {
+    private enum Action { case copy, sheet, send }
+
+    private func share(_ action: Action) {
         let live = deps.libraryService.playlist(id: playlist.id) ?? playlist
         let tracks = live.trackIDs.compactMap { deps.libraryService.track(id: $0) }
         Task {
@@ -140,23 +160,25 @@ struct PlaylistShareMenuItems: View {
                 let id = try await PlaylistSharingService.shared.linkShareID(
                     playlist: live, tracks: tracks, deviceID: AppDependencies.deviceID)
                 let item = ShareItem.playlist(live, sharedID: id)
-                if copy {
+                switch action {
+                case .copy:
                     copyToClipboard(item.url.absoluteString)
                     deps.showToast(ShareSheet.copiedMessage)
-                } else {
+                case .sheet:
                     ShareSheet.present(item, deps: deps)
+                case .send:
+                    ShareSheet.sendTo(item, deps: deps)
                 }
             } catch PlaylistSharingService.SharingError.notOwner {
-                deps.showToast("Only the owner can share a link to this playlist")
+                deps.showToast(.failed("Only the owner can share a link to this playlist"))
             } catch {
-                deps.showToast("Couldn\u{2019}t make a link. Try again.")
+                deps.showToast(.failed("Couldn\u{2019}t make a link. Try again.", error))
             }
         }
     }
 }
 
-/// The share sheet, for when the thing to share arrives after the menu that
-/// asked for it has gone.
+/// Share sheet for when the link arrives after the menu is gone.
 enum ShareSheet {
     #if os(macOS)
     static let title = "Share"
@@ -164,14 +186,47 @@ enum ShareSheet {
     static let title = "Share\u{2026}"
     #endif
 
-    static let copiedMessage = "Link copied to clipboard"
+    static var copiedMessage: Toast { .done("Link copied to clipboard") }
+    static let sendTitle = "Send to\u{2026}"
+
+    /// A people picker over whatever is showing; the menu that asked is already gone.
+    @MainActor
+    static func sendTo(_ item: ShareItem, deps: AppDependencies) {
+        #if os(iOS)
+        guard let top = topViewController() else { return }
+        let host = UIHostingController(rootView: SendToSheet(item: item, close: {}).environmentObject(deps))
+        host.rootView = SendToSheet(item: item) { [weak host] in host?.dismiss(animated: true) }.environmentObject(deps)
+        host.view.backgroundColor = UIColor(Color.mixBackground)
+        if let sheet = host.sheetPresentationController {
+            sheet.detents = [.medium(), .large()]
+            sheet.prefersGrabberVisible = true
+        }
+        if let coordinator = top.transitionCoordinator {
+            coordinator.animate(alongsideTransition: nil) { _ in top.present(host, animated: true) }
+        } else {
+            top.present(host, animated: true)
+        }
+        #elseif os(macOS)
+        guard let parent = NSApp.keyWindow?.contentViewController else { return }
+        let host = NSHostingController(rootView: SendToSheet(item: item, close: {}).environmentObject(deps))
+        host.rootView = SendToSheet(item: item) { [weak host] in host?.dismiss(nil) }.environmentObject(deps)
+        parent.presentAsSheet(host)
+        #endif
+    }
 
     @MainActor
     static func present(_ item: ShareItem, deps: AppDependencies) {
+        present([ShareChoice(label: item.noun, item: item)], deps: deps)
+    }
+
+    /// Several things to pick between, like a recap's slide, card and link. `dismissed` runs as it goes.
+    @MainActor
+    static func present(_ choices: [ShareChoice], deps: AppDependencies, dismissed: (() -> Void)? = nil) {
+        guard !choices.isEmpty else { return }
         #if os(iOS)
         guard let top = topViewController() else { return }
-        let host = UIHostingController(rootView: MixShareSheet(item: item, deps: deps, close: {}))
-        host.rootView = MixShareSheet(item: item, deps: deps) { [weak host] in
+        let host = UIHostingController(rootView: MixShareSheet(choices: choices, deps: deps, close: {}))
+        host.rootView = MixShareSheet(choices: choices, deps: deps, dismissed: dismissed) { [weak host] in
             host?.dismiss(animated: true)
         }
         host.view.backgroundColor = UIColor(Color.mixBackground)
@@ -179,18 +234,17 @@ enum ShareSheet {
             sheet.detents = [.large()]
             sheet.prefersGrabberVisible = true
         }
-        // Pressed from a context menu, which is still animating away; presenting
-        // mid-transition is silently dropped.
+        // A context menu is still animating away; presenting mid-transition is dropped.
         if let coordinator = top.transitionCoordinator {
             coordinator.animate(alongsideTransition: nil) { _ in top.present(host, animated: true) }
         } else {
             top.present(host, animated: true)
         }
         #elseif os(macOS)
-        guard let window = NSApp.keyWindow, let view = window.contentView else { return }
-        let point = view.convert(window.mouseLocationOutsideOfEventStream, from: nil)
-        NSSharingServicePicker(items: [item.url])
-            .show(relativeTo: NSRect(origin: point, size: .zero), of: view, preferredEdge: .minY)
+        guard let parent = NSApp.keyWindow?.contentViewController else { return }
+        let host = NSHostingController(rootView: MixShareSheet(choices: choices, deps: deps, close: {}))
+        host.rootView = MixShareSheet(choices: choices, deps: deps, dismissed: dismissed) { [weak host] in host?.dismiss(nil) }
+        parent.presentAsSheet(host)
         #endif
     }
 
@@ -207,8 +261,7 @@ enum ShareSheet {
     #endif
 }
 
-/// The share circle beside Play on a detail page. On iOS it opens the share
-/// sheet straight away; on macOS it holds the same two items as a right-click.
+/// Share button beside Play. iOS: opens the sheet. macOS: the same two items.
 struct ShareHeroButton: View {
     let item: ShareItem
 

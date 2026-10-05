@@ -1,17 +1,6 @@
-// MacContentRouter.swift
-// Mixtape — Mac/Content
-//
-// Routes the sidebar selection → content view.
-// When the search field is active (`appState.isSearching`), overrides the
-// sidebar and shows Discover, which searches the catalogue and pins your own
-// matching library songs above the results. "Active" means a query the user
-// has actually asked for — Return, or a picked suggestion. Typing alone gets
-// the panel under the search field and nothing else, and navigating away leaves
-// the text in the field without letting it claim the column, so the page you
-// clicked is the page you get. See `MacAppState.searchCommitted`.
-//
-// The right-side inspector panel (Now Playing / Queue) lives at the MacRootView
-// level, not here, so there is no .inspector modifier in this file.
+// Routes the sidebar selection to a content view. A committed search (`appState.isSearching`)
+// overrides it with Discover, which pins library matches above the catalogue results.
+// The right panel lives in MacRootView.
 
 #if os(macOS)
 import SwiftUI
@@ -27,8 +16,7 @@ struct MacContentRouter: View {
         Group {
             contentBody
         }
-        // Clear any album/playlist/profile/account drill-down whenever the user
-        // switches sections.
+        // Switching sections clears any album/playlist/profile/account drill-down.
         .onChange(of: appState.selection) { _, newValue in
             if newValue != nil {
                 appState.selectedAlbum = nil
@@ -36,6 +24,7 @@ struct MacContentRouter: View {
                 appState.showingAccount = false
                 appState.profileTarget = nil
                 appState.publicPlaylistTarget = nil
+                appState.messagesPage = nil
             }
         }
     }
@@ -45,31 +34,23 @@ struct MacContentRouter: View {
         if appState.showingAccount {
             MacAccountPage()
         } else if let target = appState.publicPlaylistTarget {
-            // Above the profile, not instead of it — the profile underneath is
-            // still the thing Back returns to.
+            // Drawn over the profile, which is where Back returns.
             MacPublicPlaylistPage(target: target)
+        } else if let page = appState.messagesPage {
+            MacMessagesPage(page: page)
         } else if let profile = appState.profileTarget {
             MacProfilePage(profile: profile)
         } else if appState.isSearching {
-            // Every search lands in Discover, whatever section you started
-            // typing in. Discover puts your own matching songs above the online
-            // ones, so this is a superset of what the old library-only results
-            // page could show — and the only way to reach a song you don't
-            // already own.
+            // Every search lands in Discover, library matches included.
             OnlineDiscoverView()
                 .environmentObject(deps.onlineCoordinator)
         } else if appState.discoverLinkActive {
-            // An artist or album opened by clicking a name somewhere else in the
-            // window. Above the album/playlist drill-downs, because a name
-            // clicked *on* an album page opens over it and Back returns to it —
-            // and deliberately below the search branch, so typing still takes
-            // the column the way it does everywhere else.
+            // A Discover page opened from a name link. Above the drill-downs so Back returns to them,
+            // below search so typing still takes the column.
             OnlineDiscoverView()
                 .environmentObject(deps.onlineCoordinator)
         } else if let album = appState.selectedAlbum {
-            // Album drill-down: rendered flat here so sidebar clicks always work.
-            // A NavigationStack inside a NavigationSplitView locks the detail column
-            // to the pushed view, making sidebar items unresponsive.
+            // Drill-downs render flat: a NavigationStack in the detail column made sidebar clicks unresponsive.
             MacAlbumDetailView(album: album)
         } else if let smart = appState.selectedSmartPlaylist {
             SmartPlaylistDetailView(playlist: smart, service: deps.smartPlaylistService)
@@ -86,22 +67,17 @@ struct MacContentRouter: View {
         } else {
             switch appState.selection ?? .home {
             case .home, .discover:
-                // One destination now. Home knew your library but nothing about
-                // the catalogue; Discover knew the catalogue but nothing about
-                // you — and neither was a complete front door. They're tabs of
-                // the same landing page, and both selections still resolve, so
-                // deep links, the command palette and restored state all keep
-                // working; the `.onChange` below just picks the opening tab.
+                // Home and Discover are tabs of one landing page; the `.onChange` below picks the tab.
                 OnlineDiscoverView()
                     .environmentObject(deps.onlineCoordinator)
             case .library, .songs, .albums, .artists, .playlists:
-                // The four old sections are tab identities now. Selecting one
-                // still means "open that view", it just opens as a tab of the
-                // Library page — so every existing navigation into them keeps
-                // working without any of their call sites changing.
+                // The old sections open as tabs of the Library page.
                 MacLibraryView()
             case .localFiles:
                 LocalFilesPage()
+            case .community:
+                CommunityView(onOpenPost: { appState.showPost(code: $0) },
+                              onOpenProfile: { appState.showProfile($0) })
             case .settings:
                 SettingsView(
                     authService:    deps.authService,
@@ -118,12 +94,7 @@ struct MacContentRouter: View {
 }
 
 // MARK: - Account Page (inline, full content area)
-//
-// Reached from Settings → "Manage Account". Rendered flat by MacContentRouter
-// (like the album/playlist drill-downs) rather than as a sheet, so it feels
-// like a real destination and the sidebar stays responsive. The Back button
-// returns to Settings. Presentation ported from main's 1.1 Account window; the
-// content is the shared (newer) AccountSettingsView.
+// Settings > Manage Account, rendered flat like the drill-downs. Back returns to Settings.
 
 struct MacAccountPage: View {
 
@@ -135,7 +106,7 @@ struct MacAccountPage: View {
             .frame(maxWidth: .infinity)
             // Clears the floating back control.
             .padding(.top, 50)
-            .background(Color.mixBackground)
+            .background(MixPageBackground())
             .pageBack("Settings") {
                 appState.goToSection(.settings)
             }
@@ -143,10 +114,7 @@ struct MacAccountPage: View {
 }
 
 // MARK: - Profile Page
-//
-// Someone's profile, rendered flat across the content area like the album and
-// playlist drill-downs — sidebar clicks keep working, and the page gets the full
-// width it was designed for instead of a sheet's worth.
+// Someone's profile, rendered flat across the content area.
 
 struct MacProfilePage: View {
 
@@ -156,17 +124,13 @@ struct MacProfilePage: View {
 
     var body: some View {
         ProfilePageView(profile: profile)
-            .background(Color.mixBackground)
+            .background(MixPageBackground())
             .pageBack { appState.profileTarget = nil }
     }
 }
 
 // MARK: - Public Playlist Page
-//
-// Someone else's public playlist, opened from their profile. Same flat
-// treatment as the pages above — it used to be a 460×520 sheet, which meant the
-// one place you look at a *playlist* was the one place that didn't look like
-// the playlist screen.
+// Someone's public playlist, opened from their profile. Rendered flat like the pages above.
 
 struct MacPublicPlaylistPage: View {
 
@@ -176,10 +140,76 @@ struct MacPublicPlaylistPage: View {
 
     var body: some View {
         PublicPlaylistPage(summary: target.summary, ownerName: target.ownerName)
-            .background(Color.mixBackground)
-            // Named, because this is a two-deep stack and "Back" alone doesn't
-            // say which of the two it unwinds.
+            .background(MixPageBackground())
+            // Named, since this stack is two deep.
             .pageBack("@\(target.ownerName)") { appState.publicPlaylistTarget = nil }
+    }
+}
+
+// MARK: - Messages Page
+// Conversations on the left, the open one (or New message) on the right.
+
+struct MacMessagesPage: View {
+
+    let page: MacAppState.MessagesPage
+
+    @EnvironmentObject private var appState: MacAppState
+    @State private var picking = false
+
+    private var person: UserProfile? {
+        if case .thread(let person) = page { person } else { nil }
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            MessagesView(selected: picking ? nil : person?.id,
+                         open: { picking = false; appState.messagesPage = .thread($0) },
+                         compose: { picking = true })
+                .frame(width: 320)
+            Rectangle().fill(Color.mixSeparator).frame(width: 0.5)
+            Group {
+                if picking {
+                    NewMessagePicker(back: { picking = false }) {
+                        picking = false
+                        appState.messagesPage = .thread($0)
+                    }
+                } else if let person {
+                    MessageThreadView(person: person, openProfile: { appState.showProfile(person) })
+                        // Identity, so switching conversations starts a fresh thread.
+                        .id(person.id)
+                } else {
+                    empty
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .background(MixPageBackground())
+        .pageBack { appState.messagesPage = nil }
+    }
+
+    private var empty: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "paperplane")
+                .font(.system(size: 36, weight: .light))
+                .foregroundStyle(Color.mixTextTertiary)
+            Text("Your messages")
+                .font(.mixTitle2)
+                .foregroundStyle(Color.mixTextPrimary)
+            Text("Send songs, photos and stickers to a friend.")
+                .font(.mixSubtext)
+                .foregroundStyle(Color.mixTextSecondary)
+            Button { picking = true } label: {
+                Text("New message")
+                    .font(.mixLabel)
+                    .foregroundStyle(Color.mixOnAccent)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 8)
+                    .background(Color.mixAccentFill, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .mixHandCursor()
+            .padding(.top, 6)
+        }
     }
 }
 
@@ -189,9 +219,7 @@ struct MacPublicPlaylistPage: View {
 
 struct MacTrackInspector: View {
 
-    /// The track this panel was opened with — shown only as a fallback when
-    /// nothing is playing. Per the "follow now-playing always" behaviour, the
-    /// panel otherwise tracks the live current track (see `track`).
+    /// Shown only when nothing is playing; otherwise the panel follows the current track.
     let fallbackTrack: Track
 
     @EnvironmentObject private var engine:   PlaybackEngine
@@ -203,25 +231,19 @@ struct MacTrackInspector: View {
     @State private var fileSize:   String = ""
     @State private var fileFormat: String = ""
 
-    /// Always reflects the currently playing track, falling back to whatever the
-    /// panel was opened with when playback is stopped. Observing `queue` makes
-    /// the whole panel re-render (and reload file metadata) on every song change.
+    /// The playing track, or the one the panel opened with when stopped.
     private var track: Track { queue.currentTrack ?? fallbackTrack }
 
 
     /// True when the inspector's track is the one currently loaded in the queue.
     private var isCurrentTrack: Bool { queue.currentTrack?.id == track.id }
 
-    /// Whether the inspector's track is in the user's Favourites. Reads through
-    /// `library` so it re-evaluates whenever the library publishes a change.
+    /// Reads through `library` so it updates when the library publishes.
     private var isFavourited: Bool { library.isFavourited(trackID: track.id) }
 
     private var albumEnabled: Bool { !track.albumTitle.isEmpty }
 
-    /// One tappable target per individual artist on the track, and the title's
-    /// album target. Both come from `TrackLinks`, so the inspector answers the
-    /// same question the player bar, the queue and the lyrics header do — and
-    /// answers it the same way: Discover, never the local library row.
+    /// One target per artist plus the album, from `TrackLinks`: always Discover, never the library row.
     private var artistTargets: [(name: String, action: () -> Void)] {
         TrackLinks.artists(for: track, appState: appState)
     }
@@ -237,7 +259,7 @@ struct MacTrackInspector: View {
                     .padding(.top, 14)
                     .padding(.bottom, 16)
 
-                // Title / artist / album — artist & album drill in when present.
+                // Title / artist / album; artist and album link when available.
                 HStack(alignment: .top, spacing: 8) {
                     VStack(alignment: .leading, spacing: 4) {
                         InspectorLinkLine(text: track.title,
@@ -273,8 +295,7 @@ struct MacTrackInspector: View {
                 .padding(.horizontal, 14)
                 .padding(.bottom, 14)
 
-                // Actions — when this track is already playing, the Play button is
-                // pointless, so show a single full-width Queue button instead.
+                // For the playing track, Play is pointless, so show one full-width Queue button.
                 HStack(spacing: 8) {
                     if !isCurrentTrack {
                         InspectorActionButton(title: "Play", icon: "play.fill", prominent: true) {
@@ -294,8 +315,7 @@ struct MacTrackInspector: View {
                 .padding(.horizontal, 14)
                 .padding(.bottom, 16)
 
-                // "Play Next" queues the track right after the current one. Hidden
-                // for the now-playing track, where it would just duplicate it.
+                // Hidden for the playing track.
                 if !isCurrentTrack {
                     InspectorActionButton(title: "Play Next",
                                           icon: "text.insert",
@@ -306,17 +326,12 @@ struct MacTrackInspector: View {
                     .padding(.bottom, 16)
                 }
 
-                // What plays after this one, and the way through to the rest of
-                // it. Both live here because "what's next?" is the question this
-                // panel is open to answer, and the only previous answer was to
-                // leave for the Queue tab and lose the song you were looking at.
+                // What plays next, with a way into the full queue.
                 upNextRow
                     .padding(.horizontal, 14)
                     .padding(.bottom, 16)
 
-                // Metadata — one card rather than a run of hairlines, so the
-                // details read as a block and the wash keeps coming through
-                // around it.
+                // Metadata as one card.
                 inspectorCard("Details") {
                     inspectorRow("Duration", value: track.formattedDuration)
                     if let year = track.year             { inspectorRow("Year",     value: "\(year)") }
@@ -338,8 +353,7 @@ struct MacTrackInspector: View {
             }
             .padding(.bottom, 18)
         }
-        // Like the Queue panel: the right-hand column paints the window colour
-        // and the page's wash behind this, so it stays transparent.
+        // Transparent: the column paints the window colour and wash behind it.
         .onAppear  { loadFileMetadata() }
         .onChange(of: track.id) { _, _ in loadFileMetadata() }
     }
@@ -352,10 +366,7 @@ struct MacTrackInspector: View {
         return rows[index].track
     }
 
-    /// One card, not two: a header line that says what this is with the way
-    /// into the full queue sitting opposite it, and the next song itself
-    /// underneath with its cover. Two equal plates side by side made "Open
-    /// queue" look like a second song and squeezed the title to nothing.
+    /// One card: header with an "Open queue" link, then the next song with its cover.
     private var upNextRow: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -430,8 +441,7 @@ struct MacTrackInspector: View {
             }
         }
         .aspectRatio(1, contentMode: .fit)
-        // Inset and rounded rather than edge-to-edge: the cover reads as the
-        // panel's subject instead of as a banner welded to the window edge.
+        // Inset and rounded so the cover doesn't read as a banner.
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .mixShadow(color: .black.opacity(0.3), radius: 14, y: 6)
     }
@@ -470,9 +480,7 @@ struct MacTrackInspector: View {
     }
 
     private func loadFileMetadata() {
-        // localPath is Documents-relative — resolve to a real on-disk URL
-        // (export folder / cache fallbacks included) before statting it, or the
-        // Size row never populates.
+        // `localPath` is Documents-relative; resolve it (with export/cache fallbacks) before statting.
         let resolved = deps.fileStorage.localURL(for: track)
         let ext = (resolved?.pathExtension ?? URL(fileURLWithPath: track.file.localPath).pathExtension).uppercased()
         fileFormat = ext.isEmpty ? "Audio" : ext
@@ -481,18 +489,14 @@ struct MacTrackInspector: View {
            let bytes = (try? FileManager.default.attributesOfItem(atPath: resolved.path(percentEncoded: false)))?[.size] as? Int64 {
             fileSize = ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
         } else if track.file.fileSize > 0 {
-            // No local copy (e.g. not yet downloaded on this device) — fall back
-            // to the size recorded at import.
+            // No local copy: fall back to the size recorded at import.
             fileSize = ByteCountFormatter.string(fromByteCount: track.file.fileSize, countStyle: .file)
         }
     }
 }
 
 // MARK: - Inspector Action Button
-//
-// Capsule actions for the inspector's Play / Queue / Play Next row. The stock
-// bordered buttons were the one part of the panel that still looked like a
-// system dialog; these match the pill controls used on album and mix pages.
+// Capsule buttons for the inspector's Play / Queue / Play Next row, matching the album and mix pages.
 
 private struct InspectorActionButton: View {
     let title:     String
@@ -536,10 +540,7 @@ private struct InspectorActionButton: View {
 }
 
 // MARK: - Inspector Link Line
-//
-// A single artist/album line under the title. When a navigation target exists
-// it behaves as a borderless button with a pointing-hand cursor and a hover
-// underline (Spotify-style); otherwise it renders as plain text.
+// An artist/album line under the title: a hover-underlined link with a target, plain text without.
 
 private struct InspectorLinkLine: View {
     let text:    String
@@ -577,10 +578,7 @@ private struct InspectorLinkLine: View {
 }
 
 // MARK: - InspectorArtistLine
-//
-// Renders one or more individually-tappable artist names, comma-separated. A
-// single artist matches a lone InspectorLinkLine; multiple artists (a "feat."
-// blob) each become their own click-through target so the correct profile opens.
+// One or more clickable artist names, comma-separated, so each credit opens its own page.
 
 private struct InspectorArtistLine: View {
     let targets: [(name: String, action: () -> Void)]
@@ -608,8 +606,7 @@ private struct FlowArtistRow: View {
     var body: some View {
         HStack(spacing: 0) {
             ForEach(Array(targets.enumerated()), id: \.offset) { idx, item in
-                // See `TappableArtistRow` — the credit trails off once at the
-                // end instead of every name giving up letters at once.
+                // See `TappableArtistRow`: the credit truncates once at the end.
                 InspectorLinkLine(text: item.name, color: color, enabled: true) {
                     item.action()
                 }

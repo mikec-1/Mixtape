@@ -1,5 +1,5 @@
 // IOSDiscoverView.swift
-// Mixtape — iOS/Online
+// Mixtape - iOS/Online
 //
 // iOS port of OnlineDiscoverView. On iOS the coordinator resolves audio through
 // the Mac/server RemoteResolverService, then plays the downloaded .m4a. Uses a
@@ -11,9 +11,7 @@ import Combine
 
 struct IOSDiscoverView: View {
 
-    /// Opens the Settings sheet, which MainTabView owns. Optional so the pushed
-    /// pages and previews that build this view without a tab bar around it don't
-    /// have to invent one.
+    /// Opens Settings, which MainTabView owns. Optional for pushed pages and previews without a tab bar.
     var onOpenSettings: (() -> Void)? = nil
 
     @EnvironmentObject private var deps:        AppDependencies
@@ -21,22 +19,15 @@ struct IOSDiscoverView: View {
     @EnvironmentObject private var engine:      PlaybackEngine
     @EnvironmentObject private var iosAppState:  IOSAppState
 
-    /// Query, results, landing content and the drill-down stack all live in the
-    /// store rather than in @State, so the tab comes back exactly as it was
-    /// left. Shared with macOS, where it's load-bearing — MacContentRouter
-    /// destroys Discover outright whenever you look at another section.
-    ///
-    /// The typed path replaces NavigationPath: it's what lets the store persist
-    /// the stack (NavigationPath can't be inspected or rebuilt) and it's the
-    /// same `[DiscoverDestination]` the Mac side keeps.
+    /// All state lives in the store so the tab comes back as it was left (on macOS, MacContentRouter destroys
+    /// Discover on every section switch). A typed path because NavigationPath can't be persisted.
     @ObservedObject private var store = DiscoverSessionStore.shared
 
     private var results: DiscoverResults { store.results }
     private var browse: BrowseLanding { store.browse }
     private var browseLoading: Bool { store.browseLoading }
 
-    /// Written straight through to the store; nonmutating because the storage
-    /// is the store, not this struct.
+    /// Writes straight through to the store.
     private var path: [DiscoverDestination] {
         get { store.path }
         nonmutating set { store.path = newValue }
@@ -45,24 +36,17 @@ struct IOSDiscoverView: View {
     var body: some View {
         NavigationStack(path: $store.path) {
             ScrollView {
-                if let error = coordinator.errorMessage {
-                    banner(error)
-                }
                 content
                     .padding(.bottom, 24)
             }
-            // Spotify's header: avatar and filters pinned above the page instead
-            // of a large "Home" title the tab bar already says.
+            // Spotify-style header: avatar and filters pinned above the page, no large title.
             .safeAreaInset(edge: .top, spacing: 0) { header }
             .toolbar(.hidden, for: .navigationBar)
             .mixPullToRefresh(deps) {
-                // The landing is the store's, not the library's, so a sync
-                // alone would leave the half of this page the user can see
-                // exactly as it was.
+                // The landing belongs to the store, not the library, so a sync alone wouldn't refresh it.
                 await store.reloadBrowse(using: deps.itunesClient)
             }
-            .mixAnimation(.spring(response: 0.35, dampingFraction: 0.85), value: coordinator.errorMessage)
-            .background(Color.mixBackground.ignoresSafeArea())
+            .background(MixPageBackground())
             .miniPlayerSafeArea()
             .navigationTitle("Home")
             .navigationDestination(for: Album.self) { AlbumDetailView(album: $0) }
@@ -115,41 +99,37 @@ struct IOSDiscoverView: View {
                                 guard let first = mix.tracks.first else { return }
                                 Task { await play(first, context: mix.tracks) }
                             },
-                            // Saved mixes are library playlists, so this leaves
-                            // the Discover tab rather than pushing a library
-                            // page onto its stack.
+                            // Saved mixes are library playlists, so this switches tabs rather than pushing.
                             onOpenSavedMix: { iosAppState.openLibraryPlaylist($0) },
                             resolvingID: coordinator.resolvingID
                         )
                         .navigationTitle("Mixtape")
                         .navigationBarTitleDisplayMode(.inline)
                     case .profile(let profile):
-                        ProfilePageView(profile: profile)
+                        ProfilePageView(profile: profile, onOpenPost: { path.append(DiscoverDestination.post($0)) },
+                                        onOpenProfile: { path.append(DiscoverDestination.profile($0)) })
                             .navigationBarTitleDisplayMode(.inline)
+                    case .post(let code):
+                        PostPageView(code: code, onOpenProfile: { path.append(DiscoverDestination.profile($0)) })
+                    case .smart(let playlist):
+                        SmartPlaylistDetailView(playlist: playlist, service: deps.smartPlaylistService)
+                            .environmentObject(deps)
+                            .environmentObject(engine)
+                    case .downloads(let title, let ids):
+                        OfflineMixPage(title: title, ids: ids)
                     }
                 }
                 .miniPlayerSafeArea()
             }
         }
-        // No search field here any more. Searching is the Search tab's job —
-        // one field for the library *and* the catalogue — and a second one on
-        // Home meant two doorways sharing one result store, where a search
-        // started in either would silently redraw the other.
-        //
-        // Tapping Home while you're already on it still unwinds to the landing.
+        // Tapping Home while on it unwinds to the landing. Search lives in the Search tab.
         .onChange(of: iosAppState.homeResetToken) { _, _ in
             path.removeAll()
         }
         .onChange(of: store.resultsQuery) { _, _ in warmTopResults() }
-        // First launch appears before the library has loaded, and a personal
-        // landing built from an empty library is refused — retry once songs
-        // exist. Same fix as macOS.
-        // `dropFirst`: SwiftUI re-subscribes on every redraw and `$tracks` replays
-        // its current value, which re-ran the seed scan (~125ms) each time — the
-        // search-bar freeze. `onAppear` already covers the first load.
-        // Deferred a tick: `$tracks` fires in `willSet`, so read synchronously the
-        // library is still the empty one and the load refuses — Home then stayed
-        // on "Trending now" until a tab switch re-ran `onAppear`.
+        // First launch appears before the library loads, and an empty library can't seed a personal landing,
+        // so retry once songs exist. `dropFirst`: `onReceive` resubscribes on every redraw and `$tracks` replays;
+        // `onAppear` covers the first load. Deferred a tick: `$tracks` fires in `willSet`.
         .onReceive(deps.libraryService.$tracks.map(\.isEmpty).removeDuplicates().dropFirst()) { _ in
             DispatchQueue.main.async { loadPersonal() }
         }
@@ -158,18 +138,12 @@ struct IOSDiscoverView: View {
         }
         .onAppear {
             store.loadBrowseIfNeeded(using: deps.itunesClient)
-            // Seeds need the main-actor stats and library services, which the
-            // store deliberately doesn't hold — so they're computed here and
-            // handed over. Cheap on every appear: the store's TTL and seed
-            // fingerprint decide whether anything is actually fetched.
+            // Seeds need main-actor services the store doesn't hold, so they're computed here. Cheap: the store's
+            // TTL and seed fingerprint decide whether anything is fetched.
             loadPersonal()
         }
-        // No cancel on disappear: the task belongs to the store, so a search
-        // still in the air finishes and its results are waiting on the way back
-        // instead of having been thrown away halfway.
-        // Consume a cross-tab request to open an online artist by name (set when
-        // a featured/unmatched artist is tapped in the mini player / now-playing
-        // sheet / Home). Resolve the name to a Deezer artist and push its page.
+        // No cancel on disappear: the search task belongs to the store and finishes.
+        // Cross-tab request to open an online artist by name: resolve it to a Deezer artist and push.
         .onChange(of: iosAppState.pendingDiscoverArtistName) { _, name in
             guard let name else { return }
             iosAppState.pendingDiscoverArtistName = nil
@@ -179,7 +153,12 @@ struct IOSDiscoverView: View {
                 }
             }
         }
-        // A station seeded by one song — "Go to Song Radio" on a track row.
+        .onChange(of: iosAppState.pendingDiscoverAlbum) { _, probe in
+            guard let probe else { return }
+            iosAppState.pendingDiscoverAlbum = nil
+            openAlbum(for: probe)
+        }
+        // A station seeded by one song ("Go to Song Radio").
         .onChange(of: iosAppState.pendingSongRadio) { _, seed in
             guard let seed else { return }
             iosAppState.pendingSongRadio = nil
@@ -191,12 +170,27 @@ struct IOSDiscoverView: View {
                 await MainActor.run { path.append(DiscoverDestination.mix(station)) }
             }
         }
-        // Mixtape's profile, asked for from another tab — the byline on a saved
-        // mix in the library.
+        // Mixtape's profile from another tab, e.g. the byline on a saved mix.
         .onChange(of: iosAppState.pendingMixtapeProfile) { _, wanted in
             guard wanted else { return }
             iosAppState.pendingMixtapeProfile = false
             path.append(DiscoverDestination.mixtapeProfile)
+        }
+        .onChange(of: iosAppState.pendingPost) { _, code in
+            guard let code else { return }
+            iosAppState.pendingPost = nil
+            path.append(DiscoverDestination.post(code))
+        }
+        .onChange(of: iosAppState.pendingProfile) { _, profile in
+            guard let profile else { return }
+            iosAppState.pendingProfile = nil
+            path.append(DiscoverDestination.profile(profile))
+        }
+        // "Open your tape" at the end of a recap.
+        .onReceive(NotificationCenter.default.publisher(for: .mixOpenSmartPlaylist)) { note in
+            guard let playlist = note.object as? SmartPlaylist else { return }
+            iosAppState.selectedTab = .home
+            path.append(DiscoverDestination.smart(playlist))
         }
     }
 
@@ -204,8 +198,7 @@ struct IOSDiscoverView: View {
 
     private enum HomeFilter: String, CaseIterable {
         case all = "All", mixes = "Mixes", discover = "Discover", library = "Library"
-        /// Only what plays with no network. Chosen for the user when the
-        /// network goes — see `OfflineWatcher` in the header.
+        /// Only what plays offline. Chosen automatically when the network drops, see `OfflineWatcher`.
         case downloaded = "Downloaded"
     }
 
@@ -219,11 +212,6 @@ struct IOSDiscoverView: View {
             ProfileMenuButton(size: 32)
                 .environmentObject(deps)
             IOSFilterPills(filters: isOffline ? [.downloaded] : HomeFilter.allCases, selection: $filter)
-            OfflineWatcher(downloads: deps.downloadManager) { offline in
-                isOffline = offline
-                // Only on the way out: coming back leaves the user where they are.
-                if offline { filter = .downloaded }
-            }
             if let onOpenSettings {
                 Button(action: onOpenSettings) {
                     Image(systemName: MixtapeIcons.settings)
@@ -232,110 +220,46 @@ struct IOSDiscoverView: View {
                 }
                 .tint(Color.mixPrimary)
                 .accessibilityLabel("Settings")
+                // The target's empty edge sits over the pills' fade, so the icon ends up close to them.
+                .padding(.leading, -14)
             }
         }
         .padding(.horizontal, 16)
-        .background(Color.mixBackground)
+        // Out of the row: even at zero size it would take a gap.
+        .background {
+            OfflineWatcher(downloads: deps.downloadManager, auth: deps.authService) { offline in
+                // Back online, the landing comes back with it.
+                if offline != isOffline { filter = offline ? .downloaded : .all }
+                isOffline = offline
+            }
+        }
+        .background(MixPageBackground())
     }
 
     // MARK: - Content router
 
     @ViewBuilder
     private var content: some View {
-        // Always the landing. Results belong to the Search tab now, and they
-        // live in the same shared store — so branching on `results` here would
-        // put someone else's search on this page.
+        // Always the landing: results belong to the Search tab.
         browseLanding
     }
 
     // MARK: - Landing
 
-    /// One scroll of cards and shelves, Spotify's phone Home rather than the
-    /// Mac's page squeezed down: bold section titles, horizontal shelves that
-    /// cost one row however long they are, and no wrapping grids. The pills in
-    /// the header narrow it to one kind of thing.
-    private var offlinePlaylists: [Playlist] {
-        deps.libraryService.playlists.filter { !$0.trackIDs.isEmpty && deps.downloadManager.isFullyDownloaded($0.trackIDs) }
-    }
-    private var offlineAlbums: [Album] {
-        deps.libraryService.albums.filter { SavedAlbumsService.shared.isSaved($0) && deps.downloadManager.isFullyDownloaded($0.trackIDs) }
-    }
-
-    /// Spotify's offline Home: downloaded things as tiles, local artwork only.
-    @ViewBuilder
-    private var offlineHome: some View {
-        let playlists = offlinePlaylists, albums = offlineAlbums
-        if playlists.isEmpty && albums.isEmpty {
-            DownloadedSongsView(downloads: deps.downloadManager, embedded: true)
-                .environmentObject(deps.libraryService)
-        } else {
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
-                ForEach(playlists.prefix(8)) { p in
-                    offlineTile(p.name) { PlaylistArtwork(playlist: p, size: 52, cornerRadius: 0) } open: { iosAppState.openLibraryPlaylist(p) }
-                }
-                ForEach(albums.prefix(8)) { a in
-                    NavigationLink(value: a) {
-                        offlineTileLabel(a.title) { ArtworkThumbnail(data: a.artworkData, artworkRef: .album(a.id), size: 52, cornerRadius: 0, placeholder: MixtapeIcons.album) }
-                    }.buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal, 16)
-            VStack(alignment: .leading, spacing: 12) {
-                Text("While you're offline").font(.system(size: MixFontScale.size(22), weight: .bold)).padding(.horizontal, 16)
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(alignment: .top, spacing: 14) {
-                        ForEach(playlists) { p in
-                            Button { iosAppState.openLibraryPlaylist(p) } label: {
-                                offlineCard(p.name, "Playlist") { PlaylistArtwork(playlist: p, size: 140) }
-                            }.buttonStyle(.plain)
-                        }
-                        ForEach(albums) { a in
-                            NavigationLink(value: a) {
-                                offlineCard(a.title, a.artistName) { ArtworkThumbnail(data: a.artworkData, artworkRef: .album(a.id), size: 140, cornerRadius: 6, placeholder: MixtapeIcons.album) }
-                            }.buttonStyle(.plain)
-                        }
-                    }.padding(.horizontal, 16)
-                }
-            }
-        }
-    }
-
-    private func offlineTile<A: View>(_ title: String, @ViewBuilder art: () -> A, open: @escaping () -> Void) -> some View {
-        Button(action: open) { offlineTileLabel(title, art: art) }.buttonStyle(.plain)
-    }
-
-    private func offlineTileLabel<A: View>(_ title: String, @ViewBuilder art: () -> A) -> some View {
-        HStack(spacing: 8) {
-            art().frame(width: 52, height: 52).clipped()
-            Text(title).font(.system(size: MixFontScale.size(13), weight: .semibold)).foregroundStyle(Color.mixTextPrimary).lineLimit(2)
-            Spacer(minLength: 0)
-        }
-        .background(Color.mixTextPrimary.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 4))
-    }
-
-    private func offlineCard<A: View>(_ title: String, _ subtitle: String, @ViewBuilder art: () -> A) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            art()
-            Text(title).font(.system(size: MixFontScale.size(13), weight: .semibold)).foregroundStyle(Color.mixTextPrimary).lineLimit(1)
-            Text(subtitle).font(.system(size: MixFontScale.size(12))).foregroundStyle(Color.mixTextSecondary).lineLimit(1)
-        }.frame(width: 140, alignment: .leading)
-    }
-
+    /// One scroll of cards and shelves: bold titles, horizontal shelves, no wrapping grids.
+    /// The header pills narrow it to one kind of thing.
     private var browseLanding: some View {
         VStack(alignment: .leading, spacing: 30) {
             if filter == .downloaded {
-                // Nothing else on this page can start without a network, so the
-                // pill replaces the landing rather than filtering it.
-                offlineHome
+                // Nothing else here works offline, so this pill replaces the landing.
+                IOSOfflineHome(downloads: deps.downloadManager)
             } else {
             // Jump back in: the two-column tiles, and the library's own shelves.
             if shows(.library) { homeSections(bands: .top) }
 
             if shows(.mixes) { madeForYou }
 
-            // Made from your listening too, so they sit with the mixes rather
-            // than below Trending now.
+            // Made from your listening too, so they sit with the mixes.
             if shows(.library),
                HomeSections.hasLibraryContent(engine: engine, library: deps.libraryService) {
                 homeSections(bands: .smart)
@@ -358,8 +282,7 @@ struct IOSDiscoverView: View {
         .padding(.top, 8)
     }
 
-    /// The shared Home content, wired to this tab's navigation. Written once and
-    /// used twice — see `HomeBands` for why the page is drawn in two pieces.
+    /// The shared Home content wired to this tab's navigation. See `HomeBands` for why it's two pieces.
     private func homeSections(bands: HomeBands) -> some View {
         HomeSections(
             onQuickLink: { _ in iosAppState.selectedTab = .library },
@@ -368,9 +291,7 @@ struct IOSDiscoverView: View {
                     if deps.onlineCoordinator.isStandaloneOnline(track) {
                         await deps.onlineCoordinator.playStandaloneOnline(track, context: context)
                     } else {
-                        // These are Home's rows even though they are drawn
-                        // inside Discover, so the row names itself rather than
-                        // the tab it happens to be sitting in.
+                        // These are Home's rows, so they're named for Home.
                         await engine.play(track: track, in: context, source: .named(origin))
                     }
                 }
@@ -428,6 +349,15 @@ struct IOSDiscoverView: View {
                 }
             }
 
+            if deps.isAuthenticated {
+                section("Blends") {
+                    BlendShelf(blends: deps.blends, deps: deps, showsHeader: false,
+                               resolvingID: coordinator.resolvingID,
+                               onOpen: { path.append(DiscoverDestination.mix($0)) },
+                               onPlay: { playMix($0) })
+                }
+            }
+
             if let release = landing.newRelease { newRelease(release) }
 
             if !landing.recommendedPool.isEmpty { recommendedSongs(landing) }
@@ -440,8 +370,7 @@ struct IOSDiscoverView: View {
                 section("Radios") { mixShelf(landing.stations) }
             }
 
-            // Five of these is five screens-worth of faces on "All"; the Mixes
-            // pill shows the rest.
+            // Two on "All"; the Mixes pill shows the rest.
             ForEach(landing.related.prefix(filter == .all ? 2 : .max)) { row in
                 section(row.seedArtist, eyebrow: "Because you listened to") {
                     shelf {
@@ -472,7 +401,7 @@ struct IOSDiscoverView: View {
         }
     }
 
-    /// The 2×2 of covers Spotify's Daily Mix wears, or the one cover there is.
+    /// The 2x2 of covers Spotify's Daily Mix wears, or the one cover there is.
     @ViewBuilder
     private func mixCover(_ mix: PersonalMix) -> some View {
         if mix.covers.count >= 4 {
@@ -636,8 +565,7 @@ struct IOSDiscoverView: View {
         }
     }
 
-    /// Your seed artists' releases in front of the catalogue's editorial feed,
-    /// deduped on album id. Same list the Mac builds.
+    /// Your seed artists' releases before the editorial feed, deduped by album id. Same as the Mac.
     private var newReleaseAlbums: [OnlineAlbum] {
         var seen = Set<Int>()
         return (store.personal.freshReleases + browse.newReleases)
@@ -652,8 +580,7 @@ struct IOSDiscoverView: View {
         section(title, eyebrow: eyebrow, accessory: { EmptyView() }, content: content)
     }
 
-    /// A bold 22pt title, an optional small line above it ("Because you
-    /// listened to"), and a trailing control.
+    /// Bold 22pt title, optional kicker above it ("Because you listened to") and a trailing control.
     private func section<Accessory: View, Content: View>(_ title: String,
                                                          eyebrow: String? = nil,
                                                          @ViewBuilder accessory: () -> Accessory,
@@ -753,37 +680,10 @@ struct IOSDiscoverView: View {
             onPlayNext:     { Task { await coordinator.playNext(song) } },
             onAddToQueue:   { Task { await coordinator.addToQueue(song) } },
             onWrongVersion: { Task { await coordinator.reResolveAndPlay(song, context: context) } },
-            // The landing has no resolved album or artist in hand, so both are
-            // looked up by name on the way — same as the Mac landing does.
+            // No resolved album or artist here, so both are looked up by name. Same as the Mac.
             onOpenAlbum:  song.albumTitle.isEmpty ? nil : { openAlbum(for: song) },
             onOpenArtist: { openArtist(named: $0) }
         )
-    }
-
-    private func banner(_ text: String) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: "exclamationmark.circle.fill")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(Color.mixDestructive)
-                .accessibilityHidden(true)
-            Text(text)
-                .font(.mixLabel)
-                .foregroundStyle(Color.mixTextPrimary)
-                .lineLimit(3)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
-        .background(Color.mixSurface2, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.mixDestructive.opacity(0.30), lineWidth: 0.5)
-        )
-        .mixShadow(color: .black.opacity(0.2), radius: 8, y: 3)
-        .padding(.horizontal, 16)
-        .padding(.top, 12)
-        .transition(.move(edge: .top).combined(with: .opacity))
     }
 
     // MARK: - Personal landing
@@ -795,18 +695,14 @@ struct IOSDiscoverView: View {
             radarSeeds: RecommendationEngine.radarSeeds(library: deps.libraryService),
             genreSeeds: RecommendationEngine.radarSeeds(library: deps.libraryService,
                                                         limit: RecommendationEngine.maxGenreSeeds),
+            genreTitles: RecommendationEngine.seedTitles(library: deps.libraryService),
             known: RecommendationEngine.knownKeys(library: deps.libraryService),
             using: deps.itunesClient
         )
     }
 
-    /// Get the resolver started on the songs most likely to be tapped, the
-    /// moment a search comes back.
-    ///
-    /// This is what iOS has instead of the Mac's hover-prefetch — a phone has no
-    /// hover, so nothing was ever warmed before a tap and every song was paid
-    /// for cold. `warm` costs one HTTP request and no audio on this device; see
-    /// its note on why a server-side resolve is the expensive half.
+    /// Start resolving the likeliest taps as soon as a search returns, since iOS has no hover-prefetch.
+    /// `warm` is one HTTP request and no audio on this device.
     private func warmTopResults() {
         var seen = Set<String>()
         let candidates = ([results.topSong].compactMap { $0 } + results.songs)
@@ -835,8 +731,7 @@ struct IOSDiscoverView: View {
         await coordinator.play(track, context: context, artworkData: artworkData)
     }
 
-    /// Start a record from its first track, through the same session cache the
-    /// album page uses so opening it afterwards costs nothing.
+    /// Start an album from its first track via the album page's session cache, so opening it later is free.
     private func playAlbum(_ album: OnlineAlbum) async {
         let tracks: [OnlineTrack]
         if let cached = store.cachedAlbumTracks(for: album) {
@@ -850,7 +745,7 @@ struct IOSDiscoverView: View {
 
     // MARK: - Navigate from a track to its artist / album
 
-    /// By name alone — the mix header credits artists, not tracks.
+    /// By name: the mix header credits artists, not tracks.
     private func openArtist(named name: String) {
         Task {
             if let artist = await deps.itunesClient.resolveArtist(name: name, trackID: nil) {

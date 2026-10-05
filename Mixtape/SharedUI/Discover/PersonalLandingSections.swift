@@ -1,29 +1,11 @@
-// PersonalLandingSections.swift
-// Mixtape — SharedUI/Discover
-//
-// The "made for you" half of the Discover landing, shared by both platforms.
-//
-// Written platform-neutral and driven by callbacks rather than by the
-// environment, because the two Discover views resolve playback differently —
-// macOS plays straight through the coordinator, iOS goes via the remote
-// resolver — and neither of those belongs in a card. The host passes in what
-// "play this" means; everything here is layout.
-//
-// On the look, the brief was that Discover was "squared, boxed" and didn't
-// match the app. Three things drive that impression, and all three are fixed
-// here: bordered/filled containers around content that doesn't need them
-// (rows are flat, hover is the only surface), uniform card sizes that turn a
-// page into a spreadsheet (mixes are wide mosaics, artists are circles, albums
-// are square — three silhouettes, so the eye can tell rows apart while
-// scrolling), and section headings that all weigh the same (the page now has a
-// display-size title and 20pt section heads under it).
+// The "made for you" half of the Discover landing, shared by both platforms. Driven by callbacks
+// because macOS and iOS resolve playback differently; everything here is layout.
 
 import SwiftUI
 
 // MARK: - Host hooks
 
-/// What the landing needs the hosting view to do. Grouped into one value so
-/// adding a row doesn't mean threading a seventh closure through three files.
+/// What the landing needs the host to do, grouped into one value.
 struct DiscoverLandingActions {
     var playMix:      (PersonalMix) -> Void
     var playTrack:    (OnlineTrack, [OnlineTrack]) -> Void
@@ -32,34 +14,18 @@ struct DiscoverLandingActions {
     var openAlbum:    (OnlineAlbum) -> Void
     var refreshRecommended: () -> Void
 
-    /// The right-click verbs. Optional, and each one omitted simply doesn't
-    /// appear in the menu — a host that can't queue shouldn't be made to offer
-    /// it. They're closures for the same reason everything else here is: the
-    /// two platforms resolve a song differently and neither resolution belongs
-    /// in a card.
+    /// Right-click verbs. Each nil one is left out of the menu.
     var playNext:     ((OnlineTrack) -> Void)? = nil
     var addToQueue:   ((OnlineTrack) -> Void)? = nil
 
-    /// Play a whole record. Optional like the verbs above, and for the same
-    /// reason plus one more: it needs the album's track list, which is a fetch
-    /// no card should be doing. A host that doesn't wire it gets a hero you
-    /// open rather than one you play.
-    ///
-    /// `async` unlike the rest, because the hero has no way to watch this one
-    /// finish. Every other play affordance here is started on a track, so
-    /// `resolvingID` names it and the card can compare. An album's first track
-    /// isn't known until the fetch this closure performs comes back — the busy
-    /// window *starts* before there's an id to watch. Awaiting it lets the
-    /// button hold its own spinner across the whole thing instead.
+    /// Play a whole album. Nil gives a hero you open, not play. Async because the first track's id isn't known
+    /// until the track list is fetched, so the button holds its own spinner across the whole thing.
     var playAlbum:    ((OnlineAlbum) async -> Void)? = nil
 
-    /// Open "Generate a Mix". Optional: a host without an entry point for it
-    /// simply doesn't get the tile at the end of "Your mixes".
+    /// Open Generate a Mix. Nil drops the tile at the end of "Your mixes".
     var generateMix:  (() -> Void)? = nil
 
-    /// Discover's artist and album pages, reached from a song's own menu. By
-    /// name and by song, because a card only carries credits — turning those
-    /// into a page is a fetch no card should be doing.
+    /// Discover's artist and album pages, by name and song: a card only carries credits.
     var openArtistNamed: ((String, OnlineTrack) -> Void)? = nil
     var openAlbumFor:    ((OnlineTrack) -> Void)?         = nil
 }
@@ -72,26 +38,14 @@ struct PersonalLandingSections: View {
     let roll: Int
     let actions: DiscoverLandingActions
 
-    /// The track the player is currently resolving a stream for, if any —
-    /// `OnlinePlaybackCoordinator.resolvingID`, passed down rather than read,
-    /// because the coordinator isn't the same object on both platforms.
-    ///
-    /// Pressing play here is not a fast thing: the stream has to be found
-    /// before a note comes out, and a card that acknowledges nothing in the
-    /// meantime reads as a card that didn't take the click. Every other list in
-    /// the app already spins while this is set; this is what lets the landing's
-    /// own rows and cards do the same.
+    /// Track the player is resolving a stream for, passed down since the coordinator differs per platform.
+    /// Lets the landing's rows and cards spin like every other list.
     var resolvingID: String? = nil
 
     /// The two slow shelves are still in the air.
     var shelvesLoading: Bool = false
 
-    /// Seed artists whose "Because you listened to" row has been expanded.
-    ///
-    /// Keyed by seed name rather than one flag for all of them: there are up to
-    /// five of these rows, twelve artists each, and expanding all sixty because
-    /// you wanted to see the rest of one is how the page got long in the first
-    /// place.
+    /// Seeds whose "Because you listened to" row is expanded, per seed so expanding one doesn't expand all.
     @State private var expandedRelated: Set<String> = []
 
     /// One row's worth of bubbles before "Show all".
@@ -134,11 +88,7 @@ struct PersonalLandingSections: View {
                                 }
                             })
                             : nil) {
-                    // Wrapped, not scrolled. A horizontal row is right for
-                    // albums and mixes — you flick through those without a
-                    // particular one in mind — but artists are scanned for a
-                    // name you already have in mind, and a name three drags
-                    // off-screen may as well not be listed.
+                    // Wrapped, not scrolled: artists are scanned for a name, and one off-screen may as well not be listed.
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 112, maximum: 140), spacing: 16)],
                               alignment: .leading, spacing: 18) {
                         ForEach(shown) { artist in
@@ -149,38 +99,17 @@ struct PersonalLandingSections: View {
                 }
             }
 
-            // `landing.freshReleases` used to be drawn here — a third column in
-            // the band on a Mac, its own row on a phone. It leads the page's
-            // "New releases" section now instead, on both platforms: the same
-            // albums, in the section whose name already describes them, rather
-            // than in a corner of a band about something else.
         }
     }
 
     // MARK: Mixes + new release
 
-    /// The top band: your mixes on the left, one new release blown up on the
-    /// right. On a phone there is no "beside", so the two stack.
-    ///
-    /// Two columns, not three, and the elasticity is the other way round from
-    /// where it started: **the mixes take the room and the hero is a fixed
-    /// slab.** The band used to size the mixes to their own cards and hand the
-    /// leftover to a third column of release rows, which meant the mixes were
-    /// capped at two cards and everything past the second was hidden behind a
-    /// sideways drag. With six mixes that was four of them — the exact opposite
-    /// of what a section called "Your mixes" is for.
-    ///
-    /// So the third column moved out of the band entirely (it feeds the page's
-    /// "New releases" section now), the hero took its place against the right
-    /// edge, and the mixes got the width back and spend it wrapping.
-    ///
-    /// Either half can be missing — a thin history, nobody releasing anything
-    /// lately — and the survivor takes the row.
+    /// Top band: your mixes on the left, a fixed-width new-release hero on the right; stacked on a phone.
+    /// The mixes take the spare width and wrap. Either half can be missing and the other takes the row.
     @ViewBuilder
     private var mixesAndRelease: some View {
         #if os(macOS)
-        // Guarded rather than left to collapse on its own: an empty HStack is
-        // still a view, and the enclosing stack would space around it.
+        // Guarded: an empty HStack still gets spacing around it.
         if !shelfMixes.isEmpty || landing.newRelease != nil {
             Group {
                 if isSideBySide { sideBySideBand } else { stackedBand }
@@ -196,16 +125,10 @@ struct PersonalLandingSections: View {
 
     #if os(macOS)
 
-    /// The band's own width. Measured, because nothing upstream knows it: the
-    /// page is a plain `VStack` in a `ScrollView`, so the only view that can
-    /// answer "how much room is there" is this one.
+    /// Measured width of the band: nothing upstream knows it.
     @State private var bandWidth: CGFloat = 0
 
-    /// Two columns, or one on top of the other.
-    ///
-    /// Unmeasured counts as wide. A Mac window is almost always past the
-    /// threshold, so guessing that way costs at most one frame on the rare
-    /// narrow one, where guessing the other way costs one on every window.
+    /// Two columns or stacked. Unmeasured counts as wide, since a Mac window almost always is.
     private var isSideBySide: Bool {
         bandWidth == 0 || bandWidth >= Self.sideBySideMinimum
     }
@@ -219,16 +142,11 @@ struct PersonalLandingSections: View {
         }
     }
 
-    /// What the page header is allowed to occupy, and the reason this number
-    /// exists at all: the hero's heading is *lifted* out of the band and into
-    /// the header's row, so the two share a line and only the gutter between
-    /// their lanes keeps them apart. The header's text is capped to this so it
-    /// can't grow into the hero's lane — see `personalHeader`, which applies it.
+    /// Max width of the page header text. The hero's heading is lifted into the header's row, so this keeps
+    /// the header out of the hero's lane. Applied in `personalHeader`.
     static let personalHeaderReserve: CGFloat = 520
 
-    /// A slab, not a share of the window: the hero's job is to be one fixed,
-    /// recognisable shape, and a hero that changes width with the window is
-    /// just another flexible box.
+    /// Fixed, not a share of the window, so the hero keeps one recognisable shape.
     private static let heroColumnWidth: CGFloat = 440
 
     /// Enough to keep the hero off the gutter without it reading as indented.
@@ -236,15 +154,7 @@ struct PersonalLandingSections: View {
 
     private static let columnGutter: CGFloat = 30
 
-    /// Under this the band stops being a band.
-    ///
-    /// Summed from its parts rather than picked as a round number, because
-    /// every part is load-bearing: the header's lane, the gutter, and the
-    /// hero's whole footprint. Below it the header's text and the hero's
-    /// lifted heading would be sharing a line *and* overlapping, and the mixes
-    /// would be down to a single card while the hero squeezed its own title to
-    /// two syllables — which is precisely what a narrow window used to look
-    /// like.
+    /// Below this the band stacks. Sum of the header lane, gutter and hero footprint; any narrower and they overlap.
     private static let sideBySideMinimum =
         personalHeaderReserve + columnGutter + heroColumnWidth + heroTrailingGap
 
@@ -256,46 +166,20 @@ struct PersonalLandingSections: View {
             }
             if let release = landing.newRelease {
                 newReleaseSection(release)
-                    // Fixed, not capped. `maxWidth` let the HStack compress the
-                    // hero whenever the mixes wanted room, and a compressed
-                    // hero spends the loss on its text column — which is how a
-                    // 20pt title ended up wrapping to "BALL / ON…" beside a
-                    // cover with space to spare. It's the mixes that flex.
+                    // Fixed, not capped: a compressible hero wraps its title, and it's the mixes that should flex.
                     .frame(width: Self.heroColumnWidth, alignment: .leading)
-                    // Lifted, not rebuilt. The hero is a heading, a face and a
-                    // panel stacked 236pt tall; the mosaics beside it are 168.
-                    // Left alone, the two columns start level and the panel
-                    // hangs 68pt below the covers.
-                    //
-                    // Raising the whole column by that 68 lands the panel
-                    // exactly parallel to them — bottom edge on their bottom
-                    // edge, top within 6pt, because a 174pt panel and a 168pt
-                    // cover are near enough the same object. What rides up
-                    // above the band is the heading and the artist row, into
-                    // the empty half of the "Made for you" line.
-                    //
-                    // Only when there's a mixes column to be parallel *to*:
-                    // alone, the hero has nothing to line up with and would
-                    // just be sitting 68pt too high.
+                    // Raised by the hero's overhang so its panel lines up with the mix covers; the heading rides up into
+                    // the "Made for you" line. Only when there are mixes to line up with.
                     .padding(.top, shelfMixes.isEmpty
                              ? 0
                              : -MixNewReleaseHero.overhang(against: MixMosaicCard.side))
-                    // Outside the frame, so the panel keeps its full width and
-                    // simply stops short of the gutter. The hero is a filled
-                    // surface and the only one on the page — flush against the
-                    // window edge it read as pinned there rather than laid out.
+                    // Outside the frame, so the panel keeps its width and stops short of the window edge.
                     .padding(.trailing, Self.heroTrailingGap)
             }
         }
     }
 
-    /// The narrow window: one column, and every rule the wide one needs is off.
-    ///
-    /// No lift, because there is nothing beside the hero to be parallel to and
-    /// the header's text now runs the full width it would have been lifted
-    /// into. No trailing gap, because it isn't against the edge. And the mixes
-    /// get their subtitle back, since nothing sits level with their heading any
-    /// more — the same `paired: false` the phone has always used.
+    /// Narrow window: one column, no lift, no trailing gap, and the mixes keep their subtitle (`paired: false`).
     private var stackedBand: some View {
         VStack(alignment: .leading, spacing: 26) {
             if !shelfMixes.isEmpty { mixesSection(paired: false) }
@@ -308,22 +192,15 @@ struct PersonalLandingSections: View {
 
     #endif
 
-    /// `paired` is "there's something beside me", and it costs the row its
-    /// subtitle: the heading next to it is one line, and two section bodies
-    /// starting at different heights looks like a mistake.
-    /// Release Radar rides at the head of "Your mixes" rather than in a shelf of
-    /// its own: it's the same kind of thing — a card that opens a list you can
-    /// play, save and download — and a one-card row would have been mostly title.
+    /// Release Radar leads "Your mixes" rather than getting a one-card shelf of its own.
     private var shelfMixes: [PersonalMix] {
         (landing.releaseRadar.map { [$0] } ?? []) + landing.mixes
     }
 
-    /// Release Radar leads this shelf, and it's built off the critical path
-    /// like the other two — so it lands *after* the mixes are drawn and would
-    /// shove every card one place to the right as it arrived. Holding its seat
-    /// keeps the shelf still.
+    /// Holds Release Radar's seat while it loads, so its late arrival doesn't shift the shelf.
     private var awaitingRadar: Bool { shelvesLoading && landing.releaseRadar == nil }
 
+    /// `paired`: something sits beside the row, so drop the subtitle to keep both bodies level.
     private func mixesSection(paired: Bool) -> some View {
         section(title: "Your mixes",
                 subtitle: paired ? nil : "Built around the artists you play most") {
@@ -334,14 +211,8 @@ struct PersonalLandingSections: View {
     @ViewBuilder
     private var mixesBody: some View {
         #if os(macOS)
-        // Wrapped, not scrolled — the point of giving this column the width was
-        // to put every mix on screen at once.
-        //
-        // The columns are fixed rather than stretchy because `MixMosaicCard` is
-        // 168pt wide whatever it's handed: a wider column wouldn't grow the
-        // card, it would just open uneven gaps between cards that are meant to
-        // read as one shelf. Leftover width collects at the trailing edge,
-        // where the hero already ends the row.
+        // Wrapped so every mix is on screen. Fixed columns because `MixMosaicCard` is always 168pt wide;
+        // leftover width collects at the trailing edge.
         LazyVGrid(columns: [GridItem(.adaptive(minimum: MixMosaicCard.side,
                                                maximum: MixMosaicCard.side),
                                      spacing: 18)],
@@ -351,8 +222,7 @@ struct PersonalLandingSections: View {
             if let generate = actions.generateMix { GenerateMixTile(action: generate) }
         }
         #else
-        // A phone is one card wide. Wrapping six mixes here would push the rest
-        // of the page three screens down, so this stays the carousel it was.
+        // A phone is one card wide, so it stays a carousel.
         horizontalRow(spacing: 18) {
             if awaitingRadar { MixCardPlaceholder() }
             ForEach(shelfMixes) { mix in mixCard(mix) }
@@ -361,17 +231,14 @@ struct PersonalLandingSections: View {
         #endif
     }
 
-    /// The same shelf as "Your mixes", for lists that aren't built from your
-    /// seeds — genre mixes and stations. Same card, same grid/carousel split,
-    /// so both arrive with playing, opening, saving and the context menu.
+    /// Same shelf as "Your mixes", for genre mixes and stations.
     private func mixShelf(title: String, subtitle: String, mixes: [PersonalMix]) -> some View {
         mixShelf(title: title, subtitle: subtitle) {
             ForEach(mixes) { mix in mixCard(mix) }
         }
     }
 
-    /// The grid/carousel split itself, so the placeholder shelf below draws at
-    /// exactly the real one's size without repeating it.
+    /// The grid/carousel split, shared with the placeholder shelf so it draws at the real size.
     private func mixShelf<Cards: View>(title: String,
                                        subtitle: String,
                                        @ViewBuilder cards: () -> Cards) -> some View {
@@ -389,13 +256,7 @@ struct PersonalLandingSections: View {
         }
     }
 
-    /// A shelf that hasn't arrived yet, drawn at its real size.
-    ///
-    /// The alternative is nothing at all, which is what the page used to do:
-    /// it looked complete, and then two rows appeared under the reader's
-    /// pointer several seconds later and moved everything they were looking at.
-    /// Cards drawn in outline say "more is coming, here" and keep the scroll
-    /// height honest.
+    /// A shelf that hasn't arrived yet, drawn in outline at its real size so the page doesn't jump.
     private func placeholderShelf(title: String, subtitle: String) -> some View {
         mixShelf(title: title, subtitle: subtitle) {
             ForEach(0..<Self.placeholderCards, id: \.self) { _ in MixCardPlaceholder() }
@@ -406,18 +267,14 @@ struct PersonalLandingSections: View {
 
     private func mixCard(_ mix: PersonalMix) -> some View {
         MixMosaicCard(mix: mix,
-                      // A mix starts on its first track, so that's the id the
-                      // coordinator will be resolving — the same comparison the
-                      // song rows make, one indirection further in.
+                      // A mix starts on its first track, so that's the id being resolved.
                       isResolving: mix.tracks.first.map { resolvingID == $0.id } ?? false,
                       onOpen: { actions.openMix(mix) },
                       onPlay: { actions.playMix(mix) })
             .contextMenu { OnlineCollectionMenu(.mix(mix)) }
     }
 
-    /// The heading is the bare phrase and the artist is named by the card, so
-    /// the face and the name arrive together — "New release from" over a
-    /// stranger's name is a caption; over their photo it's a recommendation.
+    /// Bare heading; the card names the artist next to their photo.
     private func newReleaseSection(_ release: FreshRelease) -> some View {
         section(title: "New release from") {
             MixNewReleaseHero(
@@ -432,10 +289,7 @@ struct PersonalLandingSections: View {
 
     // MARK: Recommended
 
-    /// The row Monochrome does well: no cards, no borders, two flat columns of
-    /// songs and a refresh that gives you a different twelve. The grid is
-    /// adaptive rather than a hard two-up, so an iPhone gets one column and a
-    /// wide Mac window gets two without either being told about the other.
+    /// Two flat columns of songs and a refresh for a different twelve. Adaptive, so iPhone gets one column.
     private var recommendedSection: some View {
         let songs = landing.recommended(roll: roll)
         return section(title: "Recommended songs",
@@ -464,9 +318,7 @@ struct PersonalLandingSections: View {
         }
     }
 
-    /// The same menu a Discover row gets anywhere else — right-clicking a
-    /// recommendation used to offer five items where a search result offered
-    /// fifteen, which made the landing read as a poster rather than a page.
+    /// Same menu a Discover row gets everywhere else.
     private func songMenu(_ song: OnlineTrack, context: [OnlineTrack]) -> some View {
         OnlineSongMenu(
             song:         song,
@@ -505,14 +357,7 @@ struct PersonalLandingSections: View {
         }
     }
 
-    /// Horizontal rows bleed to the window edge on purpose — a scroller that
-    /// stops short of the edge reads as a boxed-in widget, and every music app
-    /// worth copying lets the row run out of the frame. The inset restores the
-    /// page gutter for the first card only.
-    ///
-    /// Nothing shares a band with a scroller any more — the mixes wrap on a Mac
-    /// and a phone has one column — so there's no longer a caller that needs
-    /// this clipped.
+    /// Horizontal rows bleed to the window edge; the inset restores the gutter for the first card.
     private func horizontalRow<Content: View>(spacing: CGFloat,
                                               @ViewBuilder content: () -> Content) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -525,23 +370,18 @@ struct PersonalLandingSections: View {
 
 // MARK: - Mix card
 
-/// Wide by design. A mix is a *place*, not a track, and giving it the same
-/// square silhouette as an album is what made the old page read as one
-/// undifferentiated grid. The 2×2 mosaic is the same trick Spotify's Daily Mix
-/// uses: four covers say "a lot of things" where one cover says "an album".
+/// Wide 2x2 mosaic: four covers read as a mix, one cover reads as an album.
 struct MixMosaicCard: View {
 
     let mix: PersonalMix
-    /// The player is finding this mix's first stream — the button spins instead
-    /// of offering a play it's already been given.
+    /// Finding the mix's first stream: the button spins.
     var isResolving: Bool = false
     let onOpen: () -> Void
     let onPlay: () -> Void
 
     @State private var isHovered = false
 
-    /// Static because the band that lays these out has to know it: the mixes
-    /// column is sized to the cards it holds rather than to the window.
+    /// Static: the band sizes the mixes column from it.
     static let side: CGFloat = 168
     private var side: CGFloat { Self.side }
 
@@ -549,18 +389,11 @@ struct MixMosaicCard: View {
         VStack(alignment: .leading, spacing: 12) {
             ZStack(alignment: .bottomTrailing) {
                 mosaic
-                // Resolving keeps the button on screen whether or not the
-                // pointer stayed: you press play and move the mouse away, and
-                // the one thing telling you the app heard you shouldn't leave
-                // with the cursor.
+                // Stays visible while resolving, even after the pointer leaves.
                 if isHovered || isResolving {
                     Button(action: onPlay) {
                         ZStack {
-                            // The glyph is `mixOnAccent`, not a literal black.
-                            // `mixPrimary` is a deep burnt orange in the light
-                            // appearance and a black mark on it lands near
-                            // 2.6:1; the token flips to white there and back to
-                            // near-black over the brighter dark-mode orange.
+                            // `mixOnAccent`, not black: black on light-mode `mixPrimary` has poor contrast.
                             Circle()
                                 .fill(Color.mixPrimary)
                                 .frame(width: 40, height: 40)
@@ -587,9 +420,7 @@ struct MixMosaicCard: View {
                     .font(.system(size: MixFontScale.size(14.5), weight: .semibold))
                     .foregroundStyle(Color.mixTextPrimary)
                     .lineLimit(1)
-                // A mix whose line-up couldn't be named still gets a line: an
-                // empty one collapses, and the card's title then sits a few
-                // points higher than every card beside it.
+                // Fallback line so an empty subtitle doesn't shift the title.
                 Text(mix.subtitle.isEmpty ? "A mix built around \(mix.seedArtist)" : mix.subtitle)
                     .font(.system(size: MixFontScale.size(12)))
                     .foregroundStyle(Color.mixTextTertiary)
@@ -598,10 +429,7 @@ struct MixMosaicCard: View {
             }
             .frame(width: side, alignment: .leading)
         }
-        // Top-aligned inside its grid row. `LazyVGrid` centres a short cell in
-        // a tall row, so one card whose subtitle wrapped to two lines pushed
-        // every one-line card beside it down by half a line — the shelf looked
-        // like it was drawn on a wave.
+        // Top-aligned: `LazyVGrid` centres short cells, so a wrapped subtitle would offset its neighbours.
         .frame(maxHeight: .infinity, alignment: .top)
         .contentShape(Rectangle())
         .mixTapAction(onOpen)
@@ -650,25 +478,14 @@ struct MixMosaicCard: View {
 
 // MARK: - New release hero
 
-/// One record, given the room a record deserves.
-///
-/// The rest of the page answers "what should I put on?" with a wall of equal
-/// candidates. This answers a different question — "did anyone I care about put
-/// something out?" — and a wall is the wrong shape for a single yes. So it gets
-/// a face, a name, a cover twice the size of the album cards, and the only
-/// filled surface on the landing: three signals that this is a piece of news
-/// rather than another option.
+/// One new release, drawn big: a face, a name, a large cover and the only filled surface on the landing.
 struct MixNewReleaseHero: View {
 
     let release: FreshRelease
     let onOpenAlbum: () -> Void
     let onOpenArtist: () -> Void
-    /// Nil when the host can't resolve an album's tracks — the cover still opens.
-    ///
-    /// Awaited rather than fired, so the button knows when it's done: starting a
-    /// record is two waits back to back — fetch the track list, then resolve the
-    /// first track's stream — and only the second half has an id anyone could
-    /// watch. See `DiscoverLandingActions.playAlbum`.
+    /// Nil when the host can't resolve an album's tracks; the cover still opens. Awaited so the button
+    /// knows when both the fetch and the resolve are done. See `DiscoverLandingActions.playAlbum`.
     let onPlay: (() async -> Void)?
 
     @State private var isHovered = false
@@ -676,22 +493,15 @@ struct MixNewReleaseHero: View {
     /// Set for as long as `onPlay` is running.
     @State private var isStarting = false
 
-    /// Sized against the mix card beside it rather than against the text in it:
-    /// at 118 the hero read as a slightly larger album card, which is not what
-    /// a hero is for. At 150 it's unmistakably the biggest thing in the band.
+    /// Clearly bigger than the mix cards beside it.
     static let coverSide: CGFloat = 150
     static let avatarSide: CGFloat = 48
 
     private static let panelPadding: CGFloat = 12
     private static let stackSpacing: CGFloat = 14
 
-    /// How much taller this is than a column of `side`-tall covers — the amount
-    /// the band has to lift it by to stand its panel level with them.
-    ///
-    /// Static because the band does the lifting, and it's derived rather than
-    /// written down because every number in it is a number above: change the
-    /// cover or the avatar and the lift follows on its own instead of quietly
-    /// going stale.
+    /// How much taller this is than `side`-tall covers, i.e. how far the band lifts it. Derived so it
+    /// follows size changes.
     static func overhang(against side: CGFloat) -> CGFloat {
         max(0, avatarSide + stackSpacing + panelPadding * 2 + coverSide - side)
     }
@@ -773,10 +583,7 @@ struct MixNewReleaseHero: View {
 
             if let onPlay {
                 Button {
-                    // Guarded here rather than with `.disabled`, which would
-                    // fade the spinner it's meant to protect. Unlike a track,
-                    // a second press on this one isn't free — the album fetch
-                    // in front of the resolve has nothing deduplicating it.
+                    // Guarded here, not `.disabled`, which would fade the spinner. A second press would repeat the album fetch.
                     guard !isStarting else { return }
                     Task {
                         isStarting = true
@@ -819,24 +626,17 @@ struct MixNewReleaseHero: View {
 
 // MARK: - Song row
 
-/// Flat: no card, no border, no fill until you point at it. The old rows sat in
-/// their own rounded rectangles, which is most of what "boxed" meant.
+/// Flat: no card, border or fill until hovered.
 struct MixSongRow: View {
 
     let song: OnlineTrack
-    /// Position in the list, 1-based. Nil on the landing shelves, where a row is
-    /// one of four suggestions and a number would imply an order that isn't
-    /// there; set on a playlist page, where the order is the point.
+    /// 1-based position. Nil on landing shelves, where there's no real order.
     var index: Int? = nil
-    /// This row is the song the player is on, so it gets the brand colour the
-    /// rest of the app uses to mean exactly that.
+    /// The playing song, drawn in the brand colour.
     var isCurrent: Bool = false
-    /// The player is finding this song's stream. Same scrim-and-spinner over the
-    /// artwork every other song list in the app draws, because it's the same
-    /// wait — the landing was simply the one page that never said so.
+    /// Finding this song's stream: scrim and spinner over the artwork, like every other list.
     var isResolving: Bool = false
-    /// Where the names go, as on every other Mac song row. A phone row stays
-    /// one tap target.
+    /// Clickable names on the Mac. A phone row stays one tap target.
     var onOpenAlbum:  (() -> Void)?       = nil
     var onOpenArtist: ((String) -> Void)? = nil
     let onPlay: () -> Void
@@ -844,17 +644,8 @@ struct MixSongRow: View {
     @State private var isHovered = false
 
     var body: some View {
-        // A real button, not a tap gesture on a stack.
-        //
-        // This row stretches to whatever the grid column happens to be, and a
-        // stretched stack under a `.contextMenu` is where AppKit's hit region
-        // and SwiftUI's drawn frame stop agreeing. A button has one hit region
-        // by construction. (The fixed-size cards use `mixTapAction`, which is
-        // the same button, for focus and VoiceOver.)
-        // Not disabled while it resolves: `.disabled` fades a plain button's
-        // whole label, and the label here is the entire row — title, artist,
-        // artwork and all. A second press costs nothing; the coordinator drops
-        // a request for the track it's already resolving.
+        // A real button, not a tap gesture: a stretched stack under `.contextMenu` gets a mismatched hit region
+        // on AppKit. Not disabled while resolving, which would fade the whole row; the coordinator drops repeats.
         Button(action: onPlay) { rowBody }
             .buttonStyle(.plain).mixHandCursor()
             .mixHoverCursor { isHovered = $0 }
@@ -897,8 +688,7 @@ struct MixSongRow: View {
                         .font(.system(size: 14, weight: .bold))
                         .foregroundStyle(.white)
                 } else if isCurrent {
-                    // Every other song list marks the playing row with a shape
-                    // as well as the colour; this one only had the colour.
+                    // Marks the playing row with a shape as well as colour.
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .fill(Color.black.opacity(0.4))
                         .frame(width: 44, height: 44)
@@ -949,8 +739,7 @@ struct MixSongRow: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(isHovered ? Color.primary.opacity(0.07) : .clear)
         )
-        // Inside the label, so the button's hit region is the whole row —
-        // including the gap the `Spacer` opens up between title and duration.
+        // Inside the label so the whole row, Spacer gap included, is the hit region.
         .contentShape(Rectangle())
     }
 
@@ -976,8 +765,7 @@ struct MixArtistBubble: View {
 
     @State private var isHovered = false
 
-    /// Kept in step with the `minimum` of the grids that lay these out — a
-    /// bubble wider than its column overflows into the next one.
+    /// Matches the grid's `minimum`; wider would overflow its column.
     private let side: CGFloat = 112
 
     var body: some View {
@@ -1004,10 +792,7 @@ struct MixArtistBubble: View {
                 .lineLimit(1)
                 .frame(width: side)
         }
-        // Top-aligned inside its grid row. `LazyVGrid` centres a short cell in
-        // a tall row, so one card whose subtitle wrapped to two lines pushed
-        // every one-line card beside it down by half a line — the shelf looked
-        // like it was drawn on a wave.
+        // Top-aligned: `LazyVGrid` centres short cells, so a wrapped subtitle would offset its neighbours.
         .frame(maxHeight: .infinity, alignment: .top)
         .contentShape(Rectangle())
         .mixTapAction(onOpen)
@@ -1027,8 +812,7 @@ struct MixAlbumCard: View {
 
     @State private var isHovered = false
 
-    /// Kept in step with the `minimum` of the grid that lays these out — a card
-    /// wider than its column overflows into the next one.
+    /// Matches the grid's `minimum`; wider would overflow its column.
     private let side: CGFloat = 132
 
     var body: some View {
@@ -1066,10 +850,7 @@ struct MixAlbumCard: View {
             }
             .frame(width: side, alignment: .leading)
         }
-        // Top-aligned inside its grid row. `LazyVGrid` centres a short cell in
-        // a tall row, so one card whose subtitle wrapped to two lines pushed
-        // every one-line card beside it down by half a line — the shelf looked
-        // like it was drawn on a wave.
+        // Top-aligned: `LazyVGrid` centres short cells, so a wrapped subtitle would offset its neighbours.
         .frame(maxHeight: .infinity, alignment: .top)
         .contentShape(Rectangle())
         .mixTapAction(onOpen)
@@ -1087,12 +868,7 @@ struct MixAlbumCard: View {
 
 // MARK: - Small parts
 
-/// The "E" on an explicit song, everywhere one is listed.
-///
-/// Filled rather than tinted: a tertiary letter on a 22%-tertiary box was legible
-/// on the artwork-heavy Discover rows it started on and barely visible in a list.
-/// The glyph is punched out in the page colour, which is the one combination that
-/// keeps its contrast in both appearances.
+/// The "E" on explicit songs. Filled, with the glyph cut out in the page colour, so it reads in both appearances.
 struct MixExplicitBadge: View {
     var body: some View {
         Text("E")
@@ -1107,9 +883,23 @@ struct MixExplicitBadge: View {
     }
 }
 
-/// The inline action next to a section head — "Refresh", "Show all".
-/// A pill rather than a plain button so it reads as a control at 12pt without
-/// needing a border drawn around it.
+/// Marks a song edit, styled like the "E".
+struct MixEditBadge: View {
+    var body: some View {
+        Text("EDIT")
+            .font(.system(size: MixFontScale.size(8), weight: .heavy))
+            .foregroundStyle(Color.mixBackground)
+            .padding(.horizontal, 3)
+            .frame(height: 14)
+            .background(
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(Color.mixTextSecondary)
+            )
+            .accessibilityLabel("Edit")
+    }
+}
+
+/// Inline action beside a section head ("Refresh", "Show all"). A pill so it reads as a control at 12pt.
 struct MixPillButton: View {
 
     let title: String
@@ -1142,8 +932,7 @@ struct MixPillButton: View {
 // MARK: - Hover
 
 extension View {
-    /// Hover state plus the pointing-hand cursor on macOS, no-op on iOS — so the
-    /// cards above can be written once instead of twice around `#if os`.
+    /// Hover state plus the pointing-hand cursor on macOS, no-op on iOS.
     @ViewBuilder
     func mixHoverCursor(_ update: @escaping (Bool) -> Void) -> some View {
         #if os(macOS)
@@ -1160,11 +949,13 @@ extension View {
 
 // MARK: - Generate tile
 
-/// The last tile in "Your mixes": make one yourself. Same footprint as
-/// `MixMosaicCard`'s mosaic so the shelf stays a shelf, and it grows a little
-/// under the pointer the way the cards lift.
-private struct GenerateMixTile: View {
+/// Last tile in "Your mixes": make your own. Same footprint as the mosaic, grows on hover.
+/// Blend's invite tile reuses it with its own words.
+struct GenerateMixTile: View {
 
+    var icon = "plus"
+    var title = "Generate a Mix"
+    var subtitle = "Pick a mood and make your own"
     let action: () -> Void
     @State private var isHovered = false
 
@@ -1173,7 +964,7 @@ private struct GenerateMixTile: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(Color.mixSurface2)
                 .overlay {
-                    Image(systemName: "plus")
+                    Image(systemName: icon)
                         .font(.system(size: 34, weight: .semibold))
                         .foregroundStyle(isHovered ? Color.mixPrimary : Color.mixTextSecondary)
                         .scaleEffect(isHovered ? 1.18 : 1)
@@ -1186,11 +977,11 @@ private struct GenerateMixTile: View {
                 .frame(width: MixMosaicCard.side, height: MixMosaicCard.side)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text("Generate a Mix")
+                Text(title)
                     .font(.system(size: MixFontScale.size(14.5), weight: .semibold))
                     .foregroundStyle(Color.mixTextPrimary)
                     .lineLimit(1)
-                Text("Pick a mood and make your own")
+                Text(subtitle)
                     .font(.system(size: MixFontScale.size(12)))
                     .foregroundStyle(Color.mixTextTertiary)
                     .lineLimit(2)
@@ -1202,16 +993,11 @@ private struct GenerateMixTile: View {
         .mixTapAction(action)
         .mixHoverCursor { isHovered = $0 }
         .mixAnimation(.spring(response: 0.28, dampingFraction: 0.7), value: isHovered)
-        .accessibilityLabel("Generate a Mix")
+        .accessibilityLabel(title)
     }
 }
 
-/// One un-arrived mix card: the mosaic's footprint and two caption bars.
-///
-/// Deliberately still. A shimmer would be the obvious thing, but a
-/// `repeatForever` animation left on screen is what pinned the CPU and got iOS
-/// to kill the app after ten minutes — and four of them would be running for as
-/// long as the shelf takes. The shelf headings already say what's happening.
+/// Placeholder mix card. No shimmer: a `repeatForever` animation left running can get the app killed on iOS.
 private struct MixCardPlaceholder: View {
 
     private var side: CGFloat { MixMosaicCard.side }

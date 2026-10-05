@@ -1,6 +1,3 @@
-// SignInView.swift
-// Mixtape — Features/Auth
-
 import SwiftUI
 
 public struct SignInView: View {
@@ -288,7 +285,7 @@ private struct IOSSetNewPasswordView: View {
                 .disabled(!vm.isNewPasswordValid || vm.isUpdatingPassword)
                 .padding(.horizontal, 24)
 
-                // Cancel — destroys the recovery session
+                // Cancel drops the recovery session.
                 Button {
                     Task { await vm.signOut() }
                 } label: {

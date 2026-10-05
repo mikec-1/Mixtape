@@ -1,14 +1,5 @@
-// DownloadStatusBar.swift
-// Mixtape — SharedUI/Components
-//
-// "Downloading 8 of 10", with a bar under it.
-//
-// Percentages were the wrong unit for this. A percentage of a two-thousand-song
-// library sits on 0 for minutes and then on 1, which reads as a stall rather
-// than as progress; songs are the thing the user asked for, so songs are what
-// the count should be in. The bar is the only place in the app that answers
-// "how much of what I started is left", which is why it lives in the sidebar
-// rather than on whichever playlist happened to start it.
+// "Downloading 8 of 10" with a bar. Counts songs, not percent. Lives in the
+// sidebar since it tracks the whole run.
 
 import SwiftUI
 
@@ -17,9 +8,7 @@ struct DownloadStatusBar: View {
 
     @ObservedObject var downloads: DownloadManager
 
-    /// The counters, observed separately from the manager that owns them: they
-    /// tick many times a second and this is one of only two views that draws
-    /// them. See `DownloadManager.progress`.
+    /// Observed separately; it ticks many times a second. See `DownloadManager.progress`.
     @ObservedObject private var progress: DownloadProgress
 
     init(downloads: DownloadManager) {
@@ -27,8 +16,7 @@ struct DownloadStatusBar: View {
         self.progress  = downloads.progress
     }
 
-    /// Collapses to nothing when there's no run under way, so the host can place
-    /// it unconditionally.
+    /// Empty when idle, so the host can place it unconditionally.
     var body: some View {
         if downloads.isDownloadingBatch {
             let done  = progress.completed

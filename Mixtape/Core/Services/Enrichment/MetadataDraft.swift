@@ -1,17 +1,6 @@
-// MetadataDraft.swift
-// Mixtape — Core/Services/Enrichment
-//
-// The six editable fields of a review sheet, plus the one rule that makes a
-// late-arriving lookup safe: never overwrite something the user has typed.
-//
-// The sheet now opens on the filename reading and the iTunes answer lands a
-// few seconds later, while the user may already be fixing a title. Without a
-// record of what the fields held when they were last filled in, "the answer
-// arrived" and "the user changed their mind" are indistinguishable, and the
-// good outcome is the one where their correction quietly disappears.
-//
-// Both sheets used to carry their own copy of the identical init/reset code.
-// One type, so the Mac and iOS sheets can't drift apart on the rule.
+// The six editable fields of a review sheet. The iTunes answer can land after
+// the user has started typing, so a field is only refilled if it still holds
+// what we last put there. Shared by the Mac and iOS sheets.
 
 import Foundation
 
@@ -19,10 +8,9 @@ struct MetadataDraft: Equatable {
 
     struct Fields: Equatable {
         var title    = ""
-        /// Primary artist only — the track is filed under this artist folder.
+        /// Primary artist, used for the folder.
         var artist   = ""
-        /// Everything after the & / ft. / feat. separator. Empty when there's
-        /// no feature. Recombined with `artist` on Apply.
+        /// Everything after & / ft. / feat. Empty when there's no feature.
         var featured = ""
         var album    = ""
         var year     = ""
@@ -31,8 +19,7 @@ struct MetadataDraft: Equatable {
 
     var fields = Fields()
 
-    /// What the fields held the last time they were filled from a candidate.
-    /// A field still equal to this is untouched; anything else is the user's.
+    /// What the fields held when last filled. Anything different is the user's.
     private var baseline = Fields()
 
     init() {}
@@ -58,8 +45,7 @@ struct MetadataDraft: Equatable {
 
     private mutating func merge(_ key: WritableKeyPath<Fields, String>, _ incoming: Fields) {
         let new = incoming[keyPath: key]
-        // Silence isn't an improvement. iTunes often has no genre and no year,
-        // and blanking what the file itself carried would be a downgrade.
+        // Don't blank what the file had when iTunes has nothing.
         guard !new.isEmpty else { return }
         guard fields[keyPath: key] == baseline[keyPath: key] else { return }
         fields[keyPath: key]   = new
@@ -81,8 +67,7 @@ struct MetadataDraft: Equatable {
 
     // MARK: - Apply
 
-    /// The artist string as stored on the track: primary, plus the feature when
-    /// there is one. The track is always filed under `primaryArtist`.
+    /// Primary plus feature, as stored on the track.
     var fullArtist: String {
         let primary  = primaryArtist
         let featured = fields.featured.trimmingCharacters(in: .whitespaces)

@@ -1,33 +1,19 @@
-// SmartPlaylist.swift
-// Mixtape — Core Domain Models
-//
-// A SmartPlaylist is a local-only, auto-updating playlist defined by a single
-// rule that is evaluated live against the current library, play history and
-// favourites. Unlike a regular Playlist it stores no track IDs — its contents
-// are resolved on demand by SmartPlaylistService.
-//
-// Minimum deployment: iOS 17 / macOS 14
+// A rule-based playlist evaluated live against the library. Stores no track ids.
 
 import Foundation
 
 // MARK: - SmartPlaylistRule
 
-/// The rule that drives a smart playlist. Codable so it can be persisted as
-/// `Data` on the SwiftData entity.
 public enum SmartPlaylistRule: Codable, Hashable, Sendable {
 
-    /// The `limit` newest additions to the library, newest first.
-    ///
-    /// A count, not a date window: a library that arrived in one Spotify import
-    /// shares a single import date, so "the last 30 days" was either everything
-    /// or nothing. The newest N is right in both cases.
+    /// The newest additions. A count, not a date window, since an import
+    /// gives everything the same date.
     case recentlyAdded(limit: Int)
     /// The `limit` most-played tracks (by play-history count), most-played first.
     case mostPlayed(limit: Int)
     /// Tracks that have never appeared in play history.
     case neverPlayed
-    /// The songs played most often in the recent history window — what's in
-    /// rotation now, as opposed to `mostPlayed`, which is all-time.
+    /// Most played recently, as opposed to all-time `mostPlayed`.
     case onRepeat(limit: Int)
     /// Favourited tracks not played within the last `days` days.
     case forgottenFavourites(days: Int)
@@ -121,9 +107,7 @@ extension SmartPlaylistRule {
         }
     }
 
-    /// A sentence for the playlist page and the Home card — the same job a
-    /// hand-written playlist description does. `summary` states the rule;
-    /// this says what the playlist is *for*.
+    /// What the playlist is for, where `summary` states the rule.
     public var blurb: String {
         switch self {
         case .recentlyAdded:
@@ -146,18 +130,18 @@ extension SmartPlaylistRule {
         }
     }
 
-    /// Whether this rule's list is re-dealt each week.
-    ///
-    /// Only the two open-ended ones. `recentlyAdded` is ordered by date and
-    /// `mostPlayed`/`onRepeat` are ordered by rank — shuffling any of those
-    /// would make the playlist disagree with its own name. "Never played" and
-    /// "Forgotten favourites" match hundreds of songs and show a hundred, so
-    /// without a redeal the other hundreds are never seen at all.
+    /// Only the open-ended rules reshuffle weekly. Ranked ones would contradict their name.
     public var rotatesWeekly: Bool {
         switch self {
         case .neverPlayed, .forgottenFavourites: return true
         default:                                 return false
         }
+    }
+
+    /// Seeds the weekly deal. Web builds the same string.
+    var dealKey: String {
+        if case .forgottenFavourites(let days) = self { return "forgottenFavourites:\(days)" }
+        return "neverPlayed"
     }
 
     public var defaultIcon: String {

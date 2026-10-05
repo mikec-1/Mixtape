@@ -1,23 +1,8 @@
-// PlaybackEngine.swift
-// Mixtape — Core/Services
-//
-// Drives audio playback via AVAudioEngine and the QueueService.
-//
-// Audio graph:   playerNode ──▶ eqNode (AVAudioUnitEQ) ──▶ mainMixerNode ──▶ output
-//
-// The EQ node is owned by AudioEqualizer and injected here so it sits in the
-// signal path; gain changes apply live.
-//
-// Handles:
-//   • Local file playback (AVAudioFile scheduled on an AVAudioPlayerNode)
-//   • On-demand download for remote-only tracks (synced from another device)
-//   • Lock-screen / Control Centre integration via MPNowPlayingInfoCenter
-//   • Hardware/Bluetooth controls via MPRemoteCommandCenter
-//
-// Injected as @EnvironmentObject from MixtapeApp so every view can observe state.
-//
-// NOTE: This class is @MainActor. AVAudioEngine scheduling completion handlers
-// run on a background thread, so they hop back via `Task { @MainActor in … }`.
+// Plays audio through AVAudioEngine and QueueService.
+// Graph: players -> preMixer -> eq -> timePitch -> mainMixer -> output. The EQ node belongs to
+// AudioEqualizer; gain changes apply live. Handles local files, on-demand download of remote-only
+// tracks, the lock screen (MPNowPlayingInfoCenter) and hardware controls (MPRemoteCommandCenter).
+// Engine completion handlers run off-main and hop back with `Task { @MainActor in ... }`.
 
 import AVFoundation
 import MediaPlayer
@@ -29,6 +14,7 @@ import UIKit
 import AppKit
 #endif
 import OSLog
+internal import Helpers
 
 // MARK: - Playback State
 
@@ -65,11 +51,8 @@ public enum CrossfadeMode: String, CaseIterable, Identifiable, Sendable {
 
 // MARK: - Engine
 
-/// Listening that shapes nothing: no play log, no recently played, no scrobble.
-///
-/// Stored as an expiry rather than a flag so it can't quietly swallow a month of
-/// history after being switched on once — the same self-ending window every other
-/// player's private session has.
+/// Listening that records nothing: no play log, recents or scrobble. An expiry rather than a flag so it
+/// can't swallow history forever after being switched on once.
 public enum PrivateSession {
     private static let key = "playback.privateSessionUntil"
     public static let window: TimeInterval = 6 * 3600
@@ -90,19 +73,11 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     // MARK: - Published State (UI observes these)
 
     @Published public private(set) var state:           PlaybackState = .stopped
-    /// The playback position, published on its own object — see `PlaybackClock`.
-    ///
-    /// Deliberately *not* `@Published`. It changes five times a second, and an
-    /// `ObservableObject` has one `objectWillChange` for all of its state: while
-    /// this lived here, every view holding the engine — the Mac root view, the
-    /// sidebar, the songs table, every detail page — re-evaluated its body on
-    /// each tick, whether or not it drew a clock. Views that show the position
-    /// observe `clock` instead; everything else now hears from the engine only
-    /// when the track, the play state or the queue moves.
+    /// The position, on its own object (see `PlaybackClock`). Not `@Published`: it ticks five times a second
+    /// and would redraw every view holding the engine. Views that show the position observe `clock`.
     public let clock = PlaybackClock()
 
-    /// Where playback is, in seconds. Stored on `clock`; this is the engine's
-    /// own way in and out, so the rest of this file reads as it always did.
+    /// Position in seconds, stored on `clock`.
     public private(set) var currentTime: TimeInterval {
         get { clock.currentTime }
         set { clock.currentTime = newValue }
@@ -112,93 +87,73 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     @Published public private(set) var recentlyPlayed:  [Track]       = []
     /// Non-nil when a playback error just occurred. Auto-clears after 4 seconds.
     @Published public private(set) var errorMessage:    String?       = nil
-    /// Output volume 0.0 – 1.0. Observable and mutatable from any view.
+    /// Output volume 0.0-1.0. Observable and mutatable from any view.
     @Published public var volume: Float = 1.0 {
         didSet { applyVolume() }
     }
 
-    /// Called whenever a track is prepended to `recentlyPlayed`, with the
-    /// listen time that crossed the threshold.
-    /// AppDependencies uses this to persist the entry via PlayHistoryRepository.
+    /// Called when a track enters `recentlyPlayed`, with the listen time that crossed the threshold.
+    /// AppDependencies persists it via PlayHistoryRepository.
     public var onTrackAddedToHistory: ((Track, TimeInterval, QueueSource) -> Void)?
 
-    /// Final listen time for a play already in the history table, once the user
-    /// leaves the track. AppDependencies corrects the stored row with it.
+    /// Final listen time for a logged play once the user leaves the track. AppDependencies corrects the row.
     public var onPlaySecondsFinalised: ((UUID, TimeInterval) -> Void)?
 
-    /// The lock screen / CarPlay / Watch heart. The engine doesn't know the
-    /// library, so AppDependencies answers both.
+    /// The lock screen / CarPlay / Watch heart; AppDependencies answers since the engine doesn't know the library.
     public var isLiked:      ((Track) -> Bool)?
     public var onRemoteLike: ((Track) async -> Void)?
 
     // MARK: - Online context routing (Discover)
-    //
-    // When the currently playing track is an online (Discover) stream, skip /
-    // auto-advance can't use the local queue — each online track is downloaded
-    // one at a time and only the playing one has a file on disk. The
-    // OnlinePlaybackCoordinator installs these handlers so next / previous /
-    // end-of-track route back to it, which downloads the neighbour in its
-    // stored context and plays it. When a normal library track plays, the
-    // engine clears these (see `play(track:in:)`) so the queue handles skips.
+    // Online streams can't skip through the local queue: only the playing track has a file. The coordinator
+    // installs these so next/previous/end-of-track go back to it. Cleared when a library track plays.
 
-    /// Set by OnlinePlaybackCoordinator while an online context is active.
-    /// Non-nil here means "the current track is an online stream".
+    /// Set by OnlinePlaybackCoordinator while an online context is active; non-nil means the current track streams.
     public var onlineNextHandler: (() async -> Void)?
     /// Companion to `onlineNextHandler` for backward skips.
     public var onlinePreviousHandler: (() async -> Void)?
 
-    /// Routes a track that has no playable local file (e.g. a song imported from
-    /// a Spotify playlist, replayed from history, or synced here as metadata-only
-    /// from another device) through the OnlinePlaybackCoordinator, which resolves
-    /// & streams it. Set by AppDependencies. Returns once routing has taken over.
-    /// When nil, such a track falls through to the normal local-file path (and
-    /// surfaces the "hasn't been uploaded yet" error).
+    /// Routes a track with no playable local file (Spotify import, history replay, metadata-only sync) to the
+    /// coordinator to resolve and stream. Set by AppDependencies; returns once routing takes over. When nil the
+    /// track falls through to the local path and its "not uploaded yet" error.
     public var onlineRouter: ((Track, [Track]) async -> Void)?
 
-    /// Ids whose audio is being fetched right now — handed to `onlineRouter`, or
-    /// downloading from the library's own store. The coordinator plays the
-    /// resolved track back through `play(track:in:)`, so without this a track the
-    /// resolver couldn't give a local file for would bounce between the two
-    /// forever.
-    ///
-    /// Published because it is also the only honest answer to "is anything
-    /// happening?" for a row that was just clicked. Fetching a song can take
-    /// several seconds — search, then download — during which nothing on screen
-    /// used to move, so the song looked ignored and people clicked it again.
-    /// Track rows watch this to draw a spinner over the cover; both kinds of
-    /// fetch are in here because from the row's side they are the same wait.
+    /// Renders an edit this device has no file for (made on another device) from its original, and returns
+    /// the file. Set by AppDependencies.
+    public var editRebuilder: ((Track) async throws -> URL)?
+
+    /// Ids whose audio is being fetched (via `onlineRouter` or from the library's store). Stops a track the
+    /// resolver couldn't give a file for from bouncing between the two. Published so clicked rows can show a
+    /// spinner during the fetch.
     @Published public private(set) var routingTrackIDs: Set<UUID> = []
 
-    /// True when `track` can *only* be played by resolving it online: nothing on
-    /// disk and no `remoteKey` to download from. That covers Discover / Spotify
-    /// imports (`isOnline`) and also library rows that arrived here as metadata
-    /// while the source device never uploaded the audio — for those the local
-    /// path has nowhere to go but the "hasn't been uploaded yet" dead end, so
-    /// asking the resolver is strictly better than failing.
+    /// True when `track` can only play by resolving online: nothing on disk and no `remoteKey`. Covers
+    /// Discover/Spotify imports and rows whose source device never uploaded the audio.
     private func needsOnlineResolution(_ track: Track) -> Bool {
+        // Rebuilt from the original, never searched for by its own title.
+        if track.origin == .edit { return false }
         switch AudioLocator.locate(track) {
         case .ready, .remote:      return false
         case .resolvable:          return true
         case .unavailable(let reason):
-            // Nothing here and nothing to fetch — but a row stranded by a device
-            // that never uploaded is still worth asking the resolver about,
-            // which is strictly better than failing outright.
+            // Nothing here and nothing to fetch, but the resolver is still better than failing.
             return reason == .notUploadedYet || reason == .fileMissing
                 || reason == .sharedFromAnotherLibrary
         }
     }
 
-    /// Inverse of `needsOnlineResolution`, for callers outside the engine: true
-    /// when this track has audio the engine can play on its own (a file on disk,
-    /// or a `remoteKey` to download it from). OnlinePlaybackCoordinator uses it to
-    /// avoid re-resolving songs the user already owns.
+    /// True when the engine can play `track` itself (file on disk or a `remoteKey`). The coordinator uses it
+    /// to avoid re-resolving owned songs.
     public func canPlayLocally(_ track: Track) -> Bool {
         !needsOnlineResolution(track)
     }
 
-    /// Hand `track` to the online coordinator. Returns false when there's no
-    /// router wired, or when this track is already mid-route, so callers can fall
-    /// back to the local path.
+    /// An edit with no file here yet. Rebuilt when played, not on a launch restore.
+    private func isMissingEdit(_ track: Track) -> Bool {
+        track.origin == .edit && AudioPaths.durableURL(forLocalPath: track.file.localPath) == nil
+    }
+
+    /// Hands `track` to the coordinator. False when no router is wired or it's already routing, so callers can
+    /// fall back to the local path.
     private func routeOnline(_ track: Track, context: [Track]) async -> Bool {
         guard let route = onlineRouter, !routingTrackIDs.contains(track.id) else { return false }
         routingTrackIDs.insert(track.id)
@@ -207,12 +162,10 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         return true
     }
 
-    /// True when an online (Discover) context is driving playback, so skips
-    /// must route to the coordinator instead of the local queue.
+    /// True when an online context drives playback, so skips go to the coordinator.
     public var hasOnlineContext: Bool { onlineNextHandler != nil }
 
-    /// Clear the online routing handlers. Called when a library track takes
-    /// over so the engine's normal queue handles next / previous again.
+    /// Clears the online handlers so the queue handles skips again.
     public func clearOnlineContext() {
         onlineNextHandler = nil
         onlinePreviousHandler = nil
@@ -224,30 +177,22 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         case play, pause, next, previous, seek(TimeInterval)
     }
 
-    /// Installed by `ContinuityService` while this device shows a song playing
-    /// somewhere else. Every transport path — the buttons, the scrubber, media
-    /// keys, the lock screen — already comes through the six methods below, so
-    /// intercepting there is what makes all of them control the other device.
-    /// Cleared by any local play: choosing a song here takes playback back.
+    /// Installed by `ContinuityService` while mirroring another device. All transport paths (buttons, scrubber,
+    /// media keys, lock screen) go through the methods below, so this redirects all of them. Cleared by any
+    /// local play.
     public var remoteTransport: ((RemoteTransportAction) -> Void)?
 
-    /// Also installed by `ContinuityService` while mirroring: hands a song the
-    /// user picked *here* to the device that is actually playing, and returns
-    /// true when it did. Picking a song is not a request to move the music —
-    /// the player only changes when the user says so in the device picker, or
-    /// when the playing device closes or stops.
+    /// Also installed while mirroring: sends a song picked here to the playing device and returns true.
+    /// Picking a song doesn't move playback; only the device picker (or the other device stopping) does.
     public var remotePlayRedirect: ((Track, [Track]) -> Bool)?
 
-    /// Put another device's song, position and play state where every player
-    /// surface reads them, without making a sound. Stops local audio the first
-    /// time; after that it only moves the values that changed, since each
-    /// publish redraws every view holding the engine.
+    /// Shows another device's song, position and state on every player surface without playing it. Stops
+    /// local audio the first time, then only updates what changed, since each publish redraws.
     public func mirrorRemote(track: Track, position: TimeInterval, duration: TimeInterval,
                              isPlaying: Bool) {
         if audioFile != nil || playbackSource == .remote || queue.currentTrack?.id != track.id {
-            // ponytail: an online resolve already in flight still hands its song
-            // over when it lands (a local takeover); cancel routes if that bites.
-            loadGeneration &+= 1        // a local load in flight must not start audio underneath
+            // ponytail: an online resolve already in flight still takes over locally when it lands; cancel routes if that bites.
+            loadGeneration &+= 1  // a local load in flight must not start audio underneath
             haltCurrentAudio()
             clearOnlineContext()
             queue.restoreSession(track: track)
@@ -256,10 +201,9 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             updateNowPlayingInfo(track: track)
         } else if let art = track.artworkData, !art.isEmpty,
                   queue.currentTrack?.displayArtwork == nil {
-            // Same song, but the sender's cover only just arrived (an online
-            // row has no store copy to fall back on, so this is the only path).
+            // Same song, but its cover just arrived (online rows have no store copy).
             queue.fillArtwork(art, forTrackID: track.id)
-            objectWillChange.send()     // nothing @Published moved; the bar reads through us
+            objectWillChange.send()  // nothing @Published changed; the bar reads through us
             updateNowPlayingInfo(track: track)
         }
         if self.duration != duration { self.duration = duration }
@@ -271,8 +215,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         }
     }
 
-    /// The other device went away. What it was playing stays on screen,
-    /// stopped at its last position, so play picks it up here.
+    /// The other device went away. Its song stays on screen, stopped at its last position, so play resumes it here.
     public func endMirroring() {
         remoteTransport = nil
         remotePlayRedirect = nil
@@ -281,12 +224,11 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         updateNowPlayingRate(0)
     }
 
-    /// Current playback speed multiplier (0.5–2.0). 1.0 = normal. Persisted.
+    /// Current playback speed multiplier (0.5-2.0). 1.0 = normal. Persisted.
     @Published public private(set) var playbackRate: Float = 1.0
-    /// Track-transition style. Persisted. `.off` keeps the original single-player
-    /// path; `.gapless`/`.crossfade` overlap tracks via the dual-player graph.
+    /// Track transition style, persisted. `.off` is the single-player path; `.gapless`/`.crossfade` use both players.
     @Published public private(set) var crossfadeMode: CrossfadeMode = .off
-    /// Crossfade overlap length in seconds (used when mode == .crossfade). 2–12.
+    /// Crossfade overlap length in seconds (used when mode == .crossfade). 2-12.
     @Published public private(set) var crossfadeDuration: TimeInterval = 6
     /// Seconds left on the active sleep timer, or nil if none is running.
     @Published public private(set) var sleepTimerRemaining: TimeInterval? = nil
@@ -303,23 +245,10 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     private let fileStorage: SupabaseFileStorageService
 
     // Audio graph
-    // Lazy, all five of them. Building the graph was already deferred to first
-    // playback — see `configureGraphIfNeeded` — but the *nodes* were still
-    // constructed eagerly in `init`, which meant every launch paid to
-    // instantiate audio units nothing was going to use. `engine/prefs` measured
-    // 1165 ms between the equalizer and the end of this initialiser, and three
-    // UserDefaults reads cannot account for that; an `AVAudioUnitTimePitch` is
-    // an AudioComponent lookup and load, and a mixer node is another.
-    //
-    // Every access below is on a playback or settings path, never on the launch
-    // path, so the first one to arrive pays — by which point the user has asked
-    // for audio and the cost is expected.
+    // All lazy: nodes are only built on first playback (see `configureGraphIfNeeded`), not at launch.
     private lazy var audioEngine = AVAudioEngine()
-    /// Two player nodes feeding the preMixer on distinct buses so tracks can
-    /// overlap for crossfade / gapless. `playerNode` is whichever is currently
-    /// active; the other (`idlePlayer`) is silent until a transition. When
-    /// crossfade is OFF, `usingA` never flips so behaviour matches the original
-    /// single-player path exactly.
+    /// Two players on separate preMixer buses so tracks can overlap. `playerNode` is the active one; `idlePlayer`
+    /// is silent until a transition. With crossfade off `usingA` never flips.
     private lazy var playerA = AVAudioPlayerNode()
     private lazy var playerB = AVAudioPlayerNode()
     private var usingA  = true
@@ -334,67 +263,58 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     private var isTransitioning = false
 
     // MARK: - Play/pause fade state
-    //
-    // Deliberately on a different knob from the crossfade ramp. Crossfade owns the
-    // *per-node* volumes (playerA/playerB) and cancelCrossfade() slams both back to
-    // 1; if the pause fade shared those it would either be wiped by a transition or
-    // wipe one. The pause fade instead rides the main mixer's output, downstream of
-    // both players, so pausing mid-crossfade fades the whole blend and the two ramps
-    // never argue about the same value.
+    // Pause fade rides the main mixer output, not the per-player volumes crossfade owns, so pausing
+    // mid-crossfade fades the whole blend and the two ramps never fight over one value.
     private enum FadePhase { case idle, fadingOut, fadingIn }
     private var fadePhase: FadePhase = .idle
     private var fadeTask: Task<Void, Never>?
-    /// Bumped on every fade start/cancel. A ramp task that got past its
-    /// `Task.isCancelled` check before being superseded still bails on this, so a
-    /// stale step can never write a volume after a newer transition took over.
+    /// Bumped on every fade start/cancel so a stale ramp step can't write after a newer one took over.
     private var fadeGeneration = 0
-    /// 0…1 multiplier layered on top of the user's `volume`, never replacing it.
-    /// Kept separate so a volume change mid-ramp re-applies through applyVolume()
-    /// without stomping the fade, the fade can't push output past the ceiling the
-    /// user chose, and the ramp's final write is a gain — not a remembered volume
-    /// that may since have gone stale.
+    /// 0...1 multiplier on top of the user's `volume`. Separate so a volume change mid-ramp doesn't break the
+    /// fade and the fade can't exceed the user's volume.
     private var fadeGain: Float = 1
 
-    /// Fade-out is longer than fade-in on purpose: a slow release reads as
-    /// "settling", a slow attack just reads as laggy.
+    /// Fade-out is longer than fade-in: a slow release sounds settled, a slow attack sounds laggy.
     private static let pauseFadeDuration:  TimeInterval = 0.35
     private static let resumeFadeDuration: TimeInterval = 0.20
     /// ~60 steps/sec. Finer is inaudible and only burns main-actor hops.
     private static let fadeStepInterval:   TimeInterval = 1.0 / 60.0
-    /// Plain mixer placed directly after the player. It absorbs per-file format
-    /// changes (channel count / sample rate) and converts to one canonical format,
-    /// so the downstream AU effects (EQ, TimePitch) always run at a fixed format.
-    /// Without this, reconnecting the serial AU chain per file makes the TimePitch
-    /// unit reject the format (err -10868) and crash on `connect`.
+    /// Presses closer than this are someone spamming play/pause. At full length each ramp is reversed before
+    /// it gets anywhere, so the presses cancel out and nothing audible happens.
+    private static let rapidToggleWindow:  Duration     = .milliseconds(500)
+    /// Ramp used while spamming: short enough that every press is heard, long enough not to click.
+    private static let rapidFadeDuration:  TimeInterval = 0.10
+    private var lastToggleAt: ContinuousClock.Instant?
+    /// How long the engine keeps running after a pause, so a quick resume doesn't wait on the output
+    /// device restarting (slow, blocks the main actor, and Bluetooth drops the first moments).
+    private static let engineIdleGrace:    Duration     = .seconds(2)
+    private var engineIdleTask: Task<Void, Never>?
+    /// Mixer right after the players that converts every file to one canonical format, so the EQ and
+    /// TimePitch units never see a format change (TimePitch rejects it with -10868 and crashes on `connect`).
     private lazy var preMixerNode = AVAudioMixerNode()
-    /// The EQ node — provided by `equalizer`. Inserted between player and mixer.
+    /// The EQ node, owned by `equalizer`.
     private var eqNode: AVAudioUnitEQ { equalizer.node }
-    /// Varispeed/pitch node for playback-speed control. Sits eq → timePitch → mixer.
+    /// Varispeed/pitch node for playback-speed control. Sits eq -> timePitch -> mixer.
     private lazy var timePitchNode = AVAudioUnitTimePitch()
     private var graphConfigured = false
 
-    /// The fixed format the effect chain (preMixer output → eq → timePitch → mixer)
-    /// always runs at. The preMixer converts any file format into this.
+    /// The fixed format the effect chain runs at; the preMixer converts into it.
     private let canonicalFormat = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2)!
 
     // Sleep timer
     private var sleepTimerTask: Task<Void, Never>?
 
-    // Last.fm scrobbling: when the current track started, and whether it has
-    // already crossed the scrobble threshold this play-through.
+    // Last.fm: when the track started and whether it crossed the scrobble threshold.
     private var scrobbleStartedAt: Date?
     private var didScrobbleCurrent = false
-    /// True once the current track has crossed the minimum-listen threshold and
-    /// been recorded to history. Reset whenever a new track starts.
+    /// True once the current track crossed the minimum listen and was recorded. Reset per track.
     private var didRecordHistoryCurrent = false
-    /// The logged play's track and how far into it the user has got. Kept on the
-    /// progress tick because `currentTime` is already back to 0 by the time a
-    /// new track's start path runs — there'd be nothing left to report.
+    /// The logged play and how far the user got. Tracked on the tick because `currentTime` is already 0 when
+    /// the next track starts.
     private var loggedPlayTrackID: UUID?
     private var loggedPlaySeconds: TimeInterval = 0
 
-    // Lyrics prefetch: id of the track we last kicked off a background lyrics
-    // resolve for, so the same track isn't prefetched twice in a row.
+    // Last track a lyrics prefetch ran for, so it isn't repeated.
     private var lastLyricsPrefetchID: Track.ID?
 
     // UserDefaults keys for persisted playback state.
@@ -422,57 +342,36 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     private var isNodePlaying = false
 
     private var progressTimer: AnyCancellable?
-    /// Position last written to defaults, so the throttle knows how much
-    /// playback has gone by unsaved.
+    /// Position last written to defaults, for the throttle.
     private var lastPersistedPosition: TimeInterval = 0
     private var terminationObservers: Set<AnyCancellable> = []
-    /// Incremented each time a new load is requested. A stale `loadAndPlay` call
-    /// checks this before doing anything irreversible and aborts if superseded.
-    ///
-    /// Readable from outside as `playbackGeneration` so a resolve that takes
-    /// seconds can tell whether anything else claimed the player while it was
-    /// running — see OnlinePlaybackCoordinator.playFromContext.
+    /// Bumped on every load. A stale `loadAndPlay` checks it before anything irreversible. Exposed as
+    /// `playbackGeneration` for long resolves (see OnlinePlaybackCoordinator.playFromContext).
     private var loadGeneration = 0
 
-    /// Set when the user pauses while a song they asked for is still being
-    /// fetched. The old song is what's audible during that wait, so `pause()`
-    /// reads as "stop the music" — and the fetch finishing several seconds
-    /// later must not override it by starting the new song anyway. Cleared by
-    /// the next thing the user does: a fresh play, or a resume.
+    /// Set when the user pauses while a requested song is still fetching, so the fetch finishing doesn't
+    /// start it anyway. Cleared by the next play or resume.
     private var pausedWhileLoading = false
 
-    /// Bumped by every load. Take a copy before a long await and compare after:
-    /// a different value means some other play took the engine over.
+    /// Bumped by every load. Copy it before a long await; a different value after means something else took over.
     public var playbackGeneration: Int { loadGeneration }
 
     // MARK: Padded-source trimming
-    //
-    // A resolved online source is whatever upload the search picked, and uploads
-    // lie about their length in one specific way: the song ends and the file
-    // doesn't. Two minutes of silence after a 2:40 track is common enough that
-    // it reads as a bug in Mixtape — the transport shows 5:00, the scrubber puts
-    // the song in the first half of its own bar, and the queue sits there not
-    // advancing. The canonical length from the catalogue is the honest number,
-    // so when a source overshoots it by more than a rounding difference we play
-    // to the catalogue length and treat that as the end of the track.
+    // Online sources often have trailing silence (a 2:40 song in a 5:00 file). When the source overshoots the
+    // catalogue length by more than slack, play to the catalogue length and treat that as the end.
 
     /// The catalogue's length for whatever is loaded, 0 when unknown.
     private var canonicalDuration: TimeInterval = 0
     /// Set once the capped end has been acted on, so a stream can't advance twice.
     private var didReachCappedEnd = false
 
-    /// Only worth trimming when the source is meaningfully longer than the
-    /// catalogue says. The slack absorbs the ordinary disagreements — a count-in,
-    /// a fade, a different master — and leaves the pathological case, which is
-    /// minutes rather than seconds.
+    /// Slack for normal differences (count-in, fade, other master); the bad case is minutes, not seconds.
     private static let paddingSlack: TimeInterval = 20
 
-    /// `seconds` trimmed to the catalogue length when the source overruns it,
-    /// otherwise unchanged. Keeps a couple of seconds of the overrun so a track
-    /// whose real ending runs slightly long isn't clipped mid-note.
+    /// `seconds` trimmed to the catalogue length when the source overruns, keeping a couple of seconds so
+    /// long endings aren't clipped.
     private static func trimmed(_ seconds: TimeInterval, canonical: TimeInterval) -> TimeInterval {
-        // Opt-out: a catalogue length can itself be wrong, and when it is, the
-        // trim is what cuts the song short. Defaults to on.
+        // Opt-out, since a wrong catalogue length would cut the song short. On by default.
         guard UserDefaults.standard.object(forKey: DefaultsKey.trimPadding) as? Bool ?? true else { return seconds }
         guard canonical > 30, seconds > canonical + paddingSlack else { return seconds }
         return canonical + 2
@@ -491,10 +390,8 @@ public final class PlaybackEngine: NSObject, ObservableObject {
 
     // MARK: - Remote streaming (Discover / online playback)
 
-    /// Which backend is currently driving playback. `.engine` is the AVAudioEngine
-    /// graph (local files); `.remote` is an AVPlayer streaming a yt-dlp URL. The
-    /// public controls (toggle/pause/resume/seek/volume) branch on this so the
-    /// existing player bar works unchanged for online tracks.
+    /// What drives playback: `.engine` (AVAudioEngine, local files) or `.remote` (AVPlayer streaming a
+    /// URL). Public controls branch on this so the player bar works the same for both.
     private enum PlaybackSource { case engine, remote }
     private var playbackSource: PlaybackSource = .engine
     private var remotePlayer: AVPlayer?
@@ -511,21 +408,15 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         mixMainActivity("engine/init ▸ prefs") { restorePlaybackPreferences() }
         LaunchTimeline.mark("engine/prefs")
         observeAppTermination()
-        // Spanned because this is the one thing here that forces `audioEngine`
-        // into existence — it subscribes to that object's configuration-change
-        // notification — so it is now the launch's whole audio cost, and the
-        // next log should say whether that alone is worth deferring too.
+        // Spanned: the only thing here that creates `audioEngine` (it observes its config changes).
         mixMainActivity("engine/init ▸ observers") { observeAudioSessionEvents() }
         LaunchTimeline.mark("engine/observers")
     }
 
     // MARK: - Audio Graph Setup
 
-    /// The parts of the old `configureGraph` that are just `UserDefaults` reads.
-    ///
-    /// Kept in `init` because the UI binds to `playbackRate` and the crossfade
-    /// settings whether or not anything has played yet, and because they cost
-    /// nothing. Everything expensive moved to `configureGraphIfNeeded`.
+    /// The cheap `UserDefaults` part of setup, kept in `init` because the UI binds to rate and crossfade
+    /// settings before anything plays.
     private func restorePlaybackPreferences() {
         let savedRate = UserDefaults.standard.float(forKey: DefaultsKey.playbackRate)
         if savedRate >= 0.5 && savedRate <= 2.0 {
@@ -540,15 +431,8 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         if savedFade >= 2 && savedFade <= 12 { crossfadeDuration = savedFade }
     }
 
-    /// Build the node graph: players -> preMixer -> eq -> timePitch -> mainMixer.
-    /// Idempotent, and deliberately NOT called from `init`.
-    ///
-    /// This was 1432 ms of a cold iOS launch and 204 ms on the Mac, spent before
-    /// the first window existed. Touching `mainMixerNode` is what costs it:
-    /// AVAudioEngine builds its output unit lazily, so the first mention of the
-    /// main mixer instantiates the whole HAL chain (the `HALC_ShellObject`
-    /// complaints in the Mac log are it happening). None of that is needed until
-    /// something plays, and most launches never play anything.
+    /// Builds the graph: players -> preMixer -> eq -> timePitch -> mainMixer. Idempotent, not called from
+    /// `init`: touching `mainMixerNode` builds the whole output chain, and most launches never play.
     private func configureGraphIfNeeded() {
         guard !graphConfigured else { return }
 
@@ -558,11 +442,8 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         audioEngine.attach(eqNode)
         audioEngine.attach(timePitchNode)
 
-        // Both players → preMixer on separate buses. Each player→preMixer link is
-        // reconnected per file (connectPlayer). Everything from the preMixer onward
-        // stays pinned to the canonical format, so the AU effects never see a live
-        // format change. The idle player is silent (nothing scheduled) until a
-        // crossfade transition.
+        // Players connect per file (`connectPlayer`). Everything after the preMixer stays at the canonical
+        // format. The idle player has nothing scheduled until a transition.
         audioEngine.connect(playerA, to: preMixerNode, fromBus: 0, toBus: 0, format: canonicalFormat)
         audioEngine.connect(playerB, to: preMixerNode, fromBus: 0, toBus: 1, format: canonicalFormat)
         audioEngine.connect(preMixerNode, to: eqNode, format: canonicalFormat)
@@ -575,21 +456,17 @@ public final class PlaybackEngine: NSObject, ObservableObject {
 
         audioEngine.prepare()
         graphConfigured = true
-        // Now that there is a mixer to write to, the volume the user set while
-        // the graph did not exist takes effect.
+        // Apply the volume set before the graph existed.
         applyVolume()
     }
 
-    /// Reconnect playerNode -> eqNode using the loaded file's processing format so
-    /// channel count / sample rate match. Called before scheduling a new file.
+    /// Reconnects the active player for the loaded file's format. Called before scheduling a new file.
     private func connectGraph(for format: AVAudioFormat) {
         configureGraphIfNeeded()
         connectPlayer(playerNode, bus: activeBus, format: format)
     }
 
-    /// Reconnect a specific player → preMixer input bus for `format`. The preMixer
-    /// converts it to the canonical format the rest of the chain expects, so the
-    /// AU effects never have to re-negotiate (which is what crashed with -10868).
+    /// Reconnects one player's preMixer bus for `format`; the preMixer converts it so the effects never renegotiate.
     private func connectPlayer(_ player: AVAudioPlayerNode, bus: AVAudioNodeBus, format: AVAudioFormat) {
         configureGraphIfNeeded()
         audioEngine.connect(player, to: preMixerNode, fromBus: 0, toBus: bus, format: format)
@@ -604,21 +481,15 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             try audioEngine.start()
             return true
         } catch {
-            MixLog.playback.error("[PlaybackEngine] ❌ Failed to start AVAudioEngine: \(error)")
+            MixLog.playback.error("[PlaybackEngine] Failed to start AVAudioEngine: \(error)")
             return false
         }
     }
 
-    /// Single place that writes an output level. Everything the user controls
-    /// (`volume`) and everything the pause/resume ramp controls (`fadeGain`) meets
-    /// here, so neither can clobber the other: a mid-fade volume change re-applies
-    /// at the ramp's current gain, and a ramp step re-applies at the user's current
-    /// ceiling.
+    /// The one place output level is written: user `volume` times `fadeGain`, so neither overwrites the other.
     private func applyVolume() {
         let level = volume * fadeGain * normalizationGain
-        // Before the graph exists, naming `mainMixerNode` would build it — which
-        // is the launch cost this lazy path is here to avoid. The value is not
-        // lost: `configureGraphIfNeeded` calls this again once there is a mixer.
+        // Naming `mainMixerNode` would build the graph; `configureGraphIfNeeded` calls this again once it exists.
         if graphConfigured {
             audioEngine.mainMixerNode.outputVolume = level
         }
@@ -628,24 +499,19 @@ public final class PlaybackEngine: NSObject, ObservableObject {
 
     // MARK: - Volume normalization
 
-    /// Per-song level correction, linear and never above 1. Meets the user's
-    /// volume and the pause ramp in `applyVolume`.
+    /// Per-song level correction, linear, never above 1. Combined in `applyVolume`.
     private var normalizationGain: Float = 1
 
     private static var normalizesVolume: Bool {
         UserDefaults.standard.object(forKey: DefaultsKey.normalizeVolume) as? Bool ?? true
     }
 
-    /// ponytail: attenuation only — `outputVolume` and `AVPlayer.volume` both stop
-    /// at 1, so a song quieter than the target stays quiet. Boosting would need a
-    /// limiter on the output, and almost everything in a rip library is *louder*
-    /// than the target, not quieter.
+    /// ponytail: attenuation only, since both volumes cap at 1 and quiet songs stay quiet. Boosting needs a
+    /// limiter; most rips are louder than the target anyway.
     private static func attenuation(_ db: Float) -> Float { db >= 0 ? 1 : pow(10, db / 20) }
 
-    /// Point the output at `url`'s measured level. A file nobody has measured yet
-    /// — and a stream, which has no file at all — starts at the library's typical
-    /// correction so the first second isn't a step, and gets measured in the
-    /// background for next time.
+    /// Points the output at `url`'s measured level. Unmeasured files and streams start at the library's typical
+    /// correction and get measured in the background.
     private func normalize(to url: URL?) {
         guard Self.normalizesVolume else {
             normalizationGain = 1
@@ -669,42 +535,22 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         }
     }
 
-    /// Re-read the setting for whatever is playing now, so the Settings switch is
-    /// heard on the current song rather than the next one.
+    /// Re-reads the setting for the current song so the Settings switch applies immediately.
     public func reapplyNormalization() {
         normalize(to: playbackSource == .engine ? audioFile?.url : nil)
     }
 
     // MARK: - Public Controls
 
-    /// Load a new queue starting at `track` and begin playback.
-    ///
-    /// `startIndex` is for callers pointing at a *row* rather than naming a song
-    /// — a click in the Queue panel. Without it the queue starts at the first
-    /// copy of that song, which is the wrong one as soon as a song appears in
-    /// the queue twice.
-    ///
-    /// `resolved` is the way back *in*. OnlinePlaybackCoordinator finishes a
-    /// resolve by calling this method with the downloaded song — and that call
-    /// arrives while the original track id is still in `routingTrackIDs`,
-    /// because the coordinator is running inside `routeOnline`, which only
-    /// clears the id when it returns. The re-entry guards below then read the
-    /// handoff as "the user clicked a song that is already downloading" and
-    /// dropped it: the bar ran to "done", the spinner stayed, and nothing
-    /// played until the song was clicked a second time — by which point the
-    /// cache was warm and it started instantly. A minted online Track hashes to
-    /// the same id as the library row it came from, so this is not a corner
-    /// case; it is every cold play of a song that has to be found online.
-    /// `source` names the list being played so the queue can head its section
-    /// "Next up: <name>". It rides along with the play rather than being set
-    /// afterwards because `QueueService.play` *resets* the source — a caller
-    /// that marks it after the fact races the load and loses the name whenever
-    /// the song has to be fetched first.
+    /// Loads a new queue starting at `track` and plays it.
+    /// `startIndex` is for callers pointing at a row (Queue panel click), since a song can be queued twice.
+    /// `resolved` marks the coordinator handing back a resolved song. That call arrives while the id is still
+    /// in `routingTrackIDs`, and without the flag the re-entry guards would drop it as a duplicate click.
+    /// `source` names the list for the queue's "Next up: <name>" header. Passed in because `QueueService.play`
+    /// resets it, and setting it later races a fetch.
     public func play(track: Track, in tracks: [Track], startIndex: Int? = nil,
                      resolved: Bool = false, source: QueueSource = .none) async {
-        // A play the user asked for outranks any pause that came before it.
-        // Not the resolver's handoff (`resolved`), which is the tail of a play
-        // that may well have been paused since.
+        // A user play outranks an earlier pause. Not the resolver handoff, which may have been paused since.
         if !resolved { pausedWhileLoading = false }
         // Feeds the Library's Recents order.
         if !resolved {
@@ -718,66 +564,41 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         if !resolved, remoteTransport != nil,
            remotePlayRedirect?(track, tracks) == true { return }
         remoteTransport = nil
-        // A track with no local file and no remoteKey can't be played from disk —
-        // resolve & stream it through the coordinator instead. The coordinator
-        // plays the *resolved* file back through this method with its cache
-        // `localPath` populated, so `localURL(for:)` is non-nil on the way back in.
+        // No local file and no remoteKey: resolve and stream via the coordinator. It plays the resolved file
+        // back through here with `localPath` set.
         if needsOnlineResolution(track), !resolved {
-            // Already resolving. Tapping a song that is taking a few seconds used
-            // to fall through to the local path, which has nowhere to go for a
-            // track with no file — so the second tap answered with "no audio on
-            // this device" about a song that was, at that moment, downloading, and
-            // which then started playing underneath the error.
+            // Already resolving; a second tap would hit the local path and show "no audio" for a downloading song.
             if routingTrackIDs.contains(track.id) { return }
             if await routeOnline(track, context: tracks) { return }
         }
-        // The same guard for a song being downloaded from the library's own
-        // store: it is already on its way, and a second click should be a
-        // no-op rather than a second download of the same bytes. It does not
-        // apply to the resolver's own handoff — that call *is* the download
-        // arriving.
+        // Same for a song downloading from the library store. Not for the resolver's handoff, which is the download arriving.
         if !resolved, routingTrackIDs.contains(track.id) {
-            // Logged because this is a click that produces nothing at all: no
-            // audio, no error, no visible change. When it is wrong it is
-            // invisible, and it was wrong for years.
-            MixLog.playback.debug("[PlaybackEngine] ⏳ Ignored play of \"\(track.title)\" — already routing")
+            // Logged because this click produces nothing visible.
+            MixLog.playback.debug("[PlaybackEngine] Ignored play of \"\(track.title)\", already routing")
             return
         }
-        // A direct play() takes over the local queue. Drop any online routing so
-        // skips use the queue again. OnlinePlaybackCoordinator re-installs its
-        // handlers immediately after this call when it's driving an online track.
+        // A direct play takes over the local queue. The coordinator reinstalls its handlers right after if it's
+        // driving an online track.
         clearOnlineContext()
-        // Start resolving lyrics the moment a song is chosen so they're cached by
-        // the time Now Playing opens. Best-effort — never blocks playback.
+        // Resolve lyrics now so they're cached by the time Now Playing opens.
         LyricsService.shared.prefetch(for: track)
-        // The queue is handed to the load rather than written now: everything the
-        // player bar shows is read from it, so writing it here is what put the new
-        // song's title, artist and cover on screen while the previous song was
-        // still the one coming out of the speakers. `loadAndPlay` publishes it at
-        // the moment it takes the audio over. See `handOver`.
+        // The queue goes to the load instead of being written now: the player bar reads it, so writing it early
+        // shows the new song while the old one is still playing. See `handOver`.
         await loadAndPlay(track: track, publishing: tracks, startIndex: startIndex,
                           resolved: resolved, source: source)
     }
 
-    /// Routed through `pause()` / `resume()` rather than duplicating their bodies —
-    /// the fade bookkeeping only stays consistent if there is exactly one path into
-    /// each transition.
+    /// Through `pause()`/`resume()` so there's one path into each fade.
     public func togglePlayPause() {
         if let remoteTransport { remoteTransport(state == .playing ? .pause : .play); return }
         switch state {
         case .playing: pause()
         case .paused:  resume()
         default:
-            // Stopped with songs waiting. "Add to Queue" fills the queue without
-            // starting anything — that's the point of it — so the first press of
-            // play is what has to start it. Without this the whole transport was
-            // inert next to a queue full of songs, which is what "the button
-            // does nothing" looked like. `play(track:in:)` handles a row with no
-            // local file by routing it through the coordinator, so a queued
-            // Discover song starts here exactly as it would from its own page.
+            // Stopped with songs queued ("Add to Queue" doesn't start playback), so play starts the queue.
+            // `play(track:in:)` routes a row with no file through the coordinator.
             guard let first = queue.currentTrack ?? queue.queue.first else { break }
-            // Left stopped part-way through — by another device handing
-            // playback back — so start where it was, not from the top.
+            // Stopped part-way (another device handed back), so start from there.
             let resumeAt = currentTime
             Task {
                 await play(track: first, in: queue.queue)
@@ -788,9 +609,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         }
     }
 
-    /// If `trackID` is the currently loaded track, stop playback and clear the queue
-    /// entirely so the mini-player returns to a "Nothing playing" state.
-    /// Call this before deleting a track from the library.
+    /// If `trackID` is loaded, stops and clears the queue so the player shows nothing. Call before deleting a track.
     public func stopIfPlaying(trackID: Track.ID) {
         guard queue.currentTrack?.id == trackID else { return }
         stopPlayback()
@@ -800,37 +619,23 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     public func pause() {
         if let remoteTransport { remoteTransport(.pause); return }
         guard state == .playing else { return }
-        // Something is on its way in behind this. Remember the pause so the
-        // handover honours it instead of starting the new song.
+        // A song is loading behind this; remember the pause so the handover respects it.
         if !routingTrackIDs.isEmpty { pausedWhileLoading = true }
-        // Flip the visible state (and the lock screen) straight away — the button
-        // has to feel instant even though the audio takes ~0.35s to reach silence.
+        // Update state now so the button feels instant; the audio takes ~0.35s to fade.
         state = .paused
         updateNowPlayingRate(0)
-        // A pause is the other moment the session is worth writing down — a
-        // crash or a force-quit never reaches the termination hook.
+        // Save the session on pause; a crash or force quit never reaches the termination hook.
         persistQueueSnapshot()
-        // The remote path's clock is the AVPlayer's periodic observer, not this
-        // timer, so only the engine path has one to stop. Stopping it now also
-        // keeps maybeStartCrossfade() from opening a transition during the fade.
+        // Remote streams use the AVPlayer observer, not this timer. Stopping it also keeps
+        // `maybeStartCrossfade()` from starting during the fade.
         if playbackSource != .remote { stopProgressTimer() }
-        // The node/player keeps running until the ramp reaches zero — that silence
-        // before the hard stop is the whole point (see haltAfterPauseFade).
-        startFade(to: 0, over: Self.pauseFadeDuration, phase: .fadingOut)
+        // The player runs until the ramp hits zero, see `haltAfterPauseFade`.
+        startFade(to: 0, over: toggleFadeDuration(Self.pauseFadeDuration), phase: .fadingOut)
     }
 
-    /// Suspends until audio is actually coming out, or `timeout` elapses.
-    ///
-    /// For callers with speculative work to start — cache fills, warming the
-    /// next track — that must not compete with the buffer the listener is
-    /// waiting on. Returns on timeout rather than throwing: a stream that never
-    /// reaches `.playing` is a reason to give up waiting, not a reason to skip
-    /// the warm-up entirely.
-    ///
-    /// Polled deliberately. The caller only needs "has it started yet", and
-    /// 100ms granularity is far finer than anything it gates; observing
-    /// `$state` would mean racing a publisher that emits nothing at all in the
-    /// case that matters most — a stall.
+    /// Waits until audio is playing or `timeout` elapses, for speculative work (cache fills, warming the next
+    /// track) that shouldn't compete with the buffer. Returns on timeout. Polled at 100ms: observing
+    /// `$state` emits nothing during a stall, the case that matters.
     public func waitUntilPlaying(timeout: TimeInterval) async {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
@@ -843,20 +648,14 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     public enum StreamStart: Sendable {
         /// Audio is advancing.
         case playing
-        /// AVPlayer gave up on the item — a 403 on the URL, a format it can't
-        /// open, the host refusing the connection.
+        /// AVPlayer gave up on the item (403, unsupported format, refused connection).
         case failed
-        /// Neither, within the deadline. A stall, and from where the listener
-        /// sits there's no difference between this and `failed`.
+        /// Neither before the deadline; to the listener, the same as `failed`.
         case timedOut
     }
 
-    /// Seconds of the streaming item AVPlayer has actually pulled down, or nil
-    /// when nothing is streaming and there is nothing honest to report.
-    ///
-    /// This is the only byte count that exists on the streaming path: the
-    /// resolver hands over a URL and steps out, so from then on AVPlayer is the
-    /// one moving the file and its loaded range is the progress.
+    /// Seconds of the stream AVPlayer has loaded, or nil when nothing streams. The only progress measure on
+    /// the streaming path.
     public var remoteBufferedSeconds: TimeInterval? {
         guard let item = remotePlayer?.currentItem else { return nil }
         guard let range = item.loadedTimeRanges.first?.timeRangeValue else { return nil }
@@ -864,19 +663,11 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         return loaded.isFinite ? max(0, loaded) : nil
     }
 
-    /// Suspends until a freshly started remote stream either plays or proves it
-    /// won't. The other half of `waitUntilPlaying`, for the caller that has to
-    /// *decide* something rather than schedule around it.
-    ///
-    /// `failed` is what makes this worth having over a plain timeout: a rejected
-    /// URL is knowable in a few hundred milliseconds, so the fallback can start
-    /// then instead of at the end of a deadline long enough to also cover a slow
-    /// buffer on a bad connection.
+    /// Waits until a new remote stream plays or fails. Unlike `waitUntilPlaying`, `failed` arrives fast for a
+    /// rejected URL, so the fallback starts right away instead of at the deadline.
     public func awaitStreamStart(timeout: TimeInterval) async -> StreamStart {
-        /// A stream held at 0:00 because the user paused mid-fetch has started
-        /// as far as this is concerned: the item is attached and ready. Waiting
-        /// for `.playing` would time out and send the caller off to download a
-        /// copy of a song nobody is listening to.
+        /// A stream held at 0:00 by a mid-fetch pause counts as started, or the caller would time out and download
+        /// a copy nobody is listening to.
         func started() -> Bool {
             state == .playing || (state == .paused && pausedWhileLoading)
         }
@@ -896,17 +687,14 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         pausedWhileLoading = false
         state = .playing
         updateNowPlayingRate(playbackRate)
-        // A song that arrived paused (launch restore, or paused mid-fetch) was
-        // never announced, so it would never scrobble. It starts now.
+        // A song that arrived paused (launch restore, mid-fetch pause) was never announced; scrobble from now.
         if scrobbleStartedAt == nil, let track = queue.currentTrack {
             scrobbleStartedAt = Date()
             Task { await LastFmScrobbler.shared.updateNowPlaying(track: track) }
         }
 
         if fadePhase == .fadingOut {
-            // Caught the pause fade before it reached silence, so the node/player
-            // never stopped. Just reverse the ramp from wherever it got to —
-            // re-starting playback here would stutter and reset the sample clock.
+            // The pause fade hadn't reached silence, so the player never stopped. Reverse the ramp; restarting would stutter.
         } else {
             // Fully halted: come up from silence so the restart isn't a click.
             fadeGain = 0
@@ -917,12 +705,11 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             if playbackSource == .remote { resumeRemoteAtRate() } else { resumePlayback() }
         }
         if playbackSource != .remote { startProgressTimer() }
-        startFade(to: 1, over: Self.resumeFadeDuration, phase: .fadingIn)
+        startFade(to: 1, over: toggleFadeDuration(Self.resumeFadeDuration), phase: .fadingIn)
     }
 
     #if os(iOS)
-    /// Taking a non-mixable session stops other apps' audio, so this only runs
-    /// when something is about to be heard, never for a paused launch restore.
+    /// A non-mixable session stops other apps' audio, so only activate when something is about to play.
     private func activateAudioSession() {
         do {
             try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
@@ -933,25 +720,19 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     }
     #endif
 
-    /// Seek to `time` seconds. Works while paused or playing.
-    /// Implemented by stopping the player node and re-scheduling the file from
-    /// the target sample offset.
+    /// Seeks to `time` seconds, playing or paused, by rescheduling the file from that frame.
     public func seek(to time: TimeInterval) {
         if let remoteTransport {
             currentTime = max(0, min(time, duration))   // the scrubber lands now, not on the echo
             remoteTransport(.seek(time))
             return
         }
-        // Nothing loaded: the queue ran out and `stopPlayback()` tore the file
-        // down, so every seek below returns early and a click on a lyric does
-        // nothing. The instruction is still meaningful — "play from here" — and
-        // the UI is still showing the track, so load it again and start there.
+        // Nothing loaded (the queue ran out) but the UI still shows the track, so reload it and start there.
         if state == .stopped, audioFile == nil, playbackSource == .engine,
            let track = queue.currentTrack {
             Task { @MainActor in
                 await loadAndPlay(track: track)
-                // Only if it loaded: a failed reload leaves this same branch
-                // true, and the retry would reload forever.
+                // Only if it loaded, or a failed reload retries forever.
                 if audioFile != nil { seek(to: time) }
             }
             return
@@ -968,16 +749,13 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         }
         guard let file = audioFile, fileLengthFrames > 0 else { return }
         cancelCrossfade()
-        // Stop just short of the end: a seek to exactly `duration` schedules zero
-        // frames, so no completion ever fires and the song sits at its end
-        // instead of advancing.
+        // Just short of the end: seeking to exactly `duration` schedules zero frames and never completes.
         let clamped = max(0, min(time, duration - 0.05))
         let targetFrame = AVAudioFramePosition(clamped * fileSampleRate)
 
         let wasPlaying = (state == .playing)
 
-        // Bump generation so the in-flight completion handler for the old segment
-        // doesn't auto-advance when we stop it here.
+        // Bump generation so the old segment's completion doesn't auto-advance.
         loadGeneration &+= 1
         let generation = loadGeneration
 
@@ -998,19 +776,25 @@ public final class PlaybackEngine: NSObject, ObservableObject {
 
     public func playNext() async {
         if let remoteTransport { remoteTransport(.next); return }
-        // Online context active → advance through the Discover context (downloads
-        // the neighbour on demand) instead of the single-track local queue.
+        // Natural endings also land here, so only a jump with over 5s left counts as a skip.
+        if let track = queue.currentTrack, duration > 0, currentTime < duration - 5 {
+            Analytics.track("skip", [
+                "track_id": .string(track.id.uuidString.lowercased()),
+                "title":    .string(track.title),
+                "artist":   .string(track.artistName),
+                "seconds":  .double(currentTime.rounded()),
+                "duration": .double(duration.rounded()),
+                "source":   .string(queue.source.historyRef?.kind ?? "none")
+            ])
+            if currentTime < 30 { SkipHistory.noteEarlySkip(title: track.identityTitle, artist: track.artistName) }
+        }
+        // Online context: advance through the coordinator, which downloads the next track.
         if let handler = onlineNextHandler {
             await handler()
             return
         }
         if beginSkipCrossfade() { return }
-        // Walk past anything already known to be unfindable. Stopping on a song
-        // no resolver has ever produced is the "queue died in the middle" case:
-        // the row is badged in the queue for exactly this reason, and reaching
-        // it should cost a line of explanation, not the rest of the session.
-        // Bounded: under repeat one/all `advance()` never returns nil, so a queue
-        // with nothing playable left would spin the main actor forever.
+        // Skip songs already known to be unfindable. Bounded: with repeat on, `advance()` never returns nil.
         for _ in 0..<queue.queue.count {
             guard let next = queue.advance() else { break }
             if UnavailableTracks.shared.contains(next), !canPlayLocally(next) {
@@ -1032,7 +816,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             if state == .paused { resume() }
             return
         }
-        // Online context active → step back through the Discover context.
+        // Online context active -> step back through the Discover context.
         if let handler = onlinePreviousHandler {
             await handler()
             return
@@ -1044,22 +828,19 @@ public final class PlaybackEngine: NSObject, ObservableObject {
 
     // MARK: - Playback Speed
 
-    /// Set the playback speed multiplier. Clamped to 0.5…2.0. Applied live to the
-    /// graph's time-pitch node (preserves pitch) and persisted to UserDefaults.
+    /// Sets the speed, clamped to 0.5...2.0. Applied live via the time-pitch node (pitch kept) and persisted.
     public func setRate(_ rate: Float) {
         let clamped = max(0.5, min(rate, 2.0))
         playbackRate = clamped
         timePitchNode.rate = clamped
-        // Remote (AVPlayer) streams apply speed via the player's rate; pitch is
-        // preserved by the item's audioTimePitchAlgorithm set at load time.
+        // Streams use the AVPlayer rate; pitch is kept by `audioTimePitchAlgorithm` set at load.
         if playbackSource == .remote, state == .playing { remotePlayer?.rate = clamped }
         UserDefaults.standard.set(clamped, forKey: DefaultsKey.playbackRate)
         // Lock-screen rate reflects whether we're actively playing, scaled by speed.
         updateNowPlayingRate(state == .playing ? clamped : 0)
     }
 
-    /// Resume the remote AVPlayer at the user's chosen speed. Setting `rate`
-    /// directly both starts playback and applies the multiplier in one step.
+    /// Resumes the AVPlayer at the chosen speed; setting `rate` both starts it and applies it.
     private func resumeRemoteAtRate() {
         remotePlayer?.rate = playbackRate
     }
@@ -1109,12 +890,8 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         }
     }
 
-    /// Write the whole queue, not just the song.
-    ///
-    /// Only the current track used to survive a quit, so relaunching restored
-    /// one song with nothing after it — "next" was empty however long the list
-    /// had been. Deliberately *not* on the 3-second position tick: this encodes
-    /// every row, and a queue the size of All Songs is a few thousand of them.
+    /// Saves the whole queue, not just the song, so a relaunch restores what comes next. Not on the position
+    /// tick: a queue the size of All Songs is thousands of rows.
     private func persistQueueSnapshot() {
         let defaults = UserDefaults.standard
         guard queue.currentTrack != nil,
@@ -1125,14 +902,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         defaults.set(data, forKey: DefaultsKey.queueSnapshot)
     }
 
-    /// The same write, but at most every few seconds — called from the 0.2s
-    /// progress tick.
-    ///
-    /// Without this the position was only ever written on a seek or a pause, so
-    /// quitting mid-song restored to wherever the last seek happened to be:
-    /// leave at 2:16 having last scrubbed to 1:01 and 1:01 is what came back.
-    /// Three seconds is the most that can now be lost, which is under the
-    /// resolution anyone notices resuming a song.
+    /// The same save, at most every few seconds, from the 0.2s tick. At most three seconds are lost on quit.
     private func persistPlaybackPositionThrottled() {
         guard state == .playing else { return }
         guard abs(currentTime - lastPersistedPosition) >= 3 else { return }
@@ -1140,27 +910,12 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     }
 
     // MARK: - Interruptions & Route Changes
-    //
-    // Three things can take the audio out from under a running engine, and all
-    // three are everyday events on iOS and rare-to-impossible on the Mac. That
-    // asymmetry is why none of this existed: playback on iPhone simply died —
-    // after a phone call, after Siri, after a pair of AirPods connected — and
-    // stayed dead until the app was force-quit, because nothing ever restarted
-    // the engine.
-    //
-    //   1. An *interruption* (call, alarm, Siri) deactivates our session and
-    //      stops the engine. When it ends the system tells us whether we may
-    //      resume; the session has to be re-activated before we can.
-    //   2. A *route change* that removed the current output (headphones pulled)
-    //      must pause. iOS expects this; not doing it is what makes a phone
-    //      suddenly play out loud in someone's pocket.
-    //   3. A *configuration change* means the engine's graph was torn down
-    //      underneath us (a new sample rate from a route change). The nodes are
-    //      still attached but the connections are gone, so they have to be
-    //      remade before the engine can start again.
+    // Interruptions, route changes and configuration changes. Common on iOS, rare on the Mac:
+    // 1. Interruption (call, alarm, Siri) stops the engine. On end, reactivate the session and resume if allowed.
+    // 2. Route change that removed the output (headphones out) must pause.
+    // 3. Configuration change tore down the graph's connections; remake them before restarting.
 
-    /// True when playback was stopped by the system rather than by the user, so
-    /// the end of the interruption knows whether there is anything to resume.
+    /// True when the system stopped playback, so the interruption's end knows whether to resume.
     private var wasPlayingBeforeInterruption = false
 
     private func observeAudioSessionEvents() {
@@ -1193,8 +948,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         case .began:
             wasPlayingBeforeInterruption = (state == .playing)
             MixLog.playback.debug("[PlaybackEngine] Audio interrupted (was playing: \(self.wasPlayingBeforeInterruption))")
-            // Go through `pause()` so the UI, the lock screen and the fade all
-            // agree with the silence the system has already imposed.
+            // Through `pause()` so the UI, lock screen and fade match the silence.
             if state == .playing { pause() }
 
         case .ended:
@@ -1208,12 +962,11 @@ public final class PlaybackEngine: NSObject, ObservableObject {
                 return
             }
             wasPlayingBeforeInterruption = false
-            // Our session was deactivated by the interruption; `resume()` will
-            // start the engine but cannot make it audible without this.
+            // The session was deactivated; `resume()` can't make sound without reactivating it.
             do {
                 try AVAudioSession.sharedInstance().setActive(true)
             } catch {
-                MixLog.playback.error("[PlaybackEngine] ❌ Could not reactivate session after interruption: \(error)")
+                MixLog.playback.error("[PlaybackEngine] Could not reactivate session after interruption: \(error)")
                 return
             }
             resume()
@@ -1226,24 +979,19 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     private func handleRouteChange(_ note: Notification) {
         guard let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
               let reason = AVAudioSession.RouteChangeReason(rawValue: raw) else { return }
-        // Only the disappearance of the device we were playing to is our
-        // business. Everything else (a new device arriving, a category change)
-        // the system handles on its own.
+        // Only losing the device we were playing to matters; the system handles the rest.
         guard reason == .oldDeviceUnavailable else { return }
-        MixLog.playback.debug("[PlaybackEngine] Output device went away — pausing")
+        MixLog.playback.debug("[PlaybackEngine] Output device went away, pausing")
         if state == .playing { pause() }
     }
     #endif
 
-    /// The graph was rebuilt under us. Reconnect it and, if the user still
-    /// thinks a song is playing, get it going again.
+    /// The graph was rebuilt. Reconnect it and restart if a song was playing.
     private func handleEngineConfigurationChange() {
-        MixLog.playback.debug("[PlaybackEngine] Audio engine reconfigured — rebuilding the graph")
+        MixLog.playback.debug("[PlaybackEngine] Audio engine reconfigured, rebuilding the graph")
         // Nothing to reconnect if nothing was ever connected.
         guard graphConfigured else { return }
-        // The connections are gone but the nodes are still attached, so this is
-        // a reconnect, not a rebuild: clearing the flag would re-attach nodes
-        // that are already there.
+        // Nodes are still attached, only the connections are gone, so reconnect rather than rebuild.
         audioEngine.connect(playerA, to: preMixerNode, fromBus: 0, toBus: 0, format: canonicalFormat)
         audioEngine.connect(playerB, to: preMixerNode, fromBus: 0, toBus: 1, format: canonicalFormat)
         audioEngine.connect(preMixerNode, to: eqNode, format: canonicalFormat)
@@ -1263,17 +1011,14 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         }
     }
 
-    /// Persist on the way out. A quit, a logout, or the machine shutting down
-    /// gives us this and nothing else — and it is the exact moment the saved
-    /// position matters most, because it is the one the user will see next.
+    /// Save on quit, logout or shutdown: the position the user will see next.
     private func observeAppTermination() {
         let center = NotificationCenter.default
         #if os(macOS)
         let names: [Notification.Name] = [NSApplication.willTerminateNotification,
                                           NSApplication.willResignActiveNotification]
         #else
-        // iOS may be killed while suspended without any further warning, so
-        // background/resign is the last reliable point to write.
+        // iOS can kill a suspended app without warning, so background/resign is the last safe point.
         let names: [Notification.Name] = [UIApplication.willTerminateNotification,
                                           UIApplication.didEnterBackgroundNotification]
         #endif
@@ -1281,8 +1026,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             center.publisher(for: name)
                 .sink { [weak self] _ in
                     guard let self else { return }
-                    // Read the clock rather than trusting the last tick: up to
-                    // 0.2s of playback happened after it.
+                    // Read the clock; up to 0.2s played since the last tick.
                     if self.state == .playing { self.currentTime = self.currentPlaybackTime() }
                     self.persistPlaybackPosition()
                     self.persistQueueSnapshot()
@@ -1291,10 +1035,8 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         }
     }
 
-    /// Sign-out and account switch: stop, empty the queue, and drop the saved
-    /// song, position and queue so the next launch has nothing to bring back.
-    /// `persistPlaybackPosition` never clears the keys itself, so without this
-    /// the last account's song reappeared paused under the next one.
+    /// Sign-out and account switch: stop, empty the queue and clear the saved song, position and queue so the
+    /// next account doesn't inherit them.
     public func forgetLastSession() {
         stopPlayback()
         clearOnlineContext()
@@ -1305,8 +1047,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         defaults.removeObject(forKey: DefaultsKey.queueSnapshot)
     }
 
-    /// Restore the last session PAUSED at its saved position. Does NOT auto-play.
-    /// Call once on launch after the library has loaded.
+    /// Restores the last session paused at its saved position. Call once at launch after the library loads.
     public func restoreLastSession(allTracks: [Track]) {
         guard state == .stopped else { return }
         let defaults = UserDefaults.standard
@@ -1316,10 +1057,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             let track = allTracks.first(where: { $0.id == uuid })
         else { return }
         let position = defaults.double(forKey: DefaultsKey.lastPosition)
-        // The saved queue first, so what comes back is the list that was
-        // playing rather than one song on its own. The track from the keys
-        // above still decides what is loaded: it is the one the position
-        // belongs to, and the snapshot may have lost it to a deletion.
+        // The saved queue first. The saved track still decides what's loaded, since the snapshot may have lost it.
         var restoredQueue = false
         if let data = defaults.data(forKey: DefaultsKey.queueSnapshot),
            let snapshot = try? JSONDecoder().decode(QueueService.Snapshot.self, from: data) {
@@ -1331,9 +1069,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         }
     }
 
-    /// Load the current song again from whatever copy `AudioLocator` now finds,
-    /// keeping the queue around it. "Wrong version" on a library song swaps the
-    /// file underneath and calls this.
+    /// Reloads the current song from whatever copy `AudioLocator` finds, keeping the queue. Used by "Wrong version".
     public func reloadCurrent() async {
         guard let track = queue.currentTrack else { return }
         await loadAndPlay(track: track)
@@ -1357,22 +1093,17 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     /// Load `track` and leave it paused at `position` seconds (resume-on-launch path).
     private func loadButPause(track: Track, at position: TimeInterval,
                               keepingQueue: Bool = false) async {
-        // A restored queue already holds this song in its place; the one-track
-        // fallback is for a session with no snapshot to rebuild from.
+        // A restored queue already holds this song; the one-track queue is for sessions without a snapshot.
         if !(keepingQueue && queue.currentTrack?.id == track.id) {
             queue.restoreSession(track: track)
         }
-        // Tracks with no cached file would need resolving/streaming, which we
-        // don't do automatically on launch. Restore the session for the UI and
-        // stay stopped — play() routes it through the coordinator when tapped.
-        if needsOnlineResolution(track) {
+        // Tracks with no cached file aren't resolved at launch. Restore the UI and stay stopped; play() routes it when tapped.
+        if needsOnlineResolution(track) || isMissingEdit(track) {
             state = .stopped
             return
         }
-        // Load suspended: a launch restore used to start the song, announce it to
-        // Last.fm and start the progress timer, then pause it a moment later.
-        // Cleared after, in case the load never reached the file open that
-        // consumes it and the next skip came up silent.
+        // Load suspended so a restore doesn't start the song, scrobble and then pause. Cleared after in case
+        // the load never consumed it.
         pausedWhileLoading = true
         await loadAndPlay(track: track)
         pausedWhileLoading = false
@@ -1387,13 +1118,8 @@ public final class PlaybackEngine: NSObject, ObservableObject {
 
     // MARK: - Private: Load & Play
 
-    /// Cut whatever is playing and put `track` in its place — the audio, the
-    /// transport state and (when this load owns one) the queue the player bar
-    /// reads, all in the same turn so the three can't describe different songs.
-    ///
-    /// This is the moment the bar's title, artist and cover become the new
-    /// song's. Not the click: a click on a song that still has to be fetched is
-    /// several seconds away from this.
+    /// Stops what's playing and puts `track` in its place: audio, transport state and (if this load owns
+    /// one) the queue, in the same turn so they can't disagree. This is when the bar shows the new song.
     private func handOver(to track: Track, publishing context: [Track]?, startIndex: Int? = nil,
                           source: QueueSource = .none) {
         mixMainActivity("engine/hand-over") {
@@ -1403,47 +1129,31 @@ public final class PlaybackEngine: NSObject, ObservableObject {
 
     private func handOverBody(to track: Track, publishing context: [Track]?, startIndex: Int? = nil,
                               source: QueueSource = .none) {
-        // Split because this went from 0 ms to 1804 ms when the audio nodes were
-        // made lazy, and two unrelated things in here could account for that:
-        // `haltCurrentAudio` touches `playerNode`, which is now the first thing
-        // to force a node into existence, and `queue.play` publishes the whole
-        // context, which on All Songs is a couple of thousand rows. The total
-        // cannot say which, and the fix is different for each.
+        // Spanned separately: `haltCurrentAudio` may create the first node, and `queue.play` publishes the whole context.
         remoteTransport = nil
         mixMainActivity("engine/hand-over ▸ halt") { haltCurrentAudio() }
         state = .loading
         if let context {
             mixMainActivity("engine/hand-over ▸ publish-queue") {
                 queue.play(track: track, in: context, startIndex: startIndex)
-                // Same turn as the queue it names: `queue.play` clears the source,
-                // so naming it anywhere else is a window where the section header
-                // reads "Next up" with nothing after it.
+                // Same turn as the queue, since `queue.play` clears the source.
                 queue.setSource(source)
             }
         }
     }
 
-    /// Stop the outgoing song and clear everything the next one would inherit.
-    /// Called on the way into a handover, and on the way out of a load that
-    /// turned out to have nothing to play.
+    /// Stops the outgoing song and clears what the next one would inherit.
     private func haltCurrentAudio() {
-        // A local load supersedes any active remote stream — tear it down and
-        // hand control back to the AVAudioEngine graph.
+        // A local load replaces any remote stream; hand control back to the engine.
         if playbackSource == .remote {
             teardownRemotePlayer()
             playbackSource = .engine
         }
-        // Manual load supersedes any in-flight crossfade: stop the outgoing
-        // player and reset volumes before taking over. Likewise a pause fade —
-        // otherwise the new track starts at whatever gain the ramp had reached.
+        // Cancel any crossfade or pause fade, or the new track starts at the ramp's gain.
         cancelCrossfade()
         resetFade()
-        // Naming `playerNode` builds a lazy `AVAudioPlayerNode`, and the first
-        // one drags in the whole AVAudioEngine/AudioUnit first-use handshake —
-        // measured at 1643 ms on the main actor, once per launch. Before the
-        // graph is configured no node has ever produced sound, so there is
-        // nothing to stop: skipping it is a no-op that saves the whole bill.
-        // The launch-time restore of the previous song is exactly this case.
+        // Before the graph exists nothing has played, and naming `playerNode` would build it (costly, e.g.
+        // during the launch restore).
         if graphConfigured { playerNode.stop() }
         isNodePlaying = false
         audioFile = nil
@@ -1452,41 +1162,22 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         seekFrameOffset = 0
     }
 
-    /// Loads `track` and plays it.
-    ///
-    /// `publishing` is the queue this load owns — non-nil only from
-    /// `play(track:in:)`, where the caller is choosing a song rather than moving
-    /// through a queue that has already moved. Handed down rather than written by
-    /// the caller so the queue lands in the same turn as the audio: see
-    /// `handOver`.
+    /// Loads `track` and plays it. `publishing` is the queue this load owns, non-nil only from
+    /// `play(track:in:)`, so the queue lands with the audio (see `handOver`).
     private func loadAndPlay(track: Track, publishing pending: [Track]? = nil,
                              startIndex: Int? = nil, resolved: Bool = false,
                              source: QueueSource = .none) async {
-        // Bump generation so any previously in-flight load/segment knows it has
-        // been superseded.
+        // Supersede any in-flight load or segment.
         loadGeneration &+= 1
         let generation = loadGeneration
 
-        // 1. Find the audio. `AudioLocator` is the only thing that decides which
-        //    copy wins and what has to happen when there isn't one.
+        // 1. Find the audio. `AudioLocator` decides which copy wins.
         var fileURL: URL
         let location = AudioLocator.locate(track)
 
-        // Whether the outgoing song gets cut at the click depends on whether the
-        // incoming one is actually here.
-        //
-        // A copy on disk swaps instantly, so the handover happens now and there
-        // is never a moment where the bar and the speakers disagree. A song that
-        // still has to be fetched is a different thing: cutting the audio at the
-        // click buys silence, and — because everything the player bar shows is
-        // read from the queue — a bar naming a song nobody can hear yet. So the
-        // fetch runs with the previous song still playing and still named, which
-        // is exactly what the online path has always done, and the swap happens
-        // when there is something to swap to.
-        //
-        // Only when this call owns the queue. Skip and auto-advance have already
-        // moved the queue on before they get here, so for them cutting now is
-        // what keeps the two in step.
+        // A file on disk swaps now. A song that still has to be fetched keeps the old one playing and named until
+        // it arrives, like the online path. Only when this call owns the queue: skips and auto-advance already
+        // moved it, so for them cutting now keeps things in step.
         let waitsForAudio: Bool = {
             guard pending != nil else { return false }
             if case .ready = location { return false }
@@ -1499,10 +1190,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             fileURL = url
 
         case .remote:
-            // Published, so the row the user clicked can put a spinner over its
-            // cover for as long as this takes — the same one an online resolve
-            // gets. Without it a download from the library's own store is several
-            // seconds in which nothing anywhere moves.
+            // Published so the clicked row shows a spinner during the download.
             routingTrackIDs.insert(track.id)
             do {
                 fileURL = try await fileStorage.download(track: track, accessToken: "")
@@ -1513,26 +1201,35 @@ public final class PlaybackEngine: NSObject, ObservableObject {
                 guard loadGeneration == generation else { return }
                 if waitsForAudio { haltCurrentAudio() }
                 setError("Couldn't download \"\(track.title)\". Check your connection and try again.")
-                MixLog.playback.error("[PlaybackEngine] ❌ Download failed for \"\(track.title)\": \(error)")
+                MixLog.playback.error("[PlaybackEngine] Download failed for \"\(track.title)\": \(error)")
                 return
             }
             guard loadGeneration == generation else { return }
             handOver(to: track, publishing: pending, startIndex: startIndex, source: source)
 
+        case .unavailable where track.origin == .edit:
+            // Made on another device: render it here from this library's copy of the original.
+            routingTrackIDs.insert(track.id)
+            var rebuilt: URL?
+            do { rebuilt = try await editRebuilder?(track) } catch {
+                MixLog.playback.error("[PlaybackEngine] Couldn't rebuild edit \"\(track.title)\": \(error)")
+            }
+            routingTrackIDs.remove(track.id)
+            guard loadGeneration == generation else { return }
+            guard let rebuilt else {
+                if waitsForAudio { haltCurrentAudio() }
+                setError("Couldn't make \"\(track.title)\" on this device. The song it was made from isn't available.")
+                return
+            }
+            fileURL = rebuilt
+            handOver(to: track, publishing: pending, startIndex: startIndex, source: source)
+
         case .resolvable, .unavailable:
             guard loadGeneration == generation else { return }
-            // Callers that come through play(track:in:) already tried the
-            // resolver; the queue-driven paths (auto-advance, skip, crossfade,
-            // resume-on-launch) haven't, so give it one shot before failing.
-            // Context is just this track — an online session shouldn't swallow
-            // the rest of a local queue.
-            //
-            // `.unavailable` gets a shot too when the row *might* be findable:
-            // a track whose audio never left another device is better served by
-            // a search than by a dead end. Shared rows are in that set now — the
-            // only ones that reach here are the ones with no title to search on,
-            // and a search that finds nothing is a better answer than a refusal
-            // to look.
+            // Paths that came through play(track:in:) already tried the resolver; queue-driven ones (auto-advance,
+            // skip, crossfade, launch resume) get one try, with the live queue as context so the rest of it survives
+            // the handoff. `.unavailable` rows that might be findable (never uploaded, shared) are tried too: a
+            // failed search beats refusing to look.
             let worthResolving: Bool = {
                 if case .resolvable = location { return true }
                 if case .unavailable(let reason) = location {
@@ -1541,31 +1238,24 @@ public final class PlaybackEngine: NSObject, ObservableObject {
                 }
                 return false
             }()
-            // Not for the resolver's own handoff: it has just been down this
-            // road, and sending it back would be the bounce this guard exists
-            // to prevent.
-            if worthResolving, !resolved, await routeOnline(track, context: [track]) { return }
+            // Not for the resolver's handoff, which would bounce.
+            if worthResolving, !resolved, await routeOnline(track, context: queue.queue) { return }
             guard loadGeneration == generation else { return }
-            // Still in flight from an earlier tap. The answer to "can this be
-            // played?" isn't known yet, and "no" is the one answer that is
-            // definitely wrong — this is what used to put an error on screen
-            // while the song was still on its way to playing. The handoff is
-            // the exception: it holds its own id here, and staying silent would
-            // leave the spinner up forever.
+            // Still in flight from an earlier tap, so don't report "can't play" yet. The handoff is the exception:
+            // it holds its own id, and silence would leave the spinner up.
             if !resolved, routingTrackIDs.contains(track.id) {
-                MixLog.playback.debug("[PlaybackEngine] ⏳ No audio yet for \"\(track.title)\" — still routing")
+                MixLog.playback.debug("[PlaybackEngine] No audio yet for \"\(track.title)\", still routing")
                 return
             }
 
-            // Nothing is going to play, so the outgoing song — which has been
-            // left running while all of the above was tried — stops here.
+            // Nothing will play, so stop the outgoing song that kept running during all of the above.
             if waitsForAudio { haltCurrentAudio() }
             if case .unavailable(let reason) = location {
                 setError(reason.message(for: track.title))
             } else {
                 setError(UnavailableReason.needsInternet.message(for: track.title))
             }
-            MixLog.playback.error("[PlaybackEngine] ❌ No playable audio for \"\(track.title)\" (\(String(describing: location)))")
+            MixLog.playback.error("[PlaybackEngine] No playable audio for \"\(track.title)\" (\(String(describing: location)))")
             return
         }
 
@@ -1577,9 +1267,8 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         if !pausedWhileLoading { activateAudioSession() }
         #endif
 
-        // 3. Open the file, reconnect the graph for its format, schedule & play.
-        //    Opens AVAudioFile, configures the graph and begins playback; throws on
-        //    any failure so the caller can attempt a one-time self-heal.
+        // 3. Open the file, reconnect the graph for its format, schedule and play. Throws so the caller can
+        // self-heal once.
         func openAndPlay(_ url: URL) throws {
             let startSuspended = pausedWhileLoading
             pausedWhileLoading = false
@@ -1588,10 +1277,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
 
             audioFile        = file
             fileSampleRate   = processingFormat.sampleRate
-            // Trimmed, not raw: everything downstream — the reported duration,
-            // the segment that gets scheduled, and so the auto-advance at its
-            // end — measures from this, so a padded source simply ends where the
-            // song does.
+            // Trimmed: duration, the scheduled segment and auto-advance all measure from this.
             fileLengthFrames = Self.trimmedFrames(file.length,
                                                   sampleRate: processingFormat.sampleRate,
                                                   canonical: track.duration)
@@ -1600,10 +1286,8 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             duration         = fileLengthFrames > 0 ? Double(fileLengthFrames) / fileSampleRate : 0
             currentTime      = 0
 
-            // Match the graph to the file's format (channel count / sample rate).
-            // The AVAudioUnitTimePitch node rejects a live format change while the
-            // engine is running (err -10868 on skip), so stop the engine before
-            // reconnecting; startEngineIfNeeded() below brings it back up.
+            // TimePitch rejects a format change while running (-10868 on skip), so stop the engine before
+            // reconnecting; startEngineIfNeeded() restarts it.
             if audioEngine.isRunning { audioEngine.stop() }
             connectGraph(for: processingFormat)
 
@@ -1617,9 +1301,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             }
             clearError()
             if startSuspended {
-                // Loaded, scheduled, and silent at 0:00. `resume()` starts the
-                // segment that is already sitting on the node, so pressing play
-                // begins this song from the top rather than re-loading it.
+                // Loaded, scheduled and silent at 0:00; `resume()` starts the segment already on the node.
                 state = .paused
                 updateNowPlayingRate(0)
             } else {
@@ -1649,22 +1331,16 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             try openAndPlay(fileURL)
         } catch {
             guard loadGeneration == generation else { return }
-            MixLog.playback.error("[PlaybackEngine] ⚠️ First open failed for \"\(track.title)\": \(error) — attempting self-heal")
+            MixLog.playback.error("[PlaybackEngine] First open failed for \"\(track.title)\": \(error), attempting self-heal")
 
-            // Self-heal: a corrupt cached copy (e.g. a legacy bad ID3-on-m4a
-            // download, or a truncated fetch) makes AVAudioFile throw
-            // kAudioFileInvalidFileError. Throw that copy away and fetch again.
-            //
-            // Only a *cache* copy. This used to delete the user's exported file
-            // — a real file in their own Music folder, which the app doesn't own
-            // and can't recreate — as its first move on any playback failure.
+            // Self-heal: a corrupt cache copy (bad ID3-on-m4a, truncated fetch) throws kAudioFileInvalidFileError,
+            // so delete it and fetch again. Only cache copies, never the user's exported files.
             if case .ready(_, let kind) = location, kind == .cached {
                 try? FileManager.default.removeItem(at: fileURL)
             }
 
             var healedURL: URL? = AudioLocator.readyURL(for: track)
-            // If the only copy left was the one we just deleted (or it's the same
-            // corrupt cache file), re-download a fresh copy from the remote.
+            // If the only copy left was the deleted one, download a fresh copy.
             if (healedURL == nil || healedURL == fileURL), track.file.remoteKey != nil {
                 healedURL = try? await fileStorage.download(track: track, accessToken: "")
             }
@@ -1675,27 +1351,26 @@ public final class PlaybackEngine: NSObject, ObservableObject {
                 do {
                     fileURL = healedURL
                     try openAndPlay(healedURL)
-                    MixLog.playback.debug("[PlaybackEngine] ✅ Self-heal succeeded for \"\(track.title)\"")
+                    MixLog.playback.debug("[PlaybackEngine] Self-heal succeeded for \"\(track.title)\"")
                     return
                 } catch {
                     guard loadGeneration == generation else { return }
-                    MixLog.playback.error("[PlaybackEngine] ❌ Self-heal retry failed for \"\(track.title)\": \(error)")
+                    MixLog.playback.error("[PlaybackEngine] Self-heal retry failed for \"\(track.title)\": \(error)")
                 }
             }
 
             setError("Couldn't play \"\(track.title)\" right now. Please try again.")
-            MixLog.playback.error("[PlaybackEngine] ❌ Playback failed for \"\(track.title)\": \(error)")
+            MixLog.playback.error("[PlaybackEngine] Playback failed for \"\(track.title)\": \(error)")
         }
     }
 
-    /// Schedule `file` to play from `startingAtFrame` to its end on the player node.
-    /// The completion handler auto-advances to the next track, guarded by the
-    /// generation counter so it never fires after a manual stop/seek/new-load.
+    /// Schedules `file` from `startingAtFrame` to its end. The completion auto-advances, guarded by the
+    /// generation so it never fires after a stop, seek or new load.
     private func scheduleSegment(of file: AVAudioFile, startingAtFrame startFrame: AVAudioFramePosition, generation: Int) {
         seekFrameOffset = startFrame
         let framesToPlay = AVAudioFrameCount(max(0, fileLengthFrames - startFrame))
         guard framesToPlay > 0 else {
-            // Nothing left to play (seek to/at end) — treat as finished.
+            // Nothing left to play (seek at the end), so treat it as finished.
             return
         }
 
@@ -1719,15 +1394,9 @@ public final class PlaybackEngine: NSObject, ObservableObject {
 
     // MARK: - Remote Streaming (progressive online playback)
 
-    /// Play an online track by **streaming** `url` via AVPlayer (progressive —
-    /// audio starts as soon as enough has buffered) instead of waiting for the
-    /// whole file to download. `headers` carries the bearer auth for the hosted
-    /// resolver (only set for the trusted host — see RemoteResolverService).
-    ///
-    /// The caller (OnlinePlaybackCoordinator) installs the online next/previous
-    /// handlers AFTER this returns; end-of-stream reads `onlineNextHandler` live,
-    /// so auto-advance flows through the Discover context just like the local
-    /// path. Speed control, scrubbing and lyrics all run off the AVPlayer clock.
+    /// Streams an online track with AVPlayer instead of waiting for a full download. `headers` carries the
+    /// hosted resolver's bearer auth (trusted host only, see RemoteResolverService). The coordinator installs
+    /// the next/previous handlers after this returns; end-of-stream reads `onlineNextHandler` live.
     public func playOnlineStream(url: URL, headers: [String: String], track: Track) async {
         // A streaming load takes over the queue and supersedes any engine playback.
         clearOnlineContext()
@@ -1738,8 +1407,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         await startRemoteStream(url: url, headers: headers, track: track)
     }
 
-    /// Configures and starts the AVPlayer for a remote stream. Assumes the queue /
-    /// history have already been updated by the caller.
+    /// Configures and starts the AVPlayer. The caller has already updated the queue and history.
     private func startRemoteStream(url: URL, headers: [String: String], track: Track) async {
         remoteTransport = nil
         // Supersede any engine playback.
@@ -1755,8 +1423,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         // Reset and switch to the remote backend.
         teardownRemotePlayer()
         playbackSource = .remote
-        // No file to measure, so a stream gets the library's typical correction —
-        // otherwise a Discover song would jump out against the normalized library.
+        // No file to measure, so use the typical correction or a Discover song stands out.
         normalize(to: nil)
         currentTime = 0
         duration    = track.duration       // provisional; refined once the item loads
@@ -1776,8 +1443,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         item.audioTimePitchAlgorithm = .timeDomain
         let player = AVPlayer(playerItem: item)
         remotePlayer = player
-        // Via applyVolume() rather than assigning `volume` directly, so the stream
-        // opens at the same composed level everything else uses.
+        // Through applyVolume() so the stream opens at the same composed level.
         applyVolume()
 
         // Drive currentTime/duration/state from the player's clock.
@@ -1786,14 +1452,12 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self, self.playbackSource == .remote else { return }
                 self.currentTime = time.seconds.isFinite ? time.seconds : self.currentTime
-                // The remote player has its own clock and never runs the
-                // progress timer, so it needs its own call to the same throttle.
+                // The remote clock doesn't run the progress timer, so it calls the throttle itself.
                 self.persistPlaybackPositionThrottled()
                 if let d = self.remotePlayer?.currentItem?.duration, d.isNumeric, d.seconds > 0 {
                     self.duration = Self.trimmed(d.seconds, canonical: self.canonicalDuration)
                 }
-                // A trimmed stream never reaches its own end-of-item notification,
-                // so the end of the song has to be the thing that advances it.
+                // A trimmed stream never hits its own end notification, so advance here.
                 if self.duration > 0, self.currentTime >= self.duration,
                    !self.didReachCappedEnd,
                    self.remotePlayer.map({ player in
@@ -1810,17 +1474,10 @@ public final class PlaybackEngine: NSObject, ObservableObject {
                 if self.remotePlayer?.timeControlStatus == .playing {
                     switch self.state {
                     case .loading, .error:
-                        // `.error` is here for the tail of the sequence this whole
-                        // change is about: a premature "no audio on this device"
-                        // used to sit on screen for its full five seconds while the
-                        // song it was about played underneath it — and, worse, the
-                        // old `state == .loading` test meant an errored state never
-                        // flipped to .playing at all, so the transport stayed wrong
-                        // until the next track.
+                        // Clear a premature "no audio" error; the song is playing.
                         self.clearError()
                         self.state = .playing
-                        // First audio actually advancing — the only honest end of
-                        // "user pressed play".
+                        // First audible audio: the end of "user pressed play".
                         ResolveTrace.shared.end("first audible (stream)")
                         Self.reportPlayStartCost()
                     default:
@@ -1828,16 +1485,13 @@ public final class PlaybackEngine: NSObject, ObservableObject {
                     }
                 }
                 self.checkHistoryThreshold()
-                // Streamed tracks scrobble too — without this the remote path
-                // sent "now playing" but never crossed the scrobble threshold.
+                // Streams scrobble too.
                 self.checkScrobbleThreshold()
                 self.updateNowPlayingTime()
             }
         }
 
-        // At end of stream, auto-advance through the online context if one is
-        // active (handler installed by the coordinator after this returns),
-        // otherwise stop.
+        // At end of stream, advance through the online context if one is active, otherwise stop.
         remoteEndObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
         ) { [weak self] _ in
@@ -1851,18 +1505,13 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             }
         }
 
-        // The user pressed pause while this stream was still being resolved.
-        // It arrives loaded and silent at 0:00 instead of overriding them; the
-        // item is attached, so `resume()` starts it from the top.
+        // The user paused while this resolved, so it arrives loaded and silent at 0:00; `resume()` starts it.
         if pausedWhileLoading {
-            // Deliberately left set: if the stream turns out to be dead and the
-            // coordinator falls back to a full download, that handover has to
-            // honour the same pause. Only the user clears it — see `resume()`
-            // and `play(track:in:)`.
+            // Left set: if the stream is dead and the coordinator falls back to a download, that handover must
+            // respect the same pause. Only `resume()` and `play(track:in:)` clear it.
             player.rate = 0
             state = .paused
-            // The previous song's scrobble state would otherwise carry over;
-            // `resume()` starts this one's.
+            // Don't carry the previous song's scrobble state; `resume()` starts this one's.
             scrobbleStartedAt  = nil
             didScrobbleCurrent = false
             updateNowPlayingRate(0)
@@ -1872,9 +1521,8 @@ public final class PlaybackEngine: NSObject, ObservableObject {
 
         // Start at the user's chosen speed (rate > 0 begins playback).
         player.rate = playbackRate
-        // Stay in .loading until the time observer confirms audio is actually
-        // advancing (timeControlStatus == .playing). This lets the coordinator's
-        // watchdog detect a stalled/failed stream and fall back to a download.
+        // Stay `.loading` until the time observer sees `.playing`, so the coordinator's watchdog can catch a
+        // stalled stream and fall back to a download.
         scrobbleStartedAt  = Date()
         didScrobbleCurrent = false
         rotateHistoryTracking()
@@ -1900,12 +1548,16 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     // MARK: - Pause / Resume primitives
 
     private func pausePlayback() {
-        // Finalise any in-flight crossfade before pausing so we don't leave the
-        // outgoing player paused-but-scheduled.
+        // Finish any crossfade first so the outgoing player isn't left paused but scheduled.
         cancelCrossfade()
         playerNode.pause()
-        audioEngine.pause()
         isNodePlaying = false
+        engineIdleTask?.cancel()
+        engineIdleTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.engineIdleGrace)
+            guard !Task.isCancelled, let self, !self.isNodePlaying, self.audioEngine.isRunning else { return }
+            self.audioEngine.pause()
+        }
     }
 
     private func resumePlayback() {
@@ -1916,24 +1568,24 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     }
 
     // MARK: - Play/Pause Fade
-    //
-    // Pause used to cut the graph dead mid-waveform, which clicks. Both backends now
-    // ramp the output level to silence first and only then stop, and come back up
-    // from silence on resume.
+    // Pause and resume ramp the output to and from silence instead of cutting mid-waveform (which clicks).
 
-    /// Equal-power shaping, the same curve `beginCrossfade` settled on. A linear
-    /// ramp on raw amplitude sounds like it falls off a cliff at the end because
-    /// perceived loudness is roughly logarithmic; cos/sin keeps the drop even.
-    /// Returns 0→1 progress along the curve, so the caller can interpolate between
-    /// any two gains (which is what makes an interrupted ramp resume smoothly).
+    /// Equal-power curve, like `beginCrossfade`: a linear amplitude ramp sounds like it drops off at the end.
+    /// Returns 0->1 progress so the caller can interpolate between any two gains.
     private static func fadeCurve(_ t: Float, fadingOut: Bool) -> Float {
         fadingOut ? 1 - cos(t * .pi / 2) : sin(t * .pi / 2)
     }
 
-    /// Ramp `fadeGain` to `target`, cancelling whatever ramp was in flight. Always
-    /// starts from the *current* gain, so a pause→play→pause inside 100ms reverses
-    /// mid-flight instead of jumping, and can never strand the gain at 0 or halfway:
-    /// each transition owns the ramp until the next one takes it.
+    /// `normal` for a lone press, the short ramp when this press follows the last one within the window.
+    private func toggleFadeDuration(_ normal: TimeInterval) -> TimeInterval {
+        let now = ContinuousClock.now
+        defer { lastToggleAt = now }
+        guard let last = lastToggleAt, now - last < Self.rapidToggleWindow else { return normal }
+        return Self.rapidFadeDuration
+    }
+
+    /// Ramps `fadeGain` to `target`, cancelling any ramp in flight. Starts from the current gain, so quick
+    /// pause/play/pause reverses smoothly and can't strand the gain.
     private func startFade(to target: Float, over duration: TimeInterval, phase: FadePhase) {
         cancelFade()                     // bumps fadeGeneration
         let generation = fadeGeneration
@@ -1971,9 +1623,8 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         if completed == .fadingOut { haltAfterPauseFade() }
     }
 
-    /// Drop any in-flight ramp, leaving `fadeGain` where it stands. The generation
-    /// bump matters as much as the cancel: a task already awake past its
-    /// `Task.isCancelled` check would otherwise still get one stale write in.
+    /// Drops the ramp, leaving `fadeGain` as is. The generation bump stops a task already past its
+    /// `Task.isCancelled` check.
     private func cancelFade() {
         fadeTask?.cancel()
         fadeTask = nil
@@ -1981,59 +1632,49 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         fadePhase = .idle
     }
 
-    /// Cancel any ramp *and* restore full output. Every path that starts fresh audio
-    /// or tears playback down calls this — without it a pause fade caught mid-flight
-    /// by a track change would leave the next track playing at whatever gain the
-    /// ramp had reached (often silence).
+    /// Cancels any ramp and restores full output. Called by every path that starts or tears down audio, or a
+    /// track change mid-fade would play at the ramp's gain.
     private func resetFade() {
         cancelFade()
         fadeGain = 1
         applyVolume()
     }
 
-    /// The tail of a pause: output is already silent, so the hard stop is inaudible.
-    /// Only reached when nothing superseded the fade — resume/stop/load all cancel
-    /// the ramp, so this can never pause a player something else just started.
+    /// The end of a pause: output is silent, so the hard stop is inaudible. Only reached when nothing
+    /// superseded the fade.
     private func haltAfterPauseFade() {
         guard state == .paused else { return }
         if playbackSource == .remote {
             remotePlayer?.pause()
             return
         }
-        // Read the clock while the node is still rendering: the fade tail is real
-        // playback, so the position we persist has to include it.
+        // Read the clock while the node still renders; the fade tail is real playback.
         currentTime = currentPlaybackTime()
         pausePlayback()
         persistPlaybackPosition()
     }
 
-    // NOTE: start-time history logging is intentionally absent — a play is only
-    // recorded once it crosses the minimum-listen threshold (see
-    // `checkHistoryThreshold`), so skips and brief samples don't pollute
-    // "Recently played" or listening stats.
+    // Plays aren't logged at start, only once past the minimum listen (`checkHistoryThreshold`).
 
-    /// Record the *current* track as a play: prepend to `recentlyPlayed` (Home
-    /// screen) and persist via the callback (history table → stats). Skips a
-    /// duplicate already at the top of the list. Online tracks have a stable id,
-    /// so repeated plays aggregate rather than pile up as unique entries.
+    /// Records the current track as a play: prepends to `recentlyPlayed` and persists via the callback.
+    /// Skips a duplicate at the top. Online tracks have stable ids, so repeats aggregate.
     private func recordCurrentPlay() {
         guard let track = queue.currentTrack else {
-            MixLog.playback.debug("[history] recordCurrentPlay: no currentTrack — skipped")
+            MixLog.playback.debug("[history] recordCurrentPlay: no currentTrack, skipped")
             return
         }
         if recentlyPlayed.first?.id == track.id {
-            MixLog.playback.debug("[history] recordCurrentPlay: '\(track.title)' already at top — skipped")
+            MixLog.playback.debug("[history] recordCurrentPlay: '\(track.title)' already at top, skipped")
             return
         }
         recentlyPlayed.insert(track, at: 0)
         if recentlyPlayed.count > 50 { recentlyPlayed.removeLast() }
         MixLog.playback.debug("[history] RECORDED '\(track.title)' id=\(track.id) online=\(track.isOnline) recentlyPlayed.count=\(self.recentlyPlayed.count)")
+        SkipHistory.forgive(title: track.identityTitle, artist: track.artistName)
         onTrackAddedToHistory?(track, loggedPlaySeconds, queue.source)
     }
 
-    /// Records the current track once it's been listened to for at least 30s (or
-    /// ~90% of a sub-30s song), so only meaningful listens count toward Home and
-    /// stats. Fires once per track; the flag resets when a new track loads.
+    /// Records the current track after 30s (or ~90% of a shorter song). Once per track.
     private func checkHistoryThreshold() {
         guard !PrivateSession.isActive else { return }
         guard let track = queue.currentTrack else { return }
@@ -2051,9 +1692,8 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         recordCurrentPlay()
     }
 
-    /// Close out the play row for the track being left, then arm the log for the
-    /// next one. Every start path calls this instead of clearing
-    /// `didRecordHistoryCurrent` itself, so a new one can't forget the flush.
+    /// Closes the play row for the track being left and arms the log for the next. Every start path calls
+    /// this so none forgets the flush.
     private func rotateHistoryTracking() {
         if let id = loggedPlayTrackID, loggedPlaySeconds > 0 {
             onPlaySecondsFinalised?(id, loggedPlaySeconds)
@@ -2063,18 +1703,12 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         didRecordHistoryCurrent = false
     }
 
-    /// Seeds `recentlyPlayed` from persistent storage on app launch.
-    /// Call this once after AppDependencies has loaded history from SwiftData.
+    /// Seeds `recentlyPlayed` from storage at launch, after AppDependencies loads history.
     public func restoreHistory(_ tracks: [Track]) {
         recentlyPlayed = Array(tracks.prefix(50))
     }
 
-    /// Drop songs from the recently-played list.
-    ///
-    /// The list is a snapshot of what was played, kept in memory and seeded from
-    /// the play log — nothing about it consults the library, so a song deleted
-    /// from the library carried on sitting on the Home shelf, playable, with no
-    /// row behind it. Deleting is the one edit that has to reach in here.
+    /// Removes songs from recently played. The list never consults the library, so deletes must reach in here.
     public func forgetFromRecentlyPlayed(ids: Set<UUID>) {
         guard !ids.isEmpty else { return }
         let kept = recentlyPlayed.filter { !ids.contains($0.id) }
@@ -2082,12 +1716,8 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         recentlyPlayed = kept
     }
 
-    /// Wipe the in-memory recently-played list.
-    ///
-    /// It is seeded from the play log at launch and appended to as songs play,
-    /// so after the log is deleted this is the only copy still standing — and it
-    /// feeds the Home shelf, the recent-artists row and the Recent panel, all of
-    /// which kept showing a history that had just been erased.
+    /// Clears the in-memory recently-played list. After the play log is deleted this is the only copy left,
+    /// and it feeds Home, recent artists and the Recent panel.
     public func clearRecentlyPlayed() {
         recentlyPlayed = []
     }
@@ -2095,18 +1725,15 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     /// Incremented per setError so a stale auto-clear task can't wipe a newer message.
     private var errorGeneration = 0
 
-    /// Drops the current error without waiting out its five seconds.
-    ///
-    /// Bumps the generation so the pending auto-clear from `setError` can't fire
-    /// afterwards and wipe a *newer* message. Deliberately leaves `state` alone —
-    /// every caller is on its way to setting one.
+    /// Clears the current error now. Bumps the generation so `setError`'s pending auto-clear can't wipe a
+    /// newer message. Leaves `state` alone; callers set it.
     private func clearError() {
         guard errorMessage != nil else { return }
         errorGeneration &+= 1
         errorMessage = nil
     }
 
-    /// Sets the error state AND the error toast message, then auto-clears both after 5 s.
+    /// Sets the error state and toast message, auto-clearing both after 5s.
     private func setError(_ message: String) {
         state        = .error(message)
         errorMessage = message
@@ -2122,8 +1749,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
 
     public func stopPlayback() {
         cancelCrossfade()
-        // Stop is immediate by contract (track deleted, queue exhausted) — kill any
-        // pending fade so it can't reach in afterwards and pause a fresh player.
+        // Stop is immediate (track deleted, queue done); kill any fade so it can't pause a new player later.
         resetFade()
         teardownRemotePlayer()
         playbackSource = .engine
@@ -2146,8 +1772,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
 
     private func startProgressTimer() {
         progressTimer = Timer
-            // 0.2s tick keeps the seek bar smooth and synced-lyric highlighting
-            // snappy (the old 0.5s tick added up to half a second of lag).
+            // 0.2s keeps the seek bar and synced lyrics smooth.
             .publish(every: 0.2, on: .main, in: .common)
             .autoconnect()
             .sink { [weak self] _ in
@@ -2160,9 +1785,8 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             }
     }
 
-    /// Scrobble the current track once it crosses Last.fm's threshold: played for
-    /// at least half its duration OR 4 minutes (whichever first), for tracks >30s.
-    /// No-ops when Last.fm is disabled/unconfigured (the scrobbler guards that).
+    /// Scrobbles once the track passes Last.fm's threshold: half its length or 4 minutes, for tracks over 30s.
+    /// The scrobbler no-ops when Last.fm is off.
     private func checkScrobbleThreshold() {
         guard !didScrobbleCurrent, duration > 30, let startedAt = scrobbleStartedAt else { return }
         let threshold = min(duration / 2, 240)
@@ -2171,10 +1795,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         Task { await LastFmScrobbler.shared.scrobble(track: track, startedAt: startedAt) }
     }
 
-    /// Fire-and-forget: warm the lyrics cache for `track` in the background so
-    /// they're already resolved when the user opens the lyrics view. No-ops if we
-    /// already kicked off a prefetch for this same track. Silent on failure and
-    /// never blocks playback.
+    /// Warms the lyrics cache for `track` in the background, once per track. Silent on failure.
     private func prefetchLyrics(for track: Track) {
         guard lastLyricsPrefetchID != track.id else { return }
         lastLyricsPrefetchID = track.id
@@ -2186,13 +1807,10 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         progressTimer = nil
     }
 
-    /// Compute the current playback position from the player node's sample clock
-    /// plus the seek offset. Falls back to the last known `currentTime` if the
-    /// node isn't currently rendering (e.g. paused).
+    /// Position from the node's sample clock plus the seek offset, or the last `currentTime` when not rendering.
     private func currentPlaybackTime() -> TimeInterval {
-        // A streamed song never attaches the player nodes (the graph is lazy),
-        // and asking an unattached node for its time is an ObjC exception —
-        // the crash on swiping the app away mid-stream.
+        // A stream never attaches the (lazy) nodes, and asking an unattached node for its time throws an ObjC
+        // exception (the crash when swiping the app away mid-stream).
         guard fileSampleRate > 0, playbackSource == .engine, graphConfigured else { return currentTime }
         guard
             let nodeTime   = playerNode.lastRenderTime,
@@ -2208,12 +1826,8 @@ public final class PlaybackEngine: NSObject, ObservableObject {
 
     // MARK: - Now Playing Info
 
-    /// Print the main-actor cost table a moment after the song is audible.
-    ///
-    /// The stall being chased happens *after* first audio, so a report taken at
-    /// the same instant would miss it entirely. Three seconds is the window the
-    /// user describes as "laggy for a few seconds after pressing play", and the
-    /// table is scoped to this play by the reset in `beginPreparing`.
+    /// Prints the main-actor cost table 3s after audio starts, since the stall happens after first audio.
+    /// Scoped to this play by the reset in `beginPreparing`.
     private static func reportPlayStartCost() {
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(3))
@@ -2229,14 +1843,8 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     }
 
     private func updateNowPlayingInfoBody(track: Track) {
-        // The first thing that happens when a song starts, and the only place a
-        // remote command could ever have something to act on.
-        // Split three ways because this costs 1114 ms exactly once — on the
-        // launch that restores the previous song — and 0 ms every time after.
-        // That shape fits all three of these and the total can't say which:
-        // the remote-command registration only happens on the first call, the
-        // artwork decode is only cold once, and the info-centre setter is an
-        // XPC hop to mediaserverd that may be waiting for it to start up.
+        // Remote commands are registered the first time a song starts. Spanned three ways because the first call
+        // is slow once (registration, cold artwork decode, info-centre XPC) and the total can't tell which.
         mixMainActivity("now-playing/remote-commands") {
             setupRemoteCommandsIfNeeded()
             syncRemoteCommandState()
@@ -2268,8 +1876,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             MPNowPlayingInfoCenter.default().nowPlayingInfo = info
         }
 
-        // Covers load lazily (and online ones arrive after the song starts), so
-        // the lock screen / Dynamic Island would keep the grey placeholder.
+        // Covers load lazily (online ones after the song starts), so retry or the lock screen keeps the placeholder.
         // ponytail: a few timed retries, observe the artwork store if this falls short.
         if artworkRetryID != track.id { artworkRetryID = track.id; artworkRetries = 0 }
         if info[MPMediaItemPropertyArtwork] == nil, artworkRetries < 5 {
@@ -2303,7 +1910,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         if mode == .off { cancelCrossfade() }
     }
 
-    /// Set the crossfade overlap length (seconds). Clamped to 2…12. Persisted.
+    /// Set the crossfade overlap length (seconds). Clamped to 2...12. Persisted.
     public func setCrossfadeDuration(_ seconds: TimeInterval) {
         let clamped = max(2, min(seconds, 12))
         crossfadeDuration = clamped
@@ -2319,28 +1926,21 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         }
     }
 
-    /// A manual Next, overlapped instead of hard-cut. Same machinery as the
-    /// end-of-track fade, so `.off` still means off and the single-player path
-    /// is untouched; returns false when it can't, leaving the normal advance to
-    /// run.
-    ///
-    /// Opt-in (Settings → Playback → Crossfade on Skip), and only in `.crossfade`
-    /// mode: a skip is a hard cut unless the user asked for the overlap, and then
-    /// it uses their length.
+    /// A manual Next with an overlap instead of a hard cut, using the end-of-track fade machinery. Opt-in
+    /// (Settings > Playback > Crossfade on Skip), `.crossfade` mode only. Returns false to fall back to the
+    /// normal advance.
     private func beginSkipCrossfade() -> Bool {
         guard crossfadeMode == .crossfade, UserDefaults.standard.bool(forKey: DefaultsKey.crossfadeOnSkip),
               !isTransitioning, state == .playing else { return false }
         guard let next = queue.peekNext() else { return false }
-        // Leave the unfindable ones to the walk below — that's where the badge
-        // and the line of explanation live.
+        // Leave unfindable songs to the walk below, which badges and explains them.
         if UnavailableTracks.shared.contains(next), !canPlayLocally(next) { return false }
         guard let url = fileStorage.localURL(for: next) else { return false }
         beginCrossfade(to: next, url: url, fade: effectiveFade)
         return true
     }
 
-    /// Called from the progress timer. When the active track is within the fade
-    /// window of its end and a local next track exists, begin overlapping it.
+    /// From the progress timer: near the end of the track, with a local next track, start the overlap.
     private func maybeStartCrossfade() {
         guard crossfadeMode != .off, !isTransitioning, state == .playing else { return }
         guard audioFile != nil, duration > 0 else { return }
@@ -2351,19 +1951,17 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         // 0.55s slop covers the 0.5s timer resolution so we never miss the window.
         guard remaining > 0, remaining <= fade + 0.55 else { return }
         guard let next = queue.peekNext() else { return }
-        // Crossfade only when the next file is already local — never stall the
-        // transition on a network download; fall back to the normal advance.
+        // Only when the next file is local; never stall a transition on a download.
         guard let url = fileStorage.localURL(for: next) else { return }
         beginCrossfade(to: next, url: url, fade: max(fade, 0.2))
     }
 
-    /// Overlap the active track with `next`: schedule it on the idle player, flip
-    /// the logical "active" player immediately (so progress/now-playing reflect the
-    /// new track), then equal-power ramp the volumes over `fade` seconds.
+    /// Overlaps the active track with `next`: schedule it on the idle player, flip the active player now (so
+    /// progress and now-playing show the new track), then ramp volumes over `fade` seconds.
     private func beginCrossfade(to next: Track, url: URL, fade: TimeInterval) {
         let file: AVAudioFile
         do { file = try AVAudioFile(forReading: url) }
-        catch { return }   // bad file — let the normal completion handler advance
+        catch { return }  // bad file: let the normal completion handler advance
 
         isTransitioning = true
         let outgoing = playerNode
@@ -2374,8 +1972,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
                                            sampleRate: fmt.sampleRate,
                                            canonical: next.duration)
 
-        // Wire + schedule the incoming track on the idle player/bus (engine keeps
-        // running; downstream chain stays canonical so the AU effects don't renegotiate).
+        // Schedule the incoming track on the idle bus; the engine keeps running and the chain stays canonical.
         connectPlayer(incoming, bus: incomingBus, format: fmt)
         incoming.volume = 0
 
@@ -2385,8 +1982,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         startEngineIfNeeded()
         incoming.play()
 
-        // Flip logical active player → `incoming`. `playerNode` now == incoming, so
-        // the progress clock and seek operate on the new track.
+        // `playerNode` is now the incoming player, so the clock and seek follow the new track.
         usingA.toggle()
         outgoingPlayer = outgoing
 
@@ -2412,9 +2008,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         // Warm the lyrics cache in the background for the incoming track.
         prefetchLyrics(for: next)
 
-        // Equal-power volume ramp. The level correction is a single output gain,
-        // so the two songs can't each have their own during the overlap: it rides
-        // the same ramp, from this song's to the next one's.
+        // Equal-power ramp. Level correction is one output gain, so it ramps from this song's to the next one's.
         let fromGain = normalizationGain
         let toGain = Self.normalizesVolume
             ? Self.attenuation(LoudnessAnalyzer.cachedGainDB(for: url) ?? LoudnessAnalyzer.typicalGainDB)
@@ -2443,11 +2037,8 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         }
     }
 
-    /// Schedule a whole file on a given player with a generation-guarded
-    /// auto-advance completion handler (mirrors `scheduleSegment`).
-    /// `length` is the trimmed length the caller computed for this file, not
-    /// `file.length` — playing to the raw end is what would put a padded
-    /// source's silence on the far side of a crossfade.
+    /// Schedules a whole file on `player` with a generation-guarded auto-advance (like `scheduleSegment`).
+    /// `length` is the trimmed length, not `file.length`, so padding doesn't play past a crossfade.
     private func scheduleFullFile(_ file: AVAudioFile, on player: AVAudioPlayerNode,
                                   length: AVAudioFramePosition, generation: Int) {
         let frames = AVAudioFrameCount(max(0, min(file.length, length)))
@@ -2463,8 +2054,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         }
     }
 
-    /// Tear down any in-flight crossfade: stop the outgoing player and restore
-    /// both players to full volume. Safe to call when not transitioning.
+    /// Stops any crossfade's outgoing player and restores both volumes. Safe when not transitioning.
     private func cancelCrossfade() {
         crossfadeTask?.cancel()
         crossfadeTask = nil
@@ -2473,8 +2063,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             out.volume = 1
             outgoingPlayer = nil
         }
-        // Same reason as in `haltCurrentAudio`: touching the players before the
-        // graph exists instantiates them. They are born at volume 1 anyway.
+        // As in `haltCurrentAudio`: touching players before the graph exists creates them. They start at volume 1.
         if graphConfigured {
             playerA.volume = 1
             playerB.volume = 1
@@ -2484,34 +2073,16 @@ public final class PlaybackEngine: NSObject, ObservableObject {
 
     // MARK: - Remote Command Center
 
-    /// Lock screen, Control Centre, headphone and Bluetooth controls.
-    ///
-    /// Deliberately not called from `init`: `MPRemoteCommandCenter.shared()` was
-    /// 376 ms of a cold iOS launch, spent wiring up controls for a player that
-    /// had nothing to play. Called instead from `updateNowPlayingInfo`, which
-    /// runs as a song starts — before there is any way for one of these commands
-    /// to arrive.
-    /// Register the lock-screen and headphone controls, once, off the main thread.
-    ///
-    /// Measured at **1771 ms on the main actor**, on the first call and only the
-    /// first: `MPRemoteCommandCenter.shared()` and the first `addTarget` are an
-    /// XPC round trip to `mediaremoted`, and it happens during launch — while
-    /// the first sync is contending for everything — because restoring the
-    /// previous song publishes now-playing info. That was the launch freeze.
-    ///
-    /// None of that work needs the main actor. Only the *handlers* do, and they
-    /// hop to it themselves. The registration is fire-and-forget: the guard flips
-    /// before the hop so a second call can't register twice, and the worst case
-    /// of the couple of hundred milliseconds before it lands is a lock screen
-    /// whose buttons aren't wired yet — during app launch, before there is
-    /// anything to control.
-    private func setupRemoteCommandsIfNeeded() {
+    /// Registers lock screen, Control Centre, headphone and Bluetooth controls once, off the main thread.
+    /// Called from `updateNowPlayingInfo` rather than `init`: `MPRemoteCommandCenter.shared()` and the first
+    /// `addTarget` are an XPC round trip that froze launch. Only the handlers need the main actor and they hop
+    /// to it. The guard flips before the hop so it can't register twice.
+    func setupRemoteCommandsIfNeeded() {
         guard !remoteCommandsConfigured else { return }
         remoteCommandsConfigured = true
         Task { await Self.registerRemoteCommands(for: self) }
-        // Shuffle and repeat changed in the app rather than from a remote:
-        // CarPlay and the Watch draw them from the commands, so keep those
-        // current. Deferred a turn because @Published fires in willSet.
+        // Shuffle and repeat changed in-app: CarPlay and the Watch read them from the commands. Deferred a turn
+        // because @Published fires in willSet.
         remoteStateObserver = queue.$shuffleEnabled.map { _ in () }
             .merge(with: queue.$repeatMode.map { _ in () })
             .receive(on: DispatchQueue.main)
@@ -2521,9 +2092,22 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     private var remoteCommandsConfigured = false
     private var remoteStateObserver: AnyCancellable?
 
-    /// Push shuffle, repeat and liked state out to the remote commands.
-    /// ponytail: a like that skips `deps.toggleFavourite` (multi-select) shows
-    /// at the next song; observe the library's favourites if that lag matters.
+    /// Takes the play/pause keys while something else owns the audio, like the recap story.
+    /// True means play, false pause, nil toggle.
+    var remotePlayPause: ((Bool?) -> Void)?
+
+    private func remote(_ play: Bool?) {
+        if let remotePlayPause { return remotePlayPause(play) }
+        switch play {
+        case true?: resume()
+        case false?: pause()
+        case nil: togglePlayPause()
+        }
+    }
+
+    /// Pushes shuffle, repeat and liked state to the remote commands.
+    /// ponytail: a like that skips `deps.toggleFavourite` (multi-select) shows at the next song; observe the
+    /// library's favourites if that lag matters.
     func syncRemoteCommandState() {
         guard remoteCommandsConfigured else { return }
         let shuffle: MPShuffleType = queue.shuffleEnabled ? .items : .off
@@ -2545,22 +2129,19 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         c.likeCommand.isActive = liked
     }
 
-    /// `nonisolated` + `async` is what actually gets this off the main actor: a
-    /// non-isolated async function runs on the global executor even when an
-    /// actor-isolated caller awaits it (SE-0338). `Task.detached` would not have
-    /// worked — the closure literal would inherit this type's isolation, which
-    /// is the trap that made a previous "background" rescan run on main.
+    /// `nonisolated async` runs on the global executor even when awaited from the main actor (SE-0338).
+    /// `Task.detached` wouldn't: the closure inherits this type's isolation.
     private nonisolated static func registerRemoteCommands(for engine: PlaybackEngine) async {
         let c = MPRemoteCommandCenter.shared()
 
         c.playCommand.addTarget            { [weak engine] _ in
-            Task { @MainActor [weak engine] in engine?.resume() };          return .success
+            Task { @MainActor [weak engine] in engine?.remote(true) };      return .success
         }
         c.pauseCommand.addTarget           { [weak engine] _ in
-            Task { @MainActor [weak engine] in engine?.pause() };           return .success
+            Task { @MainActor [weak engine] in engine?.remote(false) };     return .success
         }
         c.togglePlayPauseCommand.addTarget { [weak engine] _ in
-            Task { @MainActor [weak engine] in engine?.togglePlayPause() }; return .success
+            Task { @MainActor [weak engine] in engine?.remote(nil) };       return .success
         }
 
         c.nextTrackCommand.addTarget { [weak engine] _ in
@@ -2580,9 +2161,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             return .success
         }
 
-        // No skipForward/Backward (±15s): enabling them swaps the lock screen's
-        // next/previous buttons for the interval ones, which is a podcast
-        // player. No dislike either until 4.3 gives it somewhere to go.
+        // No skipForward/Backward: they replace next/previous on the lock screen. No dislike until 4.3 uses it.
         c.changeShuffleModeCommand.addTarget { [weak engine] event in
             guard let e = event as? MPChangeShuffleModeCommandEvent else { return .commandFailed }
             let on = e.shuffleType != .off

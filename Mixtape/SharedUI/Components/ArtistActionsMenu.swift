@@ -1,33 +1,14 @@
-// ArtistActionsMenu.swift
-// Mixtape — SharedUI/Components
-//
-// Everything an artist can do, in one list, wherever you right-click one.
-//
-// Artists were the last container still stuck at two items: the Mac's artist
-// grid offered "Play Artist" and "Add to Queue", Home's shelf offered "Open
-// Artist" and "Play", the search results offered nothing at all, and the artist
-// page — alone among the detail pages — had no overflow menu, so there was no
-// way to queue an artist or download everything by one.
-//
-// Modelled on `AlbumActionsMenu`, and self-contained for the same reason: it
-// takes a name and reads the songs off `deps`, so a row shows the same menu as
-// the page without the page's loaded state.
-//
-// No "Add to Library": an artist isn't a thing the library holds — it's the
-// songs that are saved, and the row only exists because some of them are. No
-// "Get Info" either; `GetInfoSheet` answers questions about a file, and the
-// artist page already is this artist's information.
+// Artist context menu. Takes a name and reads songs off `deps`, like
+// `AlbumActionsMenu`. No Add to Library (artists aren't stored) and no Get Info.
 
 import SwiftUI
 
 struct ArtistActionsMenu: View {
 
     let name: String
-    /// Overrides the cover on the share card. Home's shelf holds a remote image
-    /// for artists with no library row of their own, which is the only artwork
-    /// those have.
+    /// Overrides the share card cover (Home's remote image for artists with no row).
     var artwork: ShareItem.Artwork? = nil
-    /// Off in a page's "…", which sits beside that page's own Share button.
+    /// Off in a page's "...", which sits beside that page's own Share button.
     var showsShare = true
 
     @EnvironmentObject private var deps:   AppDependencies
@@ -40,9 +21,7 @@ struct ArtistActionsMenu: View {
     @ObservedObject private var shufflePrefs = ShufflePreferences.shared
 
     var body: some View {
-        // Songs are resolved inside the closures, never in the body: this menu
-        // is rebuilt with the row it hangs off, and walking the library for the
-        // artist's tracks there is the cost that made these grids stutter.
+        // Songs are resolved in the closures, never in the body, to keep grids smooth.
         Button {
             play(shuffled: false)
         } label: {
@@ -58,8 +37,7 @@ struct ArtistActionsMenu: View {
         Divider()
 
         Button {
-            // Reversed, so each insert lands after the one before it and the
-            // songs keep their order in the queue.
+            // Reversed so the songs keep their order.
             for song in playableTracks().reversed() { engine.queue.insertNext(song) }
         } label: {
             Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward")
@@ -93,8 +71,7 @@ struct ArtistActionsMenu: View {
 
     // MARK: - Songs
 
-    /// The library row behind this name, when there is one. An artist reached
-    /// only through a track credit has none.
+    /// Nil for artists only reached through a track credit.
     private var row: Artist? { deps.libraryService.artist(named: name) }
 
     private func tracks() -> [Track] {
@@ -102,8 +79,7 @@ struct ArtistActionsMenu: View {
         return deps.libraryService.tracks(by: row)
     }
 
-    /// Songs with audio behind them. A queue that stops dead partway through
-    /// reads as a broken player rather than as a missing song.
+    /// Only songs with audio, so the queue doesn't stall.
     private func playableTracks() -> [Track] { tracks().filter(\.canResolveAudio) }
 
     private var shareItem: ShareItem {
@@ -116,8 +92,7 @@ struct ArtistActionsMenu: View {
         let list = playableTracks()
         engine.queue.setShuffle(shuffled)
         guard let first = shuffled ? list.randomElement() : list.first else { return }
-        // Remembered per artist, so the page's own shuffle button agrees with
-        // what the menu just did.
+        // Stored per artist so the page's shuffle button agrees.
         if shufflePrefs.shuffles(.artist(name)) != shuffled {
             shufflePrefs.toggle(.artist(name))
         }

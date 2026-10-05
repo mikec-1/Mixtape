@@ -1,23 +1,7 @@
-// SearchSuggestionsStore.swift
-// Mixtape — Features/Online
-//
-// The type-ahead rows under the search field.
-//
-// Separate from DiscoverSessionStore on purpose. That one holds results the user
-// committed to and wants back when they return to the tab; this one is throwaway
-// — it exists only while a field has focus and is wrong the moment the query
-// changes. Mixing the two would mean a tab switch restoring a stale dropdown.
-//
-// Only Discover feeds this. The library sections filter what is already on
-// screen as you type, so a dropdown of Deezer rows over them would offer to
-// navigate away from the very results the field is narrowing.
-//
-// The rows are Deezer's, the order isn't. Deezer ranks by what the world plays;
-// a search box in a music library is nearly always someone reaching for
-// something they already own, and burying their own song under four global hits
-// with similar names is the wrong answer to the question they asked. So every
-// row is checked against the library and the ones you have float to the top,
-// keeping Deezer's order within each group.
+// Type-ahead rows under the search field. Separate from DiscoverSessionStore, which
+// holds committed results; these are throwaway.
+// Only Discover feeds this. Rows the library already has float to the top, keeping
+// Deezer's order within each group.
 
 import Foundation
 import Combine
@@ -33,49 +17,35 @@ final class SearchSuggestionsStore: ObservableObject {
 
     @Published private(set) var suggestions: [SearchSuggestion] = []
 
-    /// Rows the user actually picked, newest first. Shown when the field is
-    /// focused with nothing typed — an empty box is a question with no answer,
-    /// and the likeliest answer is something they reached for before.
+    /// Rows the user picked, newest first. Shown when the field is focused and empty.
     @Published private(set) var recents: [SearchSuggestion] = []
 
     /// True while the dropdown is standing in for an empty query.
     @Published private(set) var showsRecents = false
 
-    /// What the dropdown is actually drawing. Everything downstream —
-    /// highlighting, Return, both platform panels — goes through this so
-    /// recents behave exactly like live suggestions.
+    /// What the dropdown draws. Everything downstream reads this so recents behave like suggestions.
     var rows: [SearchSuggestion] { showsRecents ? recents : suggestions }
 
-    /// Row the keyboard is on, nil when no row is selected. ↓ from the text
-    /// field enters the list at 0; ↑ off the top leaves it nil again, which puts
-    /// the caret back in charge without closing the dropdown.
+    /// Keyboard row, nil for none. Down enters at 0; up off the top gives the caret back.
     @Published var highlighted: Int?
 
-    /// Set when the user is done with the dropdown for this query — Esc, Return,
-    /// or picking a row. Cleared by the next keystroke, so dismissing doesn't
-    /// suppress suggestions for the rest of the session.
+    /// Set by Esc, Return or picking a row. Cleared by the next keystroke.
     @Published private(set) var isDismissed = false
 
-    /// Query `suggestions` answer. Guards against a slow response for an old
-    /// query landing on top of a newer one's rows.
+    /// The query `suggestions` answer, so a slow old response can't overwrite newer rows.
     private var loadedQuery = ""
     private var task: Task<Void, Never>?
 
-    /// A completion the user picked. Picking one writes it into the field, which
-    /// looks exactly like typing from here — without this the panel would reopen
-    /// on the very term it was just closed with. Cleared by the next real edit.
+    /// A picked completion. Writing it into the field looks like typing, so this stops
+    /// the panel reopening. Cleared by the next edit.
     private var acceptedQuery: String?
 
-    /// Fast enough to feel live, slow enough that a typed word is a handful of
-    /// requests rather than one per character.
     private static let debounce = Duration.milliseconds(140)
 
-    /// How long the field has to have been quiet before a keystroke is treated
-    /// as the *start* of typing rather than the middle of it.
+    /// Quiet time before a keystroke counts as the start of typing.
     private static let leadIn: TimeInterval = 0.5
 
-    /// When a request last actually went out — measured after the debounce, so
-    /// it tracks requests rather than keystrokes.
+    /// When a request last went out, after the debounce.
     private var lastDispatch = Date.distantPast
 
     var isShowing: Bool { !isDismissed && !rows.isEmpty }
@@ -92,7 +62,6 @@ final class SearchSuggestionsStore: ObservableObject {
             acceptedQuery = nil
         }
 
-        // A keystroke means the user is still looking — undo any earlier dismiss.
         if isDismissed { isDismissed = false }
 
         guard trimmed.count >= 2 else {
@@ -107,15 +76,7 @@ final class SearchSuggestionsStore: ObservableObject {
         let startingToType = Date().timeIntervalSince(lastDispatch) > Self.leadIn
 
         task = Task { @MainActor in
-            // The first rows of a query go out on the keystroke itself.
-            //
-            // A debounce buys the right thing in the middle of a word — the user
-            // is reading rows that are already up while the next set resolves, so
-            // a beat of staleness costs nothing and saves a request per
-            // character. It buys nothing at the start of one: there is nothing on
-            // screen to read, and the delay is just the panel refusing to appear,
-            // which is the only thing about it anyone ever notices. So the
-            // debounce applies from the second keystroke of a burst onward.
+            // The first keystroke of a burst goes out immediately; the debounce applies from the second.
             if !(self.suggestions.isEmpty && startingToType) {
                 try? await Task.sleep(for: Self.debounce)
                 guard !Task.isCancelled else { return }
@@ -128,17 +89,22 @@ final class SearchSuggestionsStore: ObservableObject {
             self.loadedQuery = trimmed
             self.suggestions = Self.preferringLibrary(rows,
                                                       library: library)
-            // Never carry a highlight across a result set — index 2 of the old
-            // rows is a different song in the new ones, and Return would play it.
+            // Never carry a highlight across result sets, or Return plays a different song.
+            self.highlighted = nil
+
+            // A typed line reads as lyrics: those hits land on top once they arrive.
+            guard trimmed.split(separator: " ").count >= 4 else { return }
+            let hits = await catalog.searchByLyrics(trimmed, limit: 2)
+            guard !Task.isCancelled, !hits.isEmpty else { return }
+            let lyricRows = hits.compactMap(SearchSuggestion.init(lyricMatch:))
+            let ids = Set(lyricRows.map(\.id))
+            self.suggestions = lyricRows + self.suggestions.filter { !ids.contains($0.id) }
             self.highlighted = nil
         }
     }
 
-    /// Marks the rows the library already has and floats them to the top.
-    ///
-    /// A stable partition, not a sort: within each group Deezer's ranking is
-    /// still the best answer, and reordering it would only make the dropdown
-    /// jump around as the library grows.
+    /// Marks rows the library has and floats them up. A stable partition, so Deezer's
+    /// order holds within each group.
     private static func preferringLibrary(_ rows: [SearchSuggestion],
                                           library: LibraryService?) -> [SearchSuggestion] {
         guard let library else { return rows }
@@ -146,8 +112,7 @@ final class SearchSuggestionsStore: ObservableObject {
             var row = row
             switch row.kind {
             case .track:
-                // By recording, not by id — an imported song is the same song
-                // under a different spelling. Same rule the save button uses.
+                // By recording, not id, like the save button.
                 row.inLibrary = library.track(matching: row.title,
                                               artistName: row.artistName ?? "") != nil
             case .artist:
@@ -160,16 +125,14 @@ final class SearchSuggestionsStore: ObservableObject {
         return marked.filter(\.inLibrary) + marked.filter { !$0.inLibrary }
     }
 
-    /// Hide the dropdown but keep the rows, so re-focusing the field without
-    /// retyping brings them straight back.
+    /// Hide the dropdown but keep the rows for re-focus.
     func dismiss() {
         guard !isDismissed else { return }
         isDismissed = true
         highlighted = nil
     }
 
-    /// The user picked a term completion, and `query` is now in the field. Same
-    /// as `dismiss()`, except the write it is about to cause won't reopen us.
+    /// Like `dismiss()`, but the field write this causes won't reopen the panel.
     func accept(_ query: String) {
         acceptedQuery = query.trimmingCharacters(in: .whitespaces)
         isDismissed = true
@@ -208,17 +171,13 @@ final class SearchSuggestionsStore: ObservableObject {
                                   isExplicit: false, artistName: nil, albumTitle: nil))
     }
 
-    /// Forget a past search. Only ever a recent: live results are what the
-    /// catalogue matched for the query you just typed, and removing one of
-    /// those made an artist vanish from search entirely.
+    /// Forget a past search. Recents only: hiding a live result would hide it from search entirely.
     func hide(_ row: SearchSuggestion) {
         recents.removeAll { $0.id == row.id }
         if showsRecents { showsRecents = !recents.isEmpty }
         highlighted = nil
         saveRecents()
     }
-
-    /// Rows vetoed this session — see `hide`.
 
     func clearRecents() {
         recents = []
@@ -249,8 +208,8 @@ final class SearchSuggestionsStore: ObservableObject {
 
     // MARK: - Keyboard
 
-    /// Moves the highlight. Returns false when the move can't be made — ↑ from the
-    /// top row — so the caller can decide what the key should do instead.
+    /// Moves the highlight. False when it can't (up from the top row), so the caller
+    /// decides what the key does.
     @discardableResult
     func moveHighlight(_ direction: HighlightMove) -> Bool {
         guard isShowing else { return false }
@@ -277,12 +236,8 @@ final class SearchSuggestionsStore: ObservableObject {
 
 extension SearchSuggestion {
 
-    /// The entity behind this row, rebuilt from the fields the search layer
-    /// carried over rather than re-fetched. Deezer already told us everything a
-    /// play or a drill-down needs; a round-trip on tap would only add latency to
-    /// the one moment the user is waiting.
-    ///
-    /// `.term` has nothing behind it — it re-runs the search instead.
+    /// Rebuilt from the fields the search carried, so a tap doesn't refetch.
+    /// `.term` has nothing behind it and re-runs the search.
     var onlineTrack: OnlineTrack? {
         guard case .track(let id) = kind else { return nil }
         return OnlineTrack(
@@ -306,8 +261,7 @@ extension SearchSuggestion {
         return OnlineAlbum(id: id, title: title, artistName: artistName ?? "", coverURL: imageURL)
     }
 
-    /// SF Symbol standing in for a row with no artwork. Deezer serves covers for
-    /// most tracks and albums but plenty of small artists have no photo.
+    /// Symbol for a row with no artwork.
     var placeholderIcon: String {
         switch kind {
         case .term:   return "magnifyingglass"
@@ -317,15 +271,28 @@ extension SearchSuggestion {
         }
     }
 
-    /// A row standing for a song the user played out of the search results.
-    /// Same id shape the suggestions API uses, so a song reached either way
-    /// dedupes to one recent.
+    /// A song played from search results, with the suggestions API's id shape so both
+    /// dedupe to one recent.
     init?(track: OnlineTrack) {
         guard let id = track.sourceID else { return nil }
         self.init(id: "track-\(id)",
                   kind: .track(id: id),
                   title: track.title,
                   subtitle: track.artistName.isEmpty ? "Song" : "Song • \(track.artistName)",
+                  imageURL: track.artworkURL,
+                  isExplicit: track.isExplicit,
+                  artistName: track.artistName,
+                  albumTitle: track.albumTitle,
+                  duration: track.duration > 0 ? track.duration : nil)
+    }
+
+    /// A song found by its lyrics, labelled so the match makes sense.
+    init?(lyricMatch track: OnlineTrack) {
+        guard let id = track.sourceID else { return nil }
+        self.init(id: "track-\(id)",
+                  kind: .track(id: id),
+                  title: track.title,
+                  subtitle: track.artistName.isEmpty ? "Lyrics match" : "Lyrics match • \(track.artistName)",
                   imageURL: track.artworkURL,
                   isExplicit: track.isExplicit,
                   artistName: track.artistName,

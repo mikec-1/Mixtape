@@ -1,23 +1,6 @@
-// SpotifyLikesPushPage.swift
-// Mixtape — Features/Settings
-//
-// Choosing which favourites to add to Spotify's Liked Songs.
-//
-// This was a button and a confirmation dialog: press it, and some number of
-// songs were matched and saved with no chance to look at the matching first.
-// The failure that made the case against it is small and completely ordinary —
-// one favourite, already saved on Spotify, and a row cheerfully offering to
-// "like 1 song" that would have done precisely nothing.
-//
-// So the check comes first. What fills this page is not "your liked songs", it's
-// the difference between the two libraries: songs favourited here that Spotify
-// doesn't already have saved. When that difference is empty the page says so
-// and offers nothing, which is the honest answer and also the common one for
-// anybody who runs this twice.
-//
-// Matching by name is guesswork — live takes, remasters, karaoke covers — so
-// the confident matches arrive ticked and the doubtful ones arrive unticked but
-// visible. Nothing is saved that the user didn't leave ticked.
+// Choosing which liked songs to add to Spotify's Liked Songs.
+// Lists only songs Spotify doesn't already have saved, or says there's nothing to do.
+// Confident name matches arrive ticked, doubtful ones unticked; only ticked songs are saved.
 
 import SwiftUI
 
@@ -66,10 +49,7 @@ struct SpotifyLikesPushPage: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color.mixBackground)
         .task { await check() }
-        // Leaving stops the run, for the same reason the import page does it:
-        // nothing should go on writing to an account with no way on screen to
-        // stop it. Saving is additive and idempotent, so a half-finished push
-        // needs no undoing — the next run simply picks up what's left.
+        // Leaving stops the run. Saving is additive, so the next run picks up what's left.
         .onDisappear { work?.cancel() }
     }
 
@@ -97,10 +77,7 @@ struct SpotifyLikesPushPage: View {
                     Text(subtitle)
                         .font(.mixSubtext)
                         .foregroundStyle(Color.mixTextSecondary)
-                        // Bounded, like the import page's: an unbounded
-                        // `fixedSize` measured against the narrow settings
-                        // column locks in a minimum height taller than the
-                        // window.
+                        // Bounded, like the import page's.
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -236,9 +213,7 @@ struct SpotifyLikesPushPage: View {
             parts.append("\(songs(review.missing.count)) couldn't be found on Spotify")
         }
         if review.unchecked > 0 {
-            // Without this, a run that was throttled before it matched anything
-            // reads as "nothing to do" — the emptiest possible way of hiding a
-            // failure, and the one most likely to be believed.
+            // A throttled run mustn't read as "nothing to do".
             parts.append("\(songs(review.unchecked)) couldn't be checked at all \u{2014} \(review.uncheckedReason?.sentence ?? "Couldn't reach Spotify")")
         }
         guard !parts.isEmpty else {
@@ -279,16 +254,12 @@ struct SpotifyLikesPushPage: View {
 
     private func summaryLine(_ review: SpotifyExportService.LikesReview) -> String {
         guard review.checkSucceeded else {
-            // The list is every match, not the missing ones: say so, rather
-            // than letting an unchecked list pass for a checked one.
+            // The list is every match, not just the missing ones, so say so.
             return "\(songs(review.pushable.count)) matched. Spotify didn't say which of these you've already liked, so some may already be there. Adding them again changes nothing."
         }
         var parts = ["\(songs(review.pushable.count)) not in your Liked Songs yet"]
         if review.unchecked > 0 {
-            // Spotify stopped answering partway through. Say it plainly, and say
-            // why: the alternative is a list that silently omits songs and looks
-            // whole. Never fold these into "not on Spotify" — nobody
-            // established that they aren't.
+            // Spotify stopped answering partway. Never fold these into "not on Spotify".
             let why = review.uncheckedReason?.sentence ?? "Couldn't reach Spotify"
             parts.append("\(review.unchecked) couldn't be checked \u{2014} \(why)")
         }
@@ -297,8 +268,7 @@ struct SpotifyLikesPushPage: View {
         return parts.joined(separator: " \u{00B7} ")
     }
 
-    /// Songs Spotify has nothing for. Shown, not hidden: it's the only place
-    /// anyone would find out, and it isn't a failure of the push.
+    /// Songs Spotify has nothing for. Shown, since this is the only place to find out.
     private func missingList(_ missing: [SpotifyExportService.Candidate]) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Not on Spotify")
@@ -326,8 +296,7 @@ struct SpotifyLikesPushPage: View {
                 if isOn { chosen.remove(candidate.track.id) }
                 else    { chosen.insert(candidate.track.id) }
             } label: {
-                // Square and in the text's own ink, matching the export sheet.
-                // The one coloured control on the page should be Add.
+                // In the text colour, like the export sheet, so Add is the one coloured control.
                 Image(systemName: isOn ? "checkmark.square.fill" : "square")
                     .font(.system(size: 14))
                     .foregroundStyle(isOn ? Color.mixTextPrimary : Color.mixTextTertiary)
@@ -341,9 +310,7 @@ struct SpotifyLikesPushPage: View {
                     .lineLimit(1)
 
                 if let match {
-                    // Printed only when it differs. Repeating the same title
-                    // back is noise; hiding it when it agrees makes every
-                    // visible second line worth reading.
+                    // Only when it differs from the local title.
                     Text(differs(candidate.track, match)
                          ? "\u{2192} \(match.title) \u{00B7} \(match.artist)"
                          : candidate.track.artistName)
@@ -374,8 +341,7 @@ struct SpotifyLikesPushPage: View {
         .contentShape(Rectangle())
     }
 
-    /// The correction hatch, same as the export sheet's: a wrong guess with the
-    /// right song two results down is the commonest failure there is.
+    /// Pick a different match, same as the export sheet.
     private func alternativesMenu(for candidate: SpotifyExportService.Candidate) -> some View {
         Menu {
             if let original = candidate.match {
@@ -396,8 +362,7 @@ struct SpotifyLikesPushPage: View {
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
-        // A hard 20pt, never `fixedSize()` — a Menu's ideal width is its widest
-        // item, which here is a full title and artist list.
+        // A hard 20pt: a Menu's ideal width is its widest item.
         .frame(width: 20)
     }
 
@@ -461,14 +426,10 @@ struct SpotifyLikesPushPage: View {
     private func check() async {
         guard phase == .checking else { return }
         do {
-            // Consent, if this connection has never been allowed to write.
-            // Asked here rather than at the button on the previous page: it's a
-            // whole trip through a browser, and the moment to ask is when
-            // someone has said what they want.
+            // Ask for write consent here, once someone has said what they want.
             if !deps.spotifyAuth.canWrite {
                 try await deps.spotifyAuth.connect(includingWrite: true)
-                // A new grant drops the cached account; nothing else asks for it
-                // again until this pane is left and reopened.
+                // A new grant drops the cached account, so reload it.
                 deps.spotifyAuth.loadProfile(using: deps.spotifyClient, force: true)
             }
             let found = try await service.reviewLikes(favourites)
@@ -491,8 +452,7 @@ struct SpotifyLikesPushPage: View {
         let uris = review.pushable
             .filter { chosen.contains($0.track.id) }
             .compactMap { overrides[$0.track.id]?.uri ?? $0.match?.uri }
-            // Two local rows can land on the same Spotify recording, and the
-            // count reported at the end is this array's length.
+            // Two local rows can match one Spotify recording, and the reported count is this array's length.
             .reduce(into: [String]()) { out, uri in if !out.contains(uri) { out.append(uri) } }
         guard !uris.isEmpty else { return }
 

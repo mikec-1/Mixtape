@@ -1,9 +1,5 @@
-// GenerateMixSheet.swift
-// Mixtape — Features/Library
-//
-// "Make me a playlist": pick a vibe, decide how much of it should be music you
-// already own, and get a playlist. The engine is `MixGenerator`; this is the
-// brief.
+// "Make me a playlist": a vibe plus how much should come from your library.
+// `MixGenerator` does the work.
 
 import SwiftUI
 
@@ -13,9 +9,7 @@ struct GenerateMixSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var vibe: MixVibe = .yourTaste
-    /// How much of the result comes from the library, 0…1. Half is the honest
-    /// default: the feature is as much "rediscover what you have" as it is
-    /// "find me something new", and starting at either end hides one of them.
+    /// Fraction from the library, 0...1. Half by default.
     @State private var libraryShare: Double = 0.5
     @State private var count: Double = Double(MixGenerator.defaultCount)
 
@@ -99,8 +93,7 @@ struct GenerateMixSheet: View {
             HStack {
                 Text("All new to me")
                 Spacer(minLength: 8)
-                // The number, not the percentage: "12 of 25 from your library"
-                // is the thing the slider actually decides.
+                // A count, since that's what the slider decides.
                 Text("\(fromLibrary) of \(Int(count)) from your library")
                     .foregroundStyle(Color.mixTextPrimary)
                 Spacer(minLength: 8)
@@ -156,8 +149,7 @@ struct GenerateMixSheet: View {
                                               catalog: deps.itunesClient)
 
         guard !mix.isEmpty else {
-            // Two different failures, and the difference matters: one is fixed
-            // by importing music, the other by being online.
+            // Different fixes: import music, or go online.
             error = libraryShare >= 1
                 ? "Nothing in your library matches that vibe yet. Try a different one, or slide towards new music."
                 : "Couldn't reach the catalogue, and your library had nothing matching that vibe. Check your connection and try again."

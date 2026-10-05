@@ -1,14 +1,5 @@
-// TappableArtistRow.swift
-// Mixtape — SharedUI/Components
-//
-// Renders one or more individually-tappable artist names on a single line,
-// comma-separated. A "feat." blob (split via ImportService.splitArtists) becomes
-// several separate tap targets so tapping a featured artist opens *their*
-// profile rather than failing on the whole "Drake feat. 21 Savage" string.
-//
-// A single artist (the common case) looks and behaves exactly like a lone text
-// link, so non-featured rows are visually unchanged. When an entry's action is
-// nil it degrades to plain, non-interactive text.
+// Artist names on one line, each tappable. Features are split
+// (ImportService.splitArtists) so each opens its own profile. Nil action = plain text.
 
 import SwiftUI
 
@@ -21,12 +12,8 @@ struct TappableArtistRow: View {
     var body: some View {
         HStack(spacing: 0) {
             ForEach(Array(targets.enumerated()), id: \.offset) { idx, item in
-                // A four-name credit won't always fit. Descending priority
-                // spends the width from the left, so the line reads in full and
-                // trails off once at the end — without it SwiftUI shortens every
-                // name at once ("Kwengfa…, Digga D, Booter B…") and the
-                // credit names nobody. The separator shares its name's priority
-                // so a comma is never drawn after a name that lost its letters.
+                // Descending layout priority, so names truncate from the end rather than all
+                // at once. Separators share their name's priority.
                 nameView(item)
                     .layoutPriority(Double(targets.count - idx))
                 if idx < targets.count - 1 {
@@ -44,9 +31,7 @@ struct TappableArtistRow: View {
     @ViewBuilder
     private func nameView(_ item: (name: String, action: (() -> Void)?)) -> some View {
         if let action = item.action {
-            // Linked names take the brighter text colour and the separators
-            // keep the passed one, which is what tells them apart now that the
-            // underline is gone — the same contrast Spotify's bylines use.
+            // Linked names are brighter than the separators.
             TappableArtistName(name: item.name, font: font,
                                color: .mixTextPrimary, action: action)
         } else {
@@ -58,12 +43,7 @@ struct TappableArtistRow: View {
     }
 }
 
-/// One linked name.
-///
-/// No standing underline: a byline of three artists drawn with three rules
-/// under it reads as a form field, not as a credit. What marks it as a link is
-/// the brighter colour against the dimmed separators around it, plus the
-/// pointing hand and an underline that appears under the pointer.
+/// One linked name: brighter colour, pointing hand, underline on hover.
 private struct TappableArtistName: View {
     let name: String
     let font: Font

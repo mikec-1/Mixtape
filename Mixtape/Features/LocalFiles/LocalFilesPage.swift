@@ -1,17 +1,5 @@
-// LocalFilesPage.swift
-// Mixtape — Features/LocalFiles
-//
-// The music in the user's watched folders, on both platforms.
-//
-// Everything on this page is derived from a scan: these songs are not in the
-// library and not in the database, so there is nothing here to delete, nothing
-// to sync and nothing to go stale. Remove a file from the folder and it leaves
-// this list; put it back and it returns.
-//
-// The one action that crosses over is "Save to Mixtape", which runs the ordinary
-// import: a copy into Mixtape's own storage, an `.imported` row, an upload. That
-// is the only shape that can reach the phone and the web, because the audio has
-// to land somewhere both of them can read.
+// Songs in the user's watched folders. Derived from a scan: not in the library
+// or database, so nothing to delete or sync. "Save to Mixtape" runs the normal import.
 
 import SwiftUI
 #if os(macOS)
@@ -51,7 +39,7 @@ public struct LocalFilesPage: View {
     public var body: some View {
         content
             .onAppear { deps.localFiles.rescan() }
-            .confirmationDialog("Save everything to Mixtape?",
+            .mixConfirmationDialog("Save everything to Mixtape?",
                                 isPresented: $confirmSaveAll,
                                 titleVisibility: .visible) {
                 Button("Save \(tracks.count) Songs") { Task { await saveAll() } }
@@ -62,11 +50,7 @@ public struct LocalFilesPage: View {
     }
 
     // MARK: - Layout
-    //
-    // The two platforms lay this out differently for the same reason every other
-    // list does: the Mac list is an NSTableView, which scrolls itself, so it
-    // can't sit inside a SwiftUI ScrollView without two scroll views fighting
-    // over the wheel. iOS keeps the simple scrolling stack.
+    // macOS uses the NSTableView, which scrolls itself; iOS keeps a scrolling stack.
 
     @ViewBuilder
     private var content: some View {
@@ -99,8 +83,7 @@ public struct LocalFilesPage: View {
             .padding(.horizontal, 20)
             .padding(.bottom, 40)
         }
-        // iOS only: the Mac window already owns a search field in its top bar,
-        // and a second one on the page fights it for the same keystrokes.
+        // iOS only: the Mac window already has a search field.
         .searchable(text: $searchText, prompt: "Find in local files")
         #endif
     }
@@ -151,10 +134,7 @@ public struct LocalFilesPage: View {
                 .disabled(tracks.isEmpty)
 
                 #if os(macOS)
-                // The selection already has "Add to Library" in its right-click
-                // menu; this is the same action with a label, so you can see it
-                // without going looking for it. Disabled until something is
-                // selected rather than hidden, so the row doesn't jump.
+                // Same action as the selection's right-click "Add to Library". Disabled rather than hidden so the row doesn't jump.
                 Button {
                     Task { await saveSelection() }
                 } label: {
@@ -220,15 +200,8 @@ public struct LocalFilesPage: View {
     // MARK: - Rows (macOS)
 
     #if os(macOS)
-    /// The same NSTableView every other Mac song list uses. Worth the plumbing:
-    /// a watched folder can hold ten thousand files, and a SwiftUI row per song
-    /// is exactly the case that table exists to avoid.
-    ///
-    /// The table is told these rows aren't library songs — `isInLibrary` is
-    /// false for all of them and `showsRemoveFromLibrary` is off — so its menu
-    /// offers "Add to Library" instead of a Remove that would have nothing to
-    /// remove. Everything that outlives the folder saves the file into Mixtape
-    /// first; see `save(_:)`.
+    /// The shared Mac song table, since a folder can hold thousands of files. Rows
+    /// aren't library songs, so its menu offers "Add to Library" instead of Remove.
     private var macTable: some View {
         NativeTrackTable(
             tracks:         tracks,
@@ -280,8 +253,7 @@ public struct LocalFilesPage: View {
             track:         track,
             isCurrent:     engine.queue.currentTrack?.id == track.id,
             isPlaying:     engine.state.isPlaying && engine.queue.currentTrack?.id == track.id,
-            // A plus, not a heart. A heart claims a song you already have; the
-            // question here is whether you want Mixtape to keep a copy at all.
+            // A plus, not a heart: the question is whether to keep a copy at all.
             onSaveToLibrary: { Task { await save(track) } }
         )
         .contentShape(Rectangle())
@@ -293,8 +265,7 @@ public struct LocalFilesPage: View {
             Button("Play Next")   { engine.queue.insertNext(track) }
             Button("Add to Queue") { engine.queue.append(track) }
             Divider()
-            // Everything below this line puts the song somewhere that outlives
-            // the folder, so all of it saves the file into Mixtape first.
+            // Everything below outlives the folder, so it saves the file into Mixtape first.
             Button("Save to Mixtape") { Task { await save(track) } }
             Button("Add to Liked Songs") {
                 Task {
@@ -327,9 +298,7 @@ public struct LocalFilesPage: View {
 
     // MARK: - Promotion
 
-    /// Copies one file into Mixtape and returns the library row's id, or nil if
-    /// the import failed. A file that was already imported comes back with the
-    /// existing row's id, so adding it to a playlist still does the right thing.
+    /// Imports one file and returns its library id, or nil on failure. Already-imported files return the existing id.
     @discardableResult
     private func save(_ track: Track) async -> UUID? {
         switch await deps.localFiles.promote(track, using: deps.importService) {
@@ -341,11 +310,7 @@ public struct LocalFilesPage: View {
         }
     }
 
-    /// Hand the imported song to the same review sheet a dragged-in file gets.
-    ///
-    /// Saving one song opens the editor on that song; "Save All" runs the loop
-    /// and every item lands in the same queue, so the sheet steps through them
-    /// as "N of M" exactly like importing a folder of files does.
+    /// Queues the imported song for the same review sheet as a dragged-in file.
     private func enqueueReview(_ review: MetadataReviewItem) {
         #if os(macOS)
         appState.enqueueReview(review)

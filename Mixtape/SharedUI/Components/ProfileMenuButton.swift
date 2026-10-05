@@ -1,24 +1,6 @@
-// ProfileMenuButton.swift
-// Mixtape — SharedUI/Components
-//
-// The avatar in the corner of the window, and the menu behind it.
-//
-// Why a menu rather than a button that opens the profile
-// ------------------------------------------------------
-// Everything scoped to "me" — the public profile, the account, the people
-// search, signing out — lived three clicks inside Settings → Account, and the
-// corner avatar is the one piece of chrome that can hold all four. Spending it
-// on a single destination would have made the profile one click cheaper and left
-// the other three exactly where they were. Profile is the first item, so the
-// thing this button exists for is still the thing under the cursor.
-//
-// Settings is deliberately absent even though Spotify lists it: the Mac sidebar
-// has a permanent Settings row and the iOS Home bar has a gear right beside this
-// avatar. Spotify puts it here because it has nowhere else to.
-//
-// The two destinations differ by platform and nothing else — macOS drills into
-// the content column through MacAppState, iOS presents sheets, because those are
-// the shapes each platform already uses for a profile.
+// Corner avatar and its menu: profile, account, find people, sign out.
+// Profile first. Settings isn't here; both platforms have it next to this.
+// macOS drills in through MacAppState, iOS presents sheets.
 
 import SwiftUI
 
@@ -30,14 +12,11 @@ public struct ProfileMenuButton: View {
     @EnvironmentObject private var appState: MacAppState
     #endif
 
-    /// Diameter of the avatar. The surrounding hit target is padded out to match
-    /// whatever sits next to it.
+    /// Avatar diameter; the hit target is padded out around it.
     private let size: CGFloat
 
-    /// The real `profiles` row, once it arrives. The handle on that row is what
-    /// other people see and can differ from the display name held in the session,
-    /// so the menu opens on the local guess and corrects itself rather than
-    /// making the button wait on a round trip.
+    /// The real `profiles` row once loaded. Its handle can differ from the
+    /// session's display name, so the menu starts with the local guess.
     @State private var resolvedProfile: UserProfile?
 
     @State private var showSignOutConfirm = false
@@ -58,8 +37,7 @@ public struct ProfileMenuButton: View {
 
     private var user: AppUser? { deps.authService.currentUser }
 
-    /// The signed-in user seen as a `profiles` row — the shape the profile page
-    /// takes for everyone.
+    /// The signed-in user as a `profiles` row.
     private var me: UserProfile? {
         guard let user else { return nil }
         if let resolved = resolvedProfile, resolved.id == user.id { return resolved }
@@ -72,9 +50,7 @@ public struct ProfileMenuButton: View {
     // MARK: - Body
 
     public var body: some View {
-        // Nothing to show and nowhere to go while signed out. The shells that
-        // host this button swap themselves for the auth flow, so this is a guard
-        // rather than a state anyone sees.
+        // Signed out, the host swaps to the auth flow, so this is just a guard.
         if let user {
             menu(for: user)
                 #if os(iOS)
@@ -85,9 +61,7 @@ public struct ProfileMenuButton: View {
                 }
                 .sheet(isPresented: $showFindPeople) {
                     #if os(macOS)
-                    // A profile is a page in the main window, not something to
-                    // read through a 420pt porthole — the sheet hands the choice
-                    // back and closes rather than pushing inside itself.
+                    // Profiles open in the main window; the sheet hands back and closes.
                     FindPeopleView(authService: deps.authService) { profile in
                         appState.showProfile(profile)
                     }
@@ -127,7 +101,7 @@ public struct ProfileMenuButton: View {
                     }
                 }
                 #endif
-                .confirmationDialog("Sign Out",
+                .mixConfirmationDialog("Sign Out",
                                     isPresented: $showSignOutConfirm,
                                     titleVisibility: .visible) {
                     Button("Sign Out", role: .destructive) {
@@ -144,10 +118,7 @@ public struct ProfileMenuButton: View {
 
     private func menu(for user: AppUser) -> some View {
         Menu {
-            // Names the account rather than decorating the menu: the sidebar
-            // layout, the library and the playlists are all per-account, so
-            // "which one am I in" is a real question this is the only place to
-            // answer.
+            // Names the account, since layout, library and playlists are per-account.
             Section(user.displayName) {
                 Button {
                     guard let me else { return }
@@ -194,9 +165,7 @@ public struct ProfileMenuButton: View {
             avatar(for: user)
         }
         #if os(macOS)
-        // Same treatment as the Add menu beside it: left alone, a Menu draws
-        // itself as a bordered pop-up button, which would be the only
-        // chrome-heavy control in the bar.
+        // Otherwise a Menu draws as a bordered pop-up button.
         .menuStyle(.button)
         .buttonStyle(.plain).mixHandCursor()
         .menuIndicator(.hidden)
@@ -212,9 +181,7 @@ public struct ProfileMenuButton: View {
         AvatarView(url: me?.avatarURL ?? user.avatarURL,
                    fallbackText: user.displayName,
                    size: size)
-            // The neighbours are glyphs that brighten on hover; an avatar has no
-            // tint to change, so the ring is what says it's a control and not a
-            // status badge.
+            // Hover ring marks it as a control, since an avatar has no tint to change.
             #if os(macOS)
             .overlay {
                 Circle().strokeBorder(Color.mixTextPrimary.opacity(isHovering ? 0.5 : 0),
@@ -223,8 +190,7 @@ public struct ProfileMenuButton: View {
             #endif
             .frame(width: size + 2, height: size + 2)
             #if os(iOS)
-            // A 44pt target around a ~32pt face; `body` hands the extra back to
-            // the layout so the avatar still sits on the page's leading gutter.
+            // 44pt target around the face; `body` gives the extra back to the layout.
             .frame(width: 44, height: 44)
             .contentShape(Rectangle())
             #else

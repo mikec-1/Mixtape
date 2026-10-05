@@ -1,23 +1,6 @@
-// WatchedFolderMonitor.swift
-// Mixtape — Core/Services
-//
-// Notices when a watched folder changes, so Local Files keeps up with Finder
-// without anyone pressing anything.
-//
-// macOS only, and deliberately so. FSEvents watches a directory tree from
-// outside the app, which is exactly the shape of this problem: the user drops an
-// album into their music folder in Finder and expects Mixtape to have it. iOS
-// has no equivalent for a folder in the Files app that another process owns, so
-// there the launch/foreground rescan remains the whole story.
-//
-// Two things this is careful about:
-//
-//   • It coalesces. A copy of an album is hundreds of events over a few seconds,
-//     and a scan per event would be hundreds of scans of the same folder. Events
-//     are debounced, so a busy copy costs one scan after it settles.
-//   • It never decides anything. The callback's only job is to say "look again";
-//     the scan itself is the same derived scan as everywhere else, so live
-//     watching cannot introduce a state the manual path wouldn't also reach.
+// macOS FSEvents watcher for watched folders, so Local Files picks up Finder
+// changes. iOS rescans on launch/foreground instead. Events are debounced into
+// one scan, and the callback only triggers the same scan the manual path uses.
 
 import Foundation
 
@@ -30,9 +13,7 @@ public final class WatchedFolderMonitor {
     private var stream: FSEventStreamRef?
     private var debounce: Task<Void, Never>?
 
-    /// How long to wait after the last event before scanning. Long enough that
-    /// copying an album is one scan, short enough that dropping in a single file
-    /// feels immediate.
+    /// Quiet time before scanning, so copying an album is one scan.
     private static let settleDelay: Duration = .seconds(2)
 
     private let onChange: () -> Void
@@ -42,8 +23,7 @@ public final class WatchedFolderMonitor {
     }
 
     deinit {
-        // `stop()` is main-actor isolated and deinit is not, so the teardown is
-        // spelled out here rather than borrowed from it.
+        // `stop()` is main-actor isolated and deinit isn't, so tear down inline.
         if let stream {
             FSEventStreamStop(stream)
             FSEventStreamInvalidate(stream)
@@ -51,8 +31,7 @@ public final class WatchedFolderMonitor {
         }
     }
 
-    /// Points the monitor at exactly these directories, replacing whatever it
-    /// was watching. Called again whenever the user adds or removes a folder.
+    /// Replaces the watched set. Called when folders are added or removed.
     public func watch(_ urls: [URL]) {
         stop()
         guard !urls.isEmpty else { return }
@@ -70,8 +49,7 @@ public final class WatchedFolderMonitor {
             guard let info else { return }
             let monitor = Unmanaged<WatchedFolderMonitor>.fromOpaque(info)
                 .takeUnretainedValue()
-            // FSEvents calls back on the run loop it was scheduled on — the main
-            // one here — but the compiler can't know that, so hop explicitly.
+            // Runs on the main run loop, but the compiler can't know that.
             Task { @MainActor in monitor.changed() }
         }
 
@@ -81,8 +59,7 @@ public final class WatchedFolderMonitor {
             &context,
             paths,
             FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
-            // Latency in seconds. A first coalescing pass inside FSEvents itself,
-            // before the debounce below.
+            // FSEvents latency (seconds), a first coalescing pass before the debounce.
             1.0,
             FSEventStreamCreateFlags(
                 kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer

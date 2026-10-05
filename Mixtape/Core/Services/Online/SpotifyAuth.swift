@@ -1,8 +1,5 @@
-// SpotifyAuth.swift
-// Mixtape
-//
 // Spotify login via Authorization Code + PKCE. Client-Credentials stopped
-// returning playlist tracks in late 2024, so this now requires a signed-in user.
+// returning playlist tracks in late 2024.
 
 import Foundation
 import AuthenticationServices
@@ -18,79 +15,54 @@ public final class SpotifyAuth: NSObject, ObservableObject {
     private static let redirectURI = "mixtape://spotify-callback"
     private static let callbackScheme = "mixtape"
 
-    /// What Mixtape asks Spotify for.
-    ///
-    /// The first two read playlists. `user-library-read` covers Liked Songs and
-    /// saved albums, which are separate from playlists in Spotify's model and
-    /// were unreachable until the library picker needed them.
-    ///
-    /// Read only, on purpose: this is the list `needsReauthorization` is judged
-    /// against, and everything Mixtape does by default is a read. See
-    /// `writeScopeList` for the other half and why it isn't in here.
+    /// Read scopes: playlists, plus user-library-read for Liked Songs and saved
+    /// albums. needsReauthorization is judged against this list; write scopes are
+    /// separate (see writeScopeList).
     private static let scopeList = [
         "playlist-read-private",
         "playlist-read-collaborative",
         "user-library-read",
     ]
-    private static let scopes = scopeList.joined(separator: " ")
 
-    /// What sending things *to* Spotify needs — asked for separately.
-    ///
-    /// Kept out of `scopeList` so that adding export didn't hand every existing
-    /// connection a "reconnect to continue" banner for a feature they may never
-    /// use. Someone who only ever imports should never be asked for permission
-    /// to write to their account; someone who exports is asked once, at the
-    /// moment they ask to export, which is also the only moment the request
-    /// makes any sense to them.
+    /// Scopes for exporting to Spotify, asked for separately so existing
+    /// connections aren't told to reconnect for a feature they may never use.
     private static let writeScopeList = [
         "playlist-modify-private",
         "playlist-modify-public",
         "user-library-modify",
     ]
 
-    /// Asked for alongside the write scopes, but deliberately *not* part of
-    /// `coversWriteScopes`.
-    ///
-    /// Uploading a playlist cover needs its own scope. Making it a requirement
-    /// would tell everyone who granted write access before covers existed that
-    /// their connection is broken, which it isn't — every other write still
-    /// works. So it's requested at the next consent and the cover push treats a
-    /// refusal as "this one thing can't be sent", not as a failure.
+    /// Cover upload scope. Requested with the write scopes but not required by
+    /// coversWriteScopes, so older write grants still count as working. A refusal
+    /// just means covers aren't sent.
     private static let optionalWriteScopeList = ["ugc-image-upload"]
+
+    /// Let the spotify_history job read recent plays and the four-week top list for
+    /// the monthly recap. Asked for only when someone turns that on.
+    private static let historyScopes = ["user-read-recently-played", "user-top-read"]
+
+    /// Whether this account adds its Spotify plays to recaps. Lives on the
+    /// spotify_connections row so every device and the server job see the same answer.
+    @Published public private(set) var historySync = false
 
     @Published public private(set) var isAuthorized: Bool
 
-    /// True when we hold a working token that was granted before this build
-    /// started asking for library access.
-    ///
-    /// Scopes are fixed at consent: a refresh token issued against the old pair
-    /// keeps refreshing happily and keeps reading playlists, it just answers 403
-    /// to anything about Liked Songs. Nothing about the token looks broken, so
-    /// without this the picker would show an empty Liked Songs and no reason
-    /// why. The fix is another trip through the consent sheet, which we can only
-    /// suggest if we know it's needed.
+    /// True when the stored token predates the library scopes. It still refreshes
+    /// and reads playlists but 403s on Liked Songs, so we prompt for re-consent.
     @Published public private(set) var needsReauthorization: Bool
 
-    /// Who the connection belongs to, once it's been asked. Cached here rather
-    /// than in the view so switching Settings panes doesn't re-fetch it, and so
-    /// signing out can drop it in the same breath as the token.
+    /// The connected account, cached so Settings doesn't refetch it and sign-out
+    /// can drop it with the token.
     @Published public private(set) var profile: SpotifyProfile?
 
     private var session: ASWebAuthenticationSession?
     private var profileLoad: Task<Void, Never>?
-    /// Which account has already claimed (or been refused) the stored grant.
-    /// Supabase re-publishes `.authenticated` on every token refresh, and
-    /// without this each one cost a round-trip and a re-fetched profile.
+    /// The account that already claimed or was refused the grant. Supabase
+    /// republishes .authenticated on every refresh.
     private var claimedAccount: UUID?
 
-    /// Starts disconnected, on purpose.
-    ///
-    /// Which account this device holds a Spotify grant for isn't knowable until
-    /// Supabase has restored a session, and assuming it was this one is the bug
-    /// that let a connection outlive its account: the keychain item alone put
-    /// the previous user's Spotify — profile, playlists and all — in front of
-    /// whoever signed in next. `accountDidChange` turns it on once there is a
-    /// user to check it against.
+    /// Starts disconnected. The grant's owner isn't known until Supabase restores
+    /// a session; accountDidChange enables it once there's a user to check.
     public override init() {
         self.isAuthorized = false
         self.needsReauthorization = false
@@ -98,12 +70,8 @@ public final class SpotifyAuth: NSObject, ObservableObject {
         super.init()
     }
 
-    /// The stored grant, but only when it belongs to the account signed in now.
-    ///
-    /// The one place that decides whose connection this is. A grant with another
-    /// owner is invisible from here down: not read, not refreshed, not pushed to
-    /// the account — which is what keeps one person's Spotify off another
-    /// person's devices even if the keychain item is still on this disk.
+    /// The stored grant, only if it belongs to the signed-in account. Anything
+    /// else is never read, refreshed or pushed.
     private static func currentTokens() -> StoredTokens? {
         guard let stored = Keychain.load(),
               let userID = SupabaseConfig.client.auth.currentUser?.id,
@@ -117,25 +85,18 @@ public final class SpotifyAuth: NSObject, ObservableObject {
         isAuthorized = tokens != nil
         needsReauthorization = tokens.map { !Self.coversCurrentScopes($0.scope) } ?? false
         canWrite = Self.coversWriteScopes(tokens?.scope)
-        if tokens == nil { profile = nil }
+        if tokens == nil { profile = nil; historySync = false }
     }
 
-    /// Whether a granted scope string includes everything this build needs.
-    ///
-    /// Tokens stored before Mixtape recorded scopes decode as nil, and those are
-    /// exactly the ones granted under the old pair — treat unknown as stale.
+    /// Whether granted scopes cover this build's list. Nil (older tokens) is stale.
     private static func coversCurrentScopes(_ granted: String?) -> Bool {
         guard let granted else { return false }
         let held = Set(granted.split(separator: " ").map(String.init))
         return held.isSuperset(of: scopeList)
     }
 
-    /// Whether this connection may write to Spotify — create playlists, add
-    /// songs, save likes.
-    ///
-    /// Read from the stored grant rather than remembered as a flag: scopes are
-    /// fixed at consent and a refresh can never widen them, so the grant string
-    /// is the only thing that actually knows.
+    /// Whether this connection can write to Spotify. Read from the stored grant;
+    /// a refresh can't widen scopes.
     @Published public private(set) var canWrite: Bool = false
 
     private static func coversWriteScopes(_ granted: String?) -> Bool {
@@ -146,13 +107,16 @@ public final class SpotifyAuth: NSObject, ObservableObject {
 
     // MARK: - Public API
 
-    /// Show the consent sheet and exchange the code for tokens.
-    ///
-    /// `includingWrite` re-runs consent asking for the export scopes as well.
-    /// It is a separate trip because Spotify fixes scopes at consent: there is
-    /// no way to add a permission to a grant, only to replace the grant. The
-    /// existing connection keeps working until the new one lands.
-    public func connect(includingWrite: Bool = false) async throws {
+    /// Shows the consent sheet and exchanges the code for tokens.
+    /// `includingWrite` asks for export scopes too. Spotify can't add scopes to a
+    /// grant, only replace it, so scopes already held are asked for again.
+    public func connect(includingWrite: Bool = false, includingHistory: Bool = false) async throws {
+        var scopes = Self.scopeList
+        if includingWrite || canWrite { scopes += Self.writeScopeList + Self.optionalWriteScopeList }
+        if includingHistory || historySync || !heldScopes.isDisjoint(with: Self.historyScopes) {
+            scopes += Self.historyScopes
+        }
+
         let verifier = Self.makeCodeVerifier()
         let challenge = Self.codeChallenge(for: verifier)
 
@@ -163,10 +127,7 @@ public final class SpotifyAuth: NSObject, ObservableObject {
             .init(name: "redirect_uri", value: Self.redirectURI),
             .init(name: "code_challenge_method", value: "S256"),
             .init(name: "code_challenge", value: challenge),
-            .init(name: "scope", value: includingWrite
-                  ? (Self.scopeList + Self.writeScopeList + Self.optionalWriteScopeList)
-                        .joined(separator: " ")
-                  : Self.scopes),
+            .init(name: "scope", value: scopes.joined(separator: " ")),
         ]
         guard let authURL = comps.url else { throw SpotifyAuthError.network }
 
@@ -178,39 +139,43 @@ public final class SpotifyAuth: NSObject, ObservableObject {
         }
 
         var tokens = try await exchangeCode(code, verifier: verifier)
-        // Bind the grant to the account that asked for it. Consent happened
-        // inside this session; anyone else signing in on this Mac gets nothing.
+        // Bind the grant to the account that asked for it.
         tokens.owner = SupabaseConfig.client.auth.currentUser?.id
         Keychain.save(tokens)
-        // Read it back rather than trusting the write. A keychain item that
-        // didn't land leaves the app believing it holds a grant it doesn't, and
-        // the first symptom is Spotify refusing a write for reasons nothing on
-        // screen can explain.
+        // Read it back rather than trusting the write.
         guard let stored = Keychain.load() else { throw SpotifyAuthError.network }
-        AccountConnection.push(stored)
+        await AccountConnection.save(stored)
         publish(stored)
         // A fresh grant can be a different account than the last one.
         profile = nil
 
-        // Consent is not the same as consent *granted*: Spotify will hand back a
-        // token carrying fewer scopes than were asked for. Anything that needed
-        // write access has to hear about that here, while the user is still in
-        // front of the thing they just agreed to.
+        // Spotify can grant fewer scopes than asked. Report it now, while the user
+        // is still looking.
         if includingWrite, !canWrite { throw SpotifyAuthError.writeDeclined }
     }
 
-    /// What Spotify actually granted this connection, as it wrote it.
-    ///
-    /// Read straight from the stored grant rather than from `canWrite`, because
-    /// the whole question when a write is refused is whether those two agree.
+    /// What Spotify actually granted, straight from the stored grant.
     public var grantedScopes: String? { Self.currentTokens()?.scope }
 
-    /// A token refreshed regardless of the stored expiry.
-    ///
-    /// For the one case `validAccessToken` can't cover: Spotify answered 401 to
-    /// a token we believed was live. Clocks drift, tokens get revoked from the
-    /// account page, and a long import can outlive its own token between the
-    /// planning and the writing.
+    private var heldScopes: Set<String> {
+        Set((grantedScopes ?? "").split(separator: " ").map(String.init))
+    }
+
+    private var holdsHistoryScope: Bool { heldScopes.isSuperset(of: Self.historyScopes) }
+
+    /// Turns recap syncing on or off for the account. Turning it on without the
+    /// history scope asks Spotify for it first. Plays already copied are kept.
+    public func setHistorySync(_ on: Bool) async throws {
+        if on, !holdsHistoryScope {
+            try await connect(includingHistory: true)
+            guard holdsHistoryScope else { throw SpotifyAuthError.historyDeclined }
+        }
+        try await AccountConnection.setHistorySync(on)
+        historySync = on
+    }
+
+    /// A token refreshed regardless of expiry, for when Spotify 401s a token we
+    /// thought was live (clock drift, revocation, a long import).
     public func refreshedAccessToken() async throws -> String {
         guard let stored = Self.currentTokens() else { throw SpotifyAuthError.notAuthorized }
         return try await refreshAndStore(stored)
@@ -224,14 +189,9 @@ public final class SpotifyAuth: NSObject, ObservableObject {
         publish(nil)
     }
 
-    /// Signing out hides the connection without ending it.
-    ///
-    /// The grant stays in the keychain, stamped with its owner, for the same
-    /// reason the local library does: signing out isn't a request to disconnect
-    /// Spotify, and the same person signing back in shouldn't have to consent
-    /// again. It is unreachable while nobody is signed in — `currentTokens`
-    /// won't hand it back without a matching user — and a *different* account
-    /// signing in deletes it outright.
+    /// Hides the connection without ending it. The grant stays in the keychain
+    /// with its owner, so the same user signing back in doesn't re-consent. A
+    /// different account signing in deletes it.
     public func signedOut() {
         claimedAccount = nil
         profileLoad?.cancel()
@@ -239,10 +199,8 @@ public final class SpotifyAuth: NSObject, ObservableObject {
         publish(nil)
     }
 
-    /// Claims, or discards, the stored grant for the account signing in.
-    ///
-    /// Called before the device's record of the last account is overwritten, so
-    /// `previous` still names whoever was signed in until now.
+    /// Claims or discards the stored grant for the account signing in. Called
+    /// before the last-account record changes, so `previous` is still the old user.
     public func accountDidChange(to userID: UUID, previous: String?) {
         guard claimedAccount != userID else { return }
         claimedAccount = userID
@@ -260,9 +218,8 @@ public final class SpotifyAuth: NSObject, ObservableObject {
                 }
                 publish(claimed)
             } else {
-                // Another account's grant, leaving with them. Local only: the
-                // server row that `disconnect` deletes belongs to whoever is
-                // signed in *now*, which is the wrong person entirely.
+                // Another account's grant. Local only: the server row belongs to whoever's
+                // signed in now.
                 Keychain.clear()
                 publish(nil)
             }
@@ -273,11 +230,7 @@ public final class SpotifyAuth: NSObject, ObservableObject {
         Task { await adoptAccountConnection() }
     }
 
-    /// Fetches the account behind the token, once.
-    ///
-    /// Silent on failure by design: this only feeds a name and an avatar, and a
-    /// connection that works shouldn't start reporting errors because one
-    /// cosmetic request didn't land.
+    /// Fetches the account behind the token once. Silent on failure; it's cosmetic.
     public func loadProfile(using client: SpotifyClient, force: Bool = false) {
         guard isAuthorized else { return }
         if profile != nil, !force { return }
@@ -301,10 +254,8 @@ public final class SpotifyAuth: NSObject, ObservableObject {
         return try await refreshAndStore(stored)
     }
 
-    /// Refreshes, stores and publishes the grant.
-    ///
-    /// Another device may have rotated the refresh token since this one last
-    /// used it; when ours is refused, the account's copy gets one try.
+    /// Refreshes, stores and publishes the grant. If our refresh token was
+    /// rotated by another device, the account's copy gets one try.
     private func refreshAndStore(_ current: StoredTokens) async throws -> String {
         var stored = current
         let refreshed: StoredTokens
@@ -320,8 +271,7 @@ public final class SpotifyAuth: NSObject, ObservableObject {
         stored.expiry = refreshed.expiry
         // Spotify doesn't always send a new refresh token; keep the old one if so.
         if !refreshed.refreshToken.isEmpty { stored.refreshToken = refreshed.refreshToken }
-        // A refresh can't widen a grant, so a missing scope here means "still
-        // whatever it was" rather than "nothing".
+        // A refresh can't widen a grant, so no scope means unchanged.
         if let scope = refreshed.scope, !scope.isEmpty { stored.scope = scope }
         Keychain.save(stored)
         AccountConnection.push(stored)
@@ -330,26 +280,23 @@ public final class SpotifyAuth: NSObject, ObservableObject {
         return stored.accessToken
     }
 
-    /// Picks up a connection made on another device (or the web).
-    ///
-    /// Called at launch. A device that already holds a grant publishes it
-    /// instead, so connections made before the account copy existed reach the
-    /// other devices without a reconnect. The Supabase session restores
-    /// asynchronously, so this waits for a signed-in user first.
+    /// Adopts a connection made on another device or the web. A device with its
+    /// own grant publishes it instead. Waits for Supabase to restore a user first.
     public func adoptAccountConnection() async {
         // ponytail: polls up to ~20s for the session; hook the auth-state stream if launches get slower.
         for _ in 0..<20 where SupabaseConfig.client.auth.currentUser == nil {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
         }
         guard let userID = SupabaseConfig.client.auth.currentUser?.id else { return }
-        // Only ever publishes a grant this account owns. The check used to be
-        // absent, and the result was the leak in reverse: the outgoing user's
-        // refresh token written straight into the incoming user's row.
+        // Only publish a grant this account owns.
         if let local = Self.currentTokens() {
-            if await AccountConnection.fetch() == nil { AccountConnection.push(local) }
+            let remote = await AccountConnection.fetch()
+            if remote == nil { AccountConnection.push(local) }
+            historySync = remote?.historySync ?? false
             return
         }
         guard let remote = await AccountConnection.fetch() else { return }
+        historySync = remote.historySync
         let seed = StoredTokens(accessToken: "", refreshToken: remote.refreshToken,
                                 expiry: .distantPast, scope: remote.scope, owner: userID)
         guard (try? await refreshAndStore(seed)) != nil else { return }
@@ -454,8 +401,7 @@ public final class SpotifyAuth: NSObject, ObservableObject {
         let access_token: String
         let refresh_token: String?
         let expires_in: Int
-        /// Space-separated list of what Spotify actually granted, which is not
-        /// always what was asked for.
+        /// Space-separated scopes Spotify granted, which may be fewer than asked.
         let scope: String?
     }
 }
@@ -485,21 +431,11 @@ struct StoredTokens: Codable {
     var accessToken: String
     var refreshToken: String
     var expiry: Date
-    /// Scopes this grant carries. Optional so blobs written before Mixtape
-    /// tracked scopes still decode — they come back nil, which is read as
-    /// "granted under the old, narrower set", which is exactly what they were.
+    /// Scopes this grant carries. Nil for old blobs, read as the old narrower set.
     var scope: String?
-    /// Which Mixtape account this grant belongs to.
-    ///
-    /// A Spotify connection is a property of the account, not of the Mac it was
-    /// made on. Without this the keychain item was a single device-global blob:
-    /// signing out and into a second account left the first one's Spotify on
-    /// screen, and `adoptAccountConnection` went on to publish that grant into
-    /// the *new* account's `spotify_connections` row — handing one person's
-    /// Spotify to another person's devices.
-    ///
-    /// Optional so grants written before this decode; a nil owner is resolved
-    /// once, at the next sign-in, by `accountDidChange`.
+    /// The Mixtape account this grant belongs to, so one person's Spotify never
+    /// shows up for another account. Nil for old grants; resolved at the next
+    /// sign-in by accountDidChange.
     var owner: UUID?
 }
 
@@ -511,27 +447,39 @@ private enum AccountConnection {
         let user_id: UUID
         let refresh_token: String
         let scope: String?
+        /// Left nil on token writes so they never touch the setting.
+        var history_sync: Bool? = nil
     }
 
-    static func fetch() async -> (refreshToken: String, scope: String?)? {
+    static func fetch() async -> (refreshToken: String, scope: String?, historySync: Bool)? {
         let client = SupabaseConfig.client
         guard let userID = client.auth.currentUser?.id,
               let rows: [Row] = try? await client.from("spotify_connections")
                 .select().eq("user_id", value: userID).limit(1).execute().value,
               let row = rows.first
         else { return nil }
-        return (row.refresh_token, row.scope)
+        return (row.refresh_token, row.scope, row.history_sync ?? false)
     }
 
     static func push(_ tokens: StoredTokens) {
+        Task { await save(tokens) }
+    }
+
+    static func save(_ tokens: StoredTokens) async {
         let client = SupabaseConfig.client
-        // `tokens.owner == userID` is the load-bearing half: without it, a grant
-        // left behind by the last account was published into whichever account
-        // happened to be signed in when the app next looked.
+        // The owner check keeps a previous account's grant out of this account's row.
         guard let userID = client.auth.currentUser?.id, !tokens.refreshToken.isEmpty,
               tokens.owner == userID else { return }
         let row = Row(user_id: userID, refresh_token: tokens.refreshToken, scope: tokens.scope)
-        Task { _ = try? await client.from("spotify_connections").upsert(row).execute() }
+        _ = try? await client.from("spotify_connections").upsert(row).execute()
+    }
+
+    /// An update, not an upsert: this device's refresh token may be older than the row's.
+    static func setHistorySync(_ on: Bool) async throws {
+        let client = SupabaseConfig.client
+        guard let userID = client.auth.currentUser?.id else { throw SpotifyAuthError.notAuthorized }
+        try await client.from("spotify_connections")
+            .update(["history_sync": on]).eq("user_id", value: userID).execute()
     }
 
     static func delete() {
@@ -549,6 +497,7 @@ public enum SpotifyAuthError: LocalizedError {
     case network
     /// Consent came back without the permissions the action needed.
     case writeDeclined
+    case historyDeclined
 
     public var errorDescription: String? {
         switch self {
@@ -557,6 +506,8 @@ public enum SpotifyAuthError: LocalizedError {
         case .network:       return "Couldn't reach Spotify. Check your connection and try again."
         case .writeDeclined:
             return "Spotify didn't grant permission to change your account, so nothing was sent."
+        case .historyDeclined:
+            return "Spotify didn't grant access to your listening history."
         }
     }
 }

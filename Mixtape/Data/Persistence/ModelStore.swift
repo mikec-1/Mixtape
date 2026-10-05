@@ -1,40 +1,22 @@
-// ModelStore.swift
-// Mixtape — Data Layer
-//
 // Which SwiftData store is open, and whose it is.
 
 import Foundation
 import SwiftData
 import OSLog
 
-/// The store that is open right now, and the account it belongs to.
-///
-/// Every account gets its own file. Signing out leaves that file exactly where
-/// it is, so signing back in is a file open rather than a five-minute re-pull
-/// of a library this device already had — which is what "log out of Spotify,
-/// log back in, everything is where you left it" actually costs.
-///
-/// Before this there was one `default.store` that accounts took turns in, and
-/// a different user signing in wiped it. Coming back to your own account
-/// therefore showed 0 songs, then spent minutes re-downloading rows and covers
-/// the disk had held the whole time.
-///
-/// The rule that falls out: nothing may *hold* a `ModelContext`. It belongs to
-/// whichever store is open now, so everything that reads the database asks
-/// `shared` for one at the moment it reads.
+/// The open store and its owner. Each account has its own file, left in place on
+/// sign-out, so signing back in just reopens it instead of re-pulling.
+/// Nothing may hold a `ModelContext`: ask `shared` for one each time.
 @MainActor
 public final class ModelStore {
 
     public static let shared = ModelStore()
 
-    /// The marker `AppDependencies` writes on sign-in. Read here as well, so
-    /// the right file is open before auth has restored anything.
+    /// Written by `AppDependencies` on sign-in; read here so the right file opens before auth restores.
     public static let lastUserKey = "mix.lastSignedInUserID"
 
-    /// Built on demand so that `open(for:)` can *release* the outgoing store
-    /// before anything touches its file — the one-time adoption in
-    /// `ModelContainerSetup` renames `default.store`, and renaming a database
-    /// SQLite still has open is asking for it.
+    /// Built on demand so `open(for:)` can release the old store before its file is
+    /// renamed (see `ModelContainerSetup`).
     public var container: ModelContainer {
         if let openContainer { return openContainer }
         let made = ModelContainerSetup.makeContainer(for: ownerID)
@@ -44,16 +26,14 @@ public final class ModelStore {
 
     private var openContainer: ModelContainer?
 
-    /// The account whose file is open. `nil` only before anyone has ever
-    /// signed in on this device.
+    /// Nil only if nobody has signed in on this device.
     public private(set) var ownerID: UUID?
 
-    /// The main-actor context. Computed on purpose — see the type's note.
+    /// Computed on purpose, see the type's note.
     public var context: ModelContext { container.mainContext }
 
     private init() {
-        // Whoever was last signed in is whose rows are on disk, so the right
-        // file is known synchronously, long before the session restores.
+        // The last signed-in user owns what's on disk, known before the session restores.
         ownerID = UserDefaults.standard.string(forKey: Self.lastUserKey)
             .flatMap(UUID.init(uuidString:))
     }
@@ -62,12 +42,9 @@ public final class ModelStore {
     @discardableResult
     public func open(for userID: UUID) -> Bool {
         guard ownerID != userID else { return false }
-        // Whatever the outgoing account had in flight is theirs, and belongs in
-        // their file rather than on the floor.
+        // Save the outgoing account's pending changes into its own file.
         try? container.mainContext.save()
-        // Every cached cover was keyed on a row in the file about to close —
-        // and the scratch context holding them is the last thing keeping the
-        // outgoing container alive.
+        // Cached covers belong to the closing store, and the scratch context would keep it alive.
         ArtworkProvider.shared.invalidateAll()
         openContainer = nil
         ownerID = userID

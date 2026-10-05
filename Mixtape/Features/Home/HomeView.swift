@@ -1,50 +1,27 @@
-// HomeView.swift
-// Mixtape — Features/Home
-//
-// The library half of the landing page: a personalised greeting, one shelf of
-// things to resume, recent artists, and the library carousels.
-//
-// This file is split three ways on purpose.
-//
-//   HomeSections   — the content, with no scroll view and no page margins, so
-//                    it can be dropped into the merged Home/Discover landing as
-//                    its opening sections. Drawn in bands (see `HomeBands`), so
-//                    the landing can put the greeting above its own "Made for
-//                    you" and the library rows below it.
-//   HomeStatsCard  — the listening-stats card, separate because it sits at the
-//                    very bottom of that merged page, under the genres.
-//   HomeView       — the two above inside a ScrollView, for any host that still
-//                    wants Home as a page of its own (iOS without Discover).
-//
-// It used to be one view that owned its own ScrollView, which is why Home had
-// to be a *tab* to appear at all. Now it's sections, and sections compose.
-//
-// No new injected dependencies: uses existing AppDependencies (deps),
-// PlaybackEngine (engine) and LibraryService (library) environment objects.
-// Playback is routed through the injected `onPlay` closure so online tracks
-// can be handled by the host's OnlinePlaybackCoordinator — this file never
-// calls engine.play directly. Artist taps go through `onArtist`.
+// The library half of the landing page: greeting, a resume shelf, recent
+// artists and the library carousels.
+// HomeSections  - content only, no scroll view or margins, drawn in bands
+// (see `HomeBands`) so the landing can place them around its
+// own "Made for you".
+// HomeStatsCard - the listening-stats card, drawn last on the landing.
+// HomeView      - both inside a ScrollView, for hosts that want Home as a page.
+// Playback goes through the injected `onPlay` so the host can route online
+// tracks via OnlinePlaybackCoordinator. Artist taps go through `onArtist`.
 
 import SwiftUI
 import SwiftData
 import Combine
 
 // MARK: - Quick-link destinations
-//
-// Platform-agnostic enum the quick-link chips emit. The host (MainTabView on
-// iOS, MacContentRouter on macOS) maps it onto its own navigation model.
+// Quick-link chip targets. The host maps them onto its own navigation.
 
 public enum HomeQuickLink: Hashable {
     case songs, albums, artists, playlists
 }
 
 // MARK: - Bands
-//
-// Which stretches of Home to draw. The merged landing needs the greeting and
-// the shelf *above* "Made for you" and the library rows *below* it — otherwise
-// you scroll past five bands of your own library before reaching the thing the
-// page is named after. Rather than forking the view, the host renders it twice
-// and asks for a different band each time.
+// Which parts of Home to draw. The landing renders Home twice, top bands above
+// its "Made for you" and library bands below.
 
 public struct HomeBands: OptionSet, Sendable {
     public let rawValue: Int
@@ -54,9 +31,7 @@ public struct HomeBands: OptionSet, Sendable {
     public static let top     = HomeBands(rawValue: 1 << 0)
     /// Recent artists, "Made for you", recently added, favourites.
     public static let library = HomeBands(rawValue: 1 << 1)
-    /// The smart-playlist shelves. Their own band because the landing wants
-    /// them up with "Because you listened to…", above Trending now, and the
-    /// rest of the library rows stay where they are.
+    /// Smart-playlist shelves, placed near "Because you listened to...".
     public static let smart   = HomeBands(rawValue: 1 << 2)
 
     public static let all: HomeBands = [.top, .smart, .library]
@@ -64,17 +39,8 @@ public struct HomeBands: OptionSet, Sendable {
 
 // MARK: - Sections
 
-/// Home's derived shelves, computed once per real change.
-///
-/// Every shelf on this page was a computed property, and several are read twice
-/// per body evaluation — once to ask whether they're empty, once to draw them.
-/// "Made for you" was the worst of them: it ran a full all-time listening-stats
-/// pass and several filters over the whole library, from a view body, on every
-/// re-render including ones caused by a hover or the player bar ticking.
-///
-/// The inputs are the library (via its `revision`), the play history, and the
-/// artist artwork that arrives from the network later. When none of those moved,
-/// the shelves can't have moved either.
+/// Home's derived shelves, recomputed only when the library revision, play
+/// history or artist artwork changes, not on every body evaluation.
 @MainActor
 private final class HomeShelvesMemo: ObservableObject {
 
@@ -93,29 +59,22 @@ private final class HomeShelvesMemo: ObservableObject {
     @Published private(set) var recommendations: [Track] = []
     @Published private(set) var artists: [HomeArtist] = []
 
-    /// Stable key → where to read that played song's cover from. See the
-    /// assignment in `update` for why it is not simply `.track(track.id)`.
+    /// Stable key -> where to read a played song's cover from. See `update`.
     @Published private(set) var playedArtwork: [String: ArtworkRef] = [:]
 
-    /// The artwork pointer for a played song, falling back to its own id so a
-    /// row that has never been through `update` still draws.
+    /// Artwork for a played song, falling back to its own id.
     func artworkRef(for track: Track) -> ArtworkRef {
         playedArtwork[Self.stableKey(track)] ?? .track(track.id)
     }
 
-    // Online tracks are minted with a fresh UUID `id` every play, so two plays
-    // of the same song are *different* Track values. The stable identity for an
-    // online track is its file hash; local tracks already have a stable `id`.
+    // Online tracks get a new UUID each play, so they're keyed by file hash. Local
+    // tracks use their `id`.
     nonisolated static func stableKey(_ track: Track) -> String {
         track.file.fileHash.isEmpty ? track.id.uuidString : track.file.fileHash
     }
 
-    /// What counts as "the same song" on the recently-played strip.
-    ///
-    /// `stableKey` is an identity: a library row and the online row minted for
-    /// the same song have different ones, which is why one song could appear
-    /// twice in the strip. The shelf is a list of songs, so it dedupes by what
-    /// it prints.
+    /// "Same song" for the recently-played strip: by what it prints, since a library
+    /// row and an online row for one song have different stable keys.
     nonisolated private static func songKey(_ track: Track) -> String {
         let t = track.displayTitle.lowercased()
         let a = track.displayArtistName.lowercased()
@@ -142,40 +101,17 @@ private final class HomeShelvesMemo: ObservableObject {
                        remoteArtKeys: remoteArtwork.count)
         guard key != next else { return }
 
-        // Hold still while the library is mid-flight.
-        //
-        // The key is doing its job: `revision` really has changed. The problem
-        // is that a sync publishes the library over and over — pull, artwork,
-        // refresh — and each publish is a real change, so this rebuilt 14-20
-        // times per sync, measured. Every rebuild but the last was of a library
-        // that was about to change again.
-        //
-        // Nothing is lost by waiting: `activity` is `@Published`, so returning
-        // to `.idle` re-evaluates the body that calls this, and the key is left
-        // stale on purpose so that pass rebuilds. The one case that must not
-        // wait is the first build, which has nothing to show yet.
+        // Wait while the library is mid-sync: a sync publishes many times, and every
+        // rebuild but the last would be thrown away. `activity` is `@Published`, so going
+        // idle re-runs this with the stale key. The first build never waits.
         if key != nil, library.activity != .idle { return }
 
         key = next
 
-        // Everything below happens in a task, never inline.
-        //
-        // `update` is called from `body` (see `lists`), and these outputs are
-        // `@Published` — assigning one during a view update is the
-        // "Publishing changes from within view updates is not allowed"
-        // warning, and the undefined behaviour it names shows up as dropped
-        // frames. Hopping to a task lets the current update finish first.
-        //
-        // Split deliberately in two.
-        //
-        // The history-derived shelves are bounded by the size of the play
-        // history (tens of rows) and need `artistRow`, which is main-actor
-        // state, so they stay here. The library-derived ones are a sort, a
-        // filter and a bucketing pass over the *whole* library — 2154 tracks,
-        // ~80 ms each and 18 rebuilds a session, with sampled main-thread hangs
-        // of 303-482 ms landing squarely inside them. Those go off the actor.
-        // A newer key supersedes an in-flight pass; its results would only be
-        // overwritten, and the library it was computed from is already stale.
+        // Outputs are `@Published` and this is called from `body`, so work happens in a
+        // task to avoid publishing during a view update.
+        // History shelves are small and need main-actor state, so they stay here. The
+        // whole-library passes run off the main actor. A newer key cancels an in-flight pass.
         inFlight?.cancel()
         inFlight = Task { [weak self] in
             guard let self, !Task.isCancelled else { return }
@@ -184,16 +120,8 @@ private final class HomeShelvesMemo: ObservableObject {
                 let recents = Array(Self.deduped(history).prefix(12))
                 self.recentlyPlayed = recents
 
-                // Where a played song's cover lives.
-                //
-                // A history row is a snapshot of the song as it was played, and
-                // an online one is minted with a fresh `id` every time — so
-                // `.track(track.id)` names a cover the store has never heard
-                // of, and the tile drew a placeholder for a song whose artwork
-                // was sitting in the library the whole time. The recording is
-                // matched the way the rest of the app matches recordings, and
-                // only the artwork is borrowed: the row itself stays exactly
-                // the song that was played.
+                // Borrow the library's cover for a played song. Online history rows get a new id
+                // each play, so `.track(track.id)` would point at nothing.
                 var refs: [String: ArtworkRef] = [:]
                 for track in recents {
                     let key = Self.stableKey(track)
@@ -215,11 +143,8 @@ private final class HomeShelvesMemo: ObservableObject {
                 // Distinct artists from the play history, in order.
                 var seenNames = Set<String>()
                 var rows: [HomeArtist] = []
-                // Split, not raw: a song stored as "Dave, Stormzy" is two
-                // artists, and one shelf tile reading "Dave, Stormzy" opens on
-                // nothing. The stored `artistName` stays as it is — it's part
-                // of the track's identity — so the credit is drawn apart here,
-                // at the point it's displayed.
+                // Split the credit so "Dave, Stormzy" becomes two artists. The stored
+                // `artistName` stays as is (it's part of the identity).
                 outer: for track in history {
                     for name in ImportService.creditedArtists(from: track.artistName) {
                         let lowered = name.lowercased()
@@ -239,10 +164,8 @@ private final class HomeShelvesMemo: ObservableObject {
             let topNames     = stats().topArtists.map(\.name)
             let recentKeys   = Set(historyKeys.prefix(12))
 
-            // `Task.detached` around a `nonisolated` *synchronous* body. Not
-            // `nonisolated async` — under Swift 6.2 (SE-0461) that runs on the
-            // caller's actor, which here is the main one. See the notes in
-            // `LibrarySnapshotReader`.
+            // `Task.detached`, not `nonisolated async`, which runs on the caller's actor
+            // under SE-0461. See `LibrarySnapshotReader`.
             let shelves = await Task.detached(priority: .userInitiated) {
                 Self.libraryShelves(tracks: tracks,
                                     favouriteIDs: favouriteIDs,
@@ -262,27 +185,23 @@ private final class HomeShelvesMemo: ObservableObject {
         var recommendations: [Track]
     }
 
-    /// The whole-library passes. Pure: everything it needs is passed in, so it
-    /// can be run anywhere. Keep it that way — reaching for main-actor state
-    /// from in here puts the sort back on the thread that draws.
+    /// The whole-library passes. Pure; keep main-actor state out of here.
     nonisolated private static func libraryShelves(tracks: [Track],
                                                    favouriteIDs: Set<UUID>,
                                                    topNames: [String],
                                                    recentKeys: Set<String>) -> LibraryShelves {
-        // Sorted once and reused by both the shelf and the recommendation
-        // fallback below, rather than sorting the whole library twice.
+        // Sorted once, reused by the shelf and the recommendation fallback.
         let newestFirst = tracks.sorted { $0.dateImported > $1.dateImported }
         let recentlyAdded = Array(deduped(newestFirst).prefix(12))
 
         let favouriteTracks = tracks.filter { favouriteIDs.contains($0.id) }
         let favourites = Array(deduped(favouriteTracks).prefix(12))
 
-        // "Made for you": the user's most-played artists' library tracks, minus
-        // anything they just heard, topped up from favourites and new arrivals.
+        // "Made for you": top artists' library tracks minus recent plays, topped up from
+        // favourites and new arrivals.
         var picks: [Track] = []
         if !topNames.isEmpty {
-            // One pass over the library, bucketed by artist, instead of a full
-            // scan per top artist.
+            // One pass bucketed by artist instead of a scan per top artist.
             var byArtist: [String: [Track]] = [:]
             for track in tracks {
                 byArtist[track.artistName.lowercased(), default: []].append(track)
@@ -308,41 +227,29 @@ public struct HomeSections: View {
     @EnvironmentObject private var engine: PlaybackEngine
     @EnvironmentObject private var library: LibraryService
 
-    /// Drives "Recently played" — `markPlayed` has been recording playlist plays
-    /// all along; this is the first surface that reads them back.
+    /// For "Recently played" playlists.
     @ObservedObject private var meta = PlaylistMetadataService.shared
 
-    /// Observed, not just read: deleting a smart playlist doesn't touch the
-    /// library, so without this the shelf kept drawing rows that no longer
-    /// existed until something unrelated moved.
+    /// Observed so deleting a smart playlist updates the shelf.
     @EnvironmentObject private var smartService: SmartPlaylistService
 
     /// Invoked when a quick-link chip is tapped. Host translates navigation.
     private let onQuickLink: (HomeQuickLink) -> Void
 
-    /// Invoked to play a track in a given context. The host decides whether to
-    /// route through the online coordinator (Discover tracks) or the offline
-    /// engine — this view stays playback-agnostic. Defaults to a no-op so
-    /// previews / compilation stay safe.
+    /// Plays a track in a context. The host routes online vs. local playback. No-op by default.
     private let onPlay: (_ track: Track, _ context: [Track], _ origin: String) -> Void
 
-    /// Invoked when a recent-artist avatar is tapped. Defaults to a no-op; the
-    /// host wires it to its artist destination.
+    /// Recent-artist tap. No-op by default.
     private let onArtist: (_ name: String) -> Void
 
-    /// Invoked when a "Recently played" playlist card is tapped. macOS swaps the
-    /// content column through this; iOS ignores it and pushes `navPlaylist`
-    /// onto the enclosing NavigationStack instead.
+    /// "Recently played" playlist tap. macOS swaps the content column; iOS pushes
+    /// `navPlaylist` instead.
     private let onPlaylist: (Playlist) -> Void
 
-    /// Invoked when a "Made by Mixtape" card is tapped. macOS swaps the content
-    /// column; iOS pushes onto its own stack and ignores this.
+    /// "Made by Mixtape" tap. macOS swaps the content column; iOS pushes.
     private let onSmartPlaylist: (SmartPlaylist) -> Void
 
-    /// The merged landing has an online "Made for you" of its own, built from
-    /// the same listening history but with a whole catalogue behind it. Two
-    /// sections under one name is worse than either, so the host that shows the
-    /// online one turns this off.
+    /// Off when the host shows its own online "Made for you".
     private let showsRecommendations: Bool
 
     /// Which stretches of the page this instance draws. See `HomeBands`.
@@ -353,18 +260,12 @@ public struct HomeSections: View {
     @State private var navSmart: SmartPlaylist? = nil
     #endif
 
-    /// "Recent artists" is the one band here that grows without bound — twelve
-    /// circles is three rows on a narrow window, all of it above the things
-    /// people actually came for. Collapsed to one row's worth until asked.
+    /// Recent artists collapse to one row until expanded.
     @State private var showsAllArtists = false
 
-    /// Smart playlists, already resolved to their tracks.
-    ///
-    /// Resolving is a scan of the whole library per playlist, so it happens in
-    /// `.task` keyed on the library revision rather than in `body` — the same
-    /// bargain `HomeShelvesMemo` makes for the other shelves.
     /// A smart playlist with the rows its rule currently matches.
     typealias SmartEntry = (playlist: SmartPlaylist, tracks: [Track])
+    /// Smart playlists resolved to their tracks, in `.task` rather than `body` since it scans the library.
     @State private var allSmartLists: [SmartEntry] = []
     @State private var showsSmartEditor = false
     @State private var showsTapes = false
@@ -374,12 +275,10 @@ public struct HomeSections: View {
     /// "This week, one year ago", most played first.
     @State private var yearAgo: [Track] = []
 
-    /// Spotify-sourced artist profile images for "Recent artists", keyed by
-    /// lowercased name. Discover-only artists have no library `Artist` row, so we
-    /// fetch their photo from `deps.spotifyClient` and cache the bytes here.
+    /// Spotify profile images for Discover-only recent artists (no library
+    /// `Artist` row), keyed by lowercased name.
     @State private var remoteArtistArtwork: [String: Data] = [:]
 
-    /// Home's shelves, rebuilt only when the library or the play history moves.
     /// See `HomeShelvesMemo`.
     @StateObject private var shelves = HomeShelvesMemo()
 
@@ -419,9 +318,7 @@ public struct HomeSections: View {
         return nil
     }
 
-    /// "Good evening, Mike" — the name folds into the greeting rather than
-    /// sitting under it as a second grey line, which read like a subtitle for
-    /// the page instead of an address to the person.
+    /// "Good evening, Mike".
     private var greetingLine: String {
         guard let displayName else { return greeting }
         // Only the first name: "Good evening, Mike Schmidt" is a form letter.
@@ -439,44 +336,29 @@ public struct HomeSections: View {
         }
     }
 
-    /// One quiet line of context under the greeting. Prefers what the user was
-    /// doing over what the library contains — resuming is the common intent.
+    /// One line under the greeting, preferring what the user was doing.
     private var greetingSubline: String {
         if let last = recentlyPlayed.first {
             return "Pick up where you left off: \(last.title)"
         }
         if isLibraryEmpty { return "Your library is waiting to be filled" }
-        // Deliberately nothing. A song-and-artist tally is a statistic about
-        // the database, not a reason to open the app — and it was the one line
-        // of the greeting that never changed.
+        // Intentionally empty for now.
         return ""
     }
 
-    /// Artwork the page tints itself from — whatever the user last played, so
-    /// the landing carries the colour of the thing they'll most likely resume.
+    /// Artwork the page is tinted from: the last played song.
     public static func washSource(engine: PlaybackEngine, library: LibraryService) -> Data? {
-        // `max(by:)` rather than `sorted().first`: this is read from a view
-        // body, so it ran on every redraw of Home — a full sort of the whole
-        // library to answer a question with one winner.
         engine.recentlyPlayed.first?.displayArtwork
             ?? library.tracks.max { $0.dateImported < $1.dateImported }?.displayArtwork
     }
 
-    /// Whether the `.library` band would draw anything.
-    ///
-    /// The merged landing puts a section rule above that band, and a rule above
-    /// nothing is a line drawn across the page for no reason. Tracks in the
-    /// library fill "Recently added"; plays with no library behind them (a
-    /// Discover-only user) still fill "Recent artists" — so either one is enough.
+    /// Whether the `.library` band draws anything, so the landing doesn't draw a rule
+    /// above nothing. Library tracks or recent plays are enough.
     public static func hasLibraryContent(engine: PlaybackEngine, library: LibraryService) -> Bool {
         !library.tracks.isEmpty || !engine.recentlyPlayed.isEmpty
     }
 
-    /// Brings `shelves` up to date, cheaply, and hands it back.
-    ///
-    /// Read by every shelf below, so a body evaluation caused by something
-    /// unrelated costs one key comparison instead of a stats pass and several
-    /// scans of the whole library.
+    /// Updates `shelves` if its inputs moved and returns it.
     private var lists: HomeShelvesMemo {
         shelves.update(revision:      library.revision,
                        history:       engine.recentlyPlayed,
@@ -486,28 +368,21 @@ public struct HomeSections: View {
         return shelves
     }
 
-    /// Recently played, de-duplicated by stable key (see `deduped`). Online
-    /// tracks get a fresh UUID per play, so without this the same song appears
-    /// multiple times in the carousel.
+    /// Recently played, deduped by stable key.
     private var recentlyPlayed: [Track] { lists.recentlyPlayed }
 
     private var recentlyAdded: [Track] { lists.recentlyAdded }
 
     private var favourites: [Track] { lists.favourites }
 
-    /// "Made for you" — recommendations derived purely from local data (no
-    /// network). The user's top artists from listening history, their library
-    /// tracks the user *hasn't* played recently, falling back to favourites /
-    /// most-imported so the row is never empty.
+    /// "Made for you" from local data only: top artists' tracks not played recently,
+    /// falling back to favourites and recent imports.
     private var recommendations: [Track] { lists.recommendations }
 
-    /// Circular artist row — distinct artists from recently-played tracks,
-    /// matched to a library `Artist` (for artwork) where one exists.
+    /// Distinct artists from recent plays, matched to library `Artist`s for artwork.
     private var recentArtists: [HomeArtist] { lists.artists }
 
-    /// Playlists the user actually opened and played, most recent first. Only
-    /// playlists that still exist are listed — a deleted one leaves its date
-    /// behind in the store.
+    /// Playlists the user played, newest first. Deleted ones are skipped.
     private var recentPlaylists: [Playlist] {
         meta.playlistLastPlayedDates
             .sorted { $0.value > $1.value }
@@ -518,26 +393,13 @@ public struct HomeSections: View {
 
     private var isLibraryEmpty: Bool { library.tracks.isEmpty }
 
-    /// True when there is genuinely nothing to show — no local library *and* no
-    /// played history. A Discover-only user has an empty library but plenty to
-    /// resume, so the empty state must not key off the library alone.
+    /// Nothing to show: no library and no play history. Discover-only users still have history.
     private var hasNothingToShow: Bool { isLibraryEmpty && recentlyPlayed.isEmpty }
 
     // MARK: The shelf
 
-    /// One shelf of one-click resumes, songs and playlists together.
-    ///
-    /// These used to be two bands — a grid of recent songs, then a whole
-    /// separate carousel of recent playlists under its own heading — which cost
-    /// most of a screen to say "here are things you were just listening to"
-    /// twice. They're the same thought, so they're one shelf, the way Spotify's
-    /// shortcut grid mixes albums, playlists and songs without labelling any of
-    /// them.
-    ///
-    /// Playlists take the last two slots rather than queueing behind the songs:
-    /// a session spent on one playlist fills the recent-songs list with tracks
-    /// from it, and the playlist itself — the thing you'd actually click to
-    /// carry on — would never make the cut.
+    /// One resume shelf mixing songs and playlists. Playlists take the last two slots
+    /// so a playlist session doesn't push the playlist itself off the shelf.
     private var shortcuts: [HomeShortcut] {
         let playlists = recentPlaylists.prefix(2).map { HomeShortcut.playlist($0) }
         let songs = recentlyPlayed
@@ -546,43 +408,32 @@ public struct HomeSections: View {
         return songs + playlists
     }
 
-    /// Eight is two rows of four on a wide window and four rows of two on a
-    /// phone — enough to hold a session's worth of context, few enough that the
-    /// page below it is still on screen.
+    /// Two rows of four on a wide window, four of two on a phone.
     private static let shelfCapacity = 8
 
-    /// Two fixed columns on a phone — the adaptive 220pt minimum fits only one
-    /// on a 390pt screen, which turned the shelf into a list.
+    /// Two fixed columns on a phone; the adaptive minimum only fits one.
     #if os(iOS)
     private static let shortcutColumns = [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)]
     #else
     private static let shortcutColumns = [GridItem(.adaptive(minimum: 220, maximum: 420), spacing: 8)]
     #endif
 
-    /// One row's worth of artists before "Show all". Six wraps to a single row
-    /// at any window width the app is usable at.
+    /// Artists shown before "Show all". One row at any usable width.
     private static let collapsedArtistCount = 6
 
     // MARK: Stable de-dup
-    //
-    // Online tracks are minted with a fresh UUID `id` every play, so two plays
-    // of the same song are *different* Track values that ForEach(id: \.id) would
-    // render twice. The stable identity for an online track is its file hash
-    // ("title|artist"); local tracks already have a stable `id`.
+    // Online tracks get a new UUID each play, so dedupe by stable key instead of `id`.
 
     private func stableKey(_ track: Track) -> String {
         HomeShelvesMemo.stableKey(track)
     }
 
-    /// Identity for the warm-up task: which songs are at the top of the page,
-    /// not how many times they've been played. Keyed on the stable keys so a
-    /// re-render that produces equal-but-fresh online Tracks doesn't restart the
-    /// prefetch it already ran.
-    /// Re-resolves on a library change *or* a smart-playlist change.
+    /// Re-resolves on a library change or a smart-playlist change.
     private var smartKey: String {
         "\(library.revision)#" + smartService.playlists.map(\.id.uuidString).joined(separator: ",")
     }
 
+    /// Warm-up task identity: stable keys of the top songs, so fresh online `Track` values don't restart it.
     private var prefetchKey: String {
         recentlyPlayed.prefix(6).map(stableKey).joined(separator: "\u{1F}")
     }
@@ -602,22 +453,21 @@ public struct HomeSections: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             if bands.contains(.top) {
-                // A phone's Home has its own header row (avatar + filters); the
-                // greeting would be a second title above the first shelf.
+                // A phone's Home has its own header row, so no greeting.
                 #if os(macOS)
                 header
                 #endif
 
+                RecapHomeSlot(recap: deps.recap, onTape: openSmart)
+
                 if hasNothingToShow {
                     emptyState
                 } else {
-                    // One shelf of recent songs and playlists — see `shortcuts`.
                     if !shortcuts.isEmpty { shortcutShelf }
                 }
             }
 
-            // The library half. Each band still guards its own visibility, so an
-            // empty library removes a band rather than leaving a bare heading.
+            // Each band hides itself when empty.
             if bands.contains(.smart), !hasNothingToShow {
                 if !smartLists.isEmpty { smartShelf }
                 mySmartShelf
@@ -637,20 +487,9 @@ public struct HomeSections: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        // Warm the songs at the top of the page while the user is still looking
-        // at it. Every other surface already does this — album, artist and
-        // playlist pages all warm their rows on open, and Discover warms on
-        // hover — which left Home, the one page whose entire purpose is resuming
-        // something, doing the whole search-resolve-download with the user
-        // watching. Songs that can play from their own file are skipped, so this
-        // costs nothing for a local library.
-        //
-        // Re-fires as the recent list changes: the song just played is already
-        // cached, so what this actually warms is whatever moved up behind it.
-        //
-        // Guarded to the band that draws the shelf. The merged landing renders
-        // this view twice, and two instances warming the same six songs is one
-        // wasted round of resolves.
+        // Prewarm the top songs while the page is visible, like album, artist and
+        // playlist pages do. Songs with a local file are skipped. Only the band that
+        // draws the shelf does it, since the landing renders this view twice.
         .task(id: smartKey) {
             guard bands.contains(.smart) else { return }
             let history = PlayHistoryRepository()
@@ -660,9 +499,7 @@ public struct HomeSections: View {
             allSmartLists = service.playlists.compactMap { playlist in
                 guard !SmartPlaylistService.isArchivedTape(playlist) else { return nil }
                 let tracks = deps.smartTracks(playlist)
-                // A rule that can't fill a card isn't a playlist yet. A "Most
-                // Played" of one song was the complaint; the floor applies to
-                // the shipped rules only — see `isWorthShowing`.
+                // Shipped rules need enough songs to fill a card. See `isWorthShowing`.
                 guard SmartPlaylistService.isWorthShowing(playlist, count: tracks.count) else { return nil }
                 return (playlist, tracks)
             }
@@ -710,8 +547,7 @@ public struct HomeSections: View {
                     .foregroundStyle(Color.mixPrimary)
                     .symbolRenderingMode(.hierarchical)
 
-                // A gentle top-to-bottom fade on the type itself, so the title
-                // sits in the wash instead of on top of it.
+                // Top-to-bottom fade on the title so it sits in the wash.
                 Text(greetingLine)
                     .font(.system(size: greetingSize, weight: .bold))
                     .foregroundStyle(
@@ -746,11 +582,7 @@ public struct HomeSections: View {
     }
 
     // MARK: The shelf
-    //
-    // Spotify's top-of-home shortcut grid: short, wide tiles in an adaptive
-    // grid, each one artwork + title with the artwork flush to the leading edge.
-    // Eight of them cost roughly the vertical space the single hero banner used
-    // to, and every one is a one-click resume.
+    // Shortcut grid: short, wide tiles with the artwork on the leading edge.
 
     private var shortcutShelf: some View {
         LazyVGrid(columns: Self.shortcutColumns, spacing: 8) {
@@ -762,16 +594,14 @@ public struct HomeSections: View {
                         artworkData: track.artworkData,
                         artworkRef: lists.artworkRef(for: track),
                         placeholder: MixtapeIcons.track,
-                        // Hovering a tile is the same signal as hovering a
-                        // Discover row: the pointer arrives a moment before the
-                        // click, and that moment is most of the wait.
+                        // Hover means a click is likely; start resolving.
                         onHover: { deps.onlineCoordinator.prefetchResolvable([track], limit: 1) },
                         action: {
                             Haptics.play(.light)
-                            onPlay(track, recentlyPlayed, "Recently played")
+                            onPlay(track, [track], "Recently played")
                         }
                     )
-                    .contextMenu { trackMenu(track, context: recentlyPlayed, origin: "Recently played") }
+                    .contextMenu { trackMenu(track, origin: "Recently played") }
 
                 case .playlist(let playlist):
                     RecentTile(
@@ -784,8 +614,7 @@ public struct HomeSections: View {
                     )
                     .contextMenu { playlistMenu(playlist) }
                     #if os(macOS)
-                    // Same gesture as in the Playlists list: drag a card onto
-                    // the sidebar to keep the playlist there.
+                    // Drag a card onto the sidebar to pin it.
                     .onDrag {
                         NSItemProvider(
                             object: MacAppState.playlistDragPayload(playlist.id) as NSString
@@ -798,22 +627,15 @@ public struct HomeSections: View {
     }
 
     // MARK: Smart playlists
-    //
-    // These have lived in a Library tab that nothing pointed at. They are
-    // generated from the same listening history as everything else on this
-    // page, so they belong on it: one shelf, tap to play, same grammar as the
-    // song cards beside them.
+    // Smart playlists, generated from the same history as the rest of this page.
 
     private var smartShelf: some View {
         smartShelf(title: "Made by Mixtape", entries: smartLists,
                    allTapes: smartService.playlists.contains { $0.rule.tapeStart != nil } ? { showsTapes = true } : nil)
     }
 
-    /// The user's own rules, kept off the shelf above: a card named "lol" sitting
-    /// between Hidden Gems and On Repeat reads as something the app generated.
-    /// Always drawn, even with no rules in it: the `+` at the end of the row is
-    /// the only place on this page you can make one, and a heading over a lone
-    /// plus reads as an invitation rather than an empty shelf.
+    /// The user's own rules, separate from the built-in shelf. Always drawn since the
+    /// trailing `+` is the only place here to make one.
     private var mySmartShelf: some View {
         smartShelf(title: "Your smart playlists", entries: mySmartLists, showsCreate: true)
     }
@@ -890,27 +712,20 @@ public struct HomeSections: View {
 
     // MARK: Carousel
 
-    /// `clipped: true` keeps a carousel's content inside its own column. The
-    /// full-width shelves let their cards bleed past the page padding, but two
-    /// of these sit side by side on a Mac — unclipped, each one paints and
-    /// scrolls across the other, which is what made the scrollbar look like it
-    /// belonged to the whole window.
+    /// `clipped: true` for side-by-side carousels on Mac, so neither paints or scrolls
+    /// over the other.
     private func carousel(title: String, tracks: [Track], clipped: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             SectionHeader(title: title)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(alignment: .top, spacing: 14) {
-                    // Keyed by id, not by the whole value. `Track.id` is a
-                    // content hash, so two genuine duplicates collapse under
-                    // either key — `\.self` bought nothing and cost a full
-                    // struct hash per row, and made any field change tear the
-                    // card down and rebuild it.
+                    // By id: `Track.id` is a content hash, and `\.self` would rebuild the card on any field change.
                     ForEach(tracks, id: \.id) { track in
                         HomeTrackCard(track: track) {
                             Haptics.play(.light)
-                            onPlay(track, tracks, title)
+                            onPlay(track, [track], title)
                         }
-                        .contextMenu { trackMenu(track, context: tracks, origin: title) }
+                        .contextMenu { trackMenu(track, origin: title) }
                     }
                 }
                 .padding(.horizontal, 2)
@@ -920,13 +735,8 @@ public struct HomeSections: View {
     }
 
     // MARK: Library columns
-    //
-    // "Recently added" and "Your Liked Songs" are the same shape — a row of
-    // 140pt cards — and each one used a full page width to show four of them.
-    // Side by side on a Mac window they cost one band instead of two and still
-    // show three each; a phone gets them stacked, because half of 390pt is not
-    // a carousel. If only one of the two has anything in it, it takes the whole
-    // width on its own.
+    // "Recently added" and "Your Liked Songs" side by side on Mac, stacked on a
+    // phone. If only one has content it takes the full width.
 
     @ViewBuilder
     private var libraryColumns: some View {
@@ -956,10 +766,7 @@ public struct HomeSections: View {
     }
 
     // MARK: Recent artists
-    //
-    // A wrapping grid, not a horizontal scroller. Artists are the one thing on
-    // this page you scan for a *specific* name rather than browse — and a name
-    // you have to drag a row sideways to find is a name you can't scan for.
+    // A wrapping grid so names can be scanned.
 
     private func artistRow(title: String, artists: [HomeArtist]) -> some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -974,8 +781,7 @@ public struct HomeSections: View {
                 #endif
             }
             #if os(iOS)
-            // A phone fits three circles a row, so the wrapping grid became a
-            // wall; a shelf costs one row however many artists there are.
+            // A horizontal shelf on the phone, where the grid gets too tall.
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(alignment: .top, spacing: 16) { artistAvatars(artists) }
             }
@@ -990,8 +796,7 @@ public struct HomeSections: View {
             }
             #endif
         }
-        // Keyed on the full set, not the visible one: expanding must not kick
-        // off a second fetch for artists whose photos already arrived.
+        // Keyed on all artists, so expanding doesn't refetch.
         .task(id: artists.map(\.name).joined(separator: "|")) {
             await loadRemoteArtistImages(for: artists)
         }
@@ -1007,13 +812,9 @@ public struct HomeSections: View {
         }
     }
 
-    /// Fetch Spotify profile images for any recent artist that doesn't already
-    /// have artwork (i.e. Discover-only artists with no library `Artist` row),
-    /// download the bytes, and cache them so the avatars fill in.
+    /// Fetches Spotify images for recent artists without artwork (Discover-only ones).
     private func loadRemoteArtistImages(for artists: [HomeArtist]) async {
-        // `artworkData` alone is not the question any more — a library artist's
-        // cover lives in the store and is fetched on demand. Only an artist with
-        // neither wants a remote image. The list is a handful of names.
+        // Library artists load their cover on demand; only artists with neither need a remote image.
         let missing = artists.filter {
             $0.artworkData == nil
                 && $0.artworkRef.flatMap { ref in ArtworkProvider.shared.data(for: ref) } == nil
@@ -1030,13 +831,11 @@ public struct HomeSections: View {
     }
 
     // MARK: Context menus
-    //
-    // The same items the library rows offer, because a card on this page is the
-    // same song as the row on that one — right-clicking one and getting nothing
-    // is what made Home feel like a poster rather than part of the app.
+    // Same menu items as the library rows.
 
-    private func trackMenu(_ track: Track, context: [Track], origin: String) -> some View {
-        LibrarySongMenu(targets: [track], onPlay: { onPlay(track, context, origin) })
+    /// A song plays alone, so autoplay's recommendations follow it rather than the rest of the row.
+    private func trackMenu(_ track: Track, origin: String) -> some View {
+        LibrarySongMenu(targets: [track], onPlay: { onPlay(track, [track], origin) })
     }
 
     @ViewBuilder
@@ -1053,10 +852,8 @@ public struct HomeSections: View {
     }
 
     @ViewBuilder
-    /// "Open Artist" isn't here: clicking the tile already does that, and it was
-    /// the reason this menu never grew the seven items every other artist row
-    /// now has. An artist off a track credit has no library row, so the shelf
-    /// hands over the remote image it drew the tile with.
+    /// No "Open Artist": tapping the tile does that. Credit-only artists pass the
+    /// remote image the tile used.
     private func artistMenu(_ artist: HomeArtist) -> some View {
         ArtistActionsMenu(name: artist.name,
                           artwork: .stored(artist.artworkData, artist.artworkRef))
@@ -1064,21 +861,29 @@ public struct HomeSections: View {
 
     // MARK: Empty state
 
+    @ViewBuilder
     private var emptyState: some View {
-        EmptyStateView(
-            icon: "music.note.house.fill",
-            title: "Import music to get started",
-            message: "Tracks you add or play will appear here."
-        )
-        .padding(.vertical, 40)
+        // A first sign-in on a new device is busy pulling the library, not empty.
+        if library.activity != .idle {
+            EmptyStateView(
+                icon: "arrow.triangle.2.circlepath",
+                title: "Loading your library",
+                message: "Your songs and playlists are on their way."
+            )
+            .padding(.vertical, 40)
+        } else {
+            EmptyStateView(
+                icon: "music.note.house.fill",
+                title: "Import music to get started",
+                message: "Tracks you add or play will appear here."
+            )
+            .padding(.vertical, 40)
+        }
     }
 }
 
 // MARK: - Listening stats card
-//
-// Split out of the sections above because on the merged landing it is the last
-// thing on the page, under the genres — a summary belongs after the thing it
-// summarises, not in the middle of it.
+// Separate because the landing draws it last, under the genres.
 
 public struct HomeStatsCard: View {
 
@@ -1125,10 +930,7 @@ public struct HomeStatsCard: View {
 }
 
 // MARK: - Home as a standalone page
-//
-// Kept for hosts that still want Home on its own (iOS builds without the merged
-// Discover landing). It is now only a scroll view and margins around the two
-// pieces above.
+// Home as a standalone page (iOS without the merged landing).
 
 public struct HomeView: View {
 
@@ -1165,14 +967,11 @@ public struct HomeView: View {
             .padding(.top, 12)
             .padding(.bottom, 24)
         }
-        // Pinned to the container rather than the scroll content: the window
-        // titlebar is tinted from this colour, so a wash that scrolled away
-        // would leave the chrome coloured and the page underneath bare.
-        // Softer than a detail page — Home is a page of cards, not one subject,
-        // so the colour only sets the mood behind the greeting.
+        // On the container so it stays put while content scrolls, and tints the titlebar.
+        // Softer than on detail pages.
         .artworkWash(source: HomeSections.washSource(engine: engine, library: library),
                      intensity: 0.6)
-        .background(Color.mixBackground.ignoresSafeArea())
+        .background(MixPageBackground())
         .miniPlayerSafeArea()
         #if os(iOS)
         .navigationTitle("Home")
@@ -1182,35 +981,26 @@ public struct HomeView: View {
 }
 
 // MARK: - Recent artist model
-//
-// Lightweight value type for the circular artist row. Decoupled from the
-// library `Artist` so artists that exist only in recently-played online tracks
-// (no library record) can still appear, just without artwork.
+// Artist for the circular row. Not a library `Artist`, so online-only artists
+// can appear too.
 
 private struct HomeArtist: Identifiable {
     var id: String { name.lowercased() }
     let name: String
     let artworkData: Data?
-    /// The library row behind this name, when there is one. Artists reached
-    /// only through a track credit have none, and fall back to `artworkData`
-    /// (a remote image) or the placeholder.
+    /// The library row, if any. Credit-only artists use `artworkData` or a placeholder.
     let artworkRef: ArtworkRef?
 }
 
 // MARK: - Shelf item
-//
-// One tile on the jump-back-in shelf. Songs and playlists sit in the same grid
-// and look the same on purpose — what they have in common is that clicking one
-// puts you back where you were.
+// A tile on the resume shelf. Songs and playlists look the same.
 
 private enum HomeShortcut: Identifiable {
     case track(Track)
     case playlist(Playlist)
 
-    /// Online tracks are minted with a fresh UUID per play, so their stable
-    /// identity is the file hash — the same rule `HomeSections.stableKey` uses.
-    /// Prefixed by kind, because a playlist and a song can't collide but the
-    /// compiler doesn't know that.
+    /// Online tracks are keyed by file hash (see `HomeSections.stableKey`). Prefixed
+    /// by kind for the compiler.
     var id: String {
         switch self {
         case .track(let track):
@@ -1239,24 +1029,18 @@ private struct SectionHeader: View {
 }
 
 // MARK: - Recent Tile
-//
-// Short, wide "jump back in" row. The artwork sits flush against the leading
-// edge and the whole tile is one click target; on macOS a play badge fades in
-// under the pointer so the row reads as actionable without a permanent button.
+// Short, wide resume tile. On macOS a play badge fades in on hover.
 
 private struct RecentTile: View {
     let title: String
     var artworkData: Data? = nil
     /// The library row behind the tile, for covers the bulk fetch skipped.
     var artworkRef: ArtworkRef? = nil
-    /// Drawn by `PlaylistArtwork`, so Favourites and All Songs wear the brand
-    /// tile they wear in the sidebar instead of a grey placeholder.
+    /// Drawn with `PlaylistArtwork`, so system playlists get their brand tile.
     var playlist: Playlist? = nil
-    /// The icon behind missing artwork — the one thing that distinguishes a
-    /// playlist tile from a song tile on a shelf that deliberately mixes them.
+    /// Placeholder icon; what tells a playlist tile from a song tile.
     var placeholder: String = MixtapeIcons.track
-    /// Fired once each time the pointer enters. Used to start warming the audio
-    /// before the click lands; inert on iOS, which has no hover to give.
+    /// Fires on pointer enter to start warming audio. Unused on iOS.
     var onHover: () -> Void = {}
     let action: () -> Void
 
@@ -1316,9 +1100,7 @@ private struct RecentTile: View {
 
 // MARK: - Smart Playlist Card
 
-/// A smart playlist has no artwork of its own, so the tile is its icon over a
-/// tint derived from its name — stable per playlist, and distinct from the
-/// album covers on the shelves around it.
+/// No artwork: the icon over a tint derived from the name.
 private struct HomeSmartCard: View {
     let playlist: SmartPlaylist
     let count: Int
@@ -1334,9 +1116,7 @@ private struct HomeSmartCard: View {
                     .font(.mixBodyBold)
                     .foregroundStyle(Color.mixTextPrimary)
                     .lineLimit(2)
-                // The description, the way any other playlist card carries one.
-                // No fixed height: a clipped blurb ending in "…" tells the
-                // reader less than the sentence it hid, and these are short.
+                // No fixed height; these are short and shouldn't truncate.
                 Text(playlist.rule.blurb)
                     .font(.mixLabel)
                     .foregroundStyle(Color.mixTextSecondary)
@@ -1354,8 +1134,7 @@ private struct HomeSmartCard: View {
     }
 }
 
-/// The `+` at the end of "Your smart playlists" — the mixes row's tile, sized
-/// to the smart cards beside it.
+/// The `+` at the end of "Your smart playlists".
 private struct NewSmartPlaylistCard: View {
     let action: () -> Void
     @State private var isHovered = false

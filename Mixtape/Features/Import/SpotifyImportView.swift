@@ -1,9 +1,5 @@
-// SpotifyImportView.swift
-// Mixtape
-//
-// Connect Spotify, paste a playlist link, and rebuild it locally. Songs come in as
-// online tracks that stream on play, so even big playlists import in seconds.
-// Shown from the iOS import sheet and the macOS toolbar.
+// Connect Spotify, paste a playlist link, and rebuild it locally as online
+// tracks. Used by the iOS import sheet and the macOS toolbar.
 
 import SwiftUI
 
@@ -40,7 +36,7 @@ public struct SpotifyImportView: View {
     @State private var phase: Phase = .input
     @State private var isConnecting = false
     @State private var connectError: String?
-    /// Opt-in mirror. Off by default — see `SpotifyLibraryPickerModel.keepInSync`.
+    /// Opt-in mirror, off by default. See `SpotifyLibraryPickerModel.keepInSync`.
     @State private var keepInSync = false
 
     @Environment(\.dismiss) private var dismiss
@@ -60,12 +56,7 @@ public struct SpotifyImportView: View {
 
     // MARK: - Sub-views
 
-    /// Either the sign-in explanation or the field — and in both cases the
-    /// outcome shows up underneath rather than replacing the page.
-    ///
-    /// This was four full-screen states stacked behind a `switch`, each one
-    /// centred between two `Spacer`s under a 120pt circle. On a Mac that's a
-    /// 520×500 window that is mostly empty in every state it can reach.
+    /// The sign-in explanation or the field, with the outcome underneath.
     @ViewBuilder
     private var content: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -112,8 +103,7 @@ public struct SpotifyImportView: View {
                 MixSheetStatus(kind: .failure, title: "Couldn't import that playlist", detail: message)
 
             case .working(let done, let total):
-                // Real progress, unlike the single-song importer: the playlist
-                // told us how many songs it has before we started.
+                // Real progress: the playlist's song count is known up front.
                 MixSheetStatus(kind: .busy,
                                title: total > 0 ? "Adding songs\u{2026}" : "Fetching playlist\u{2026}",
                                detail: total > 0 ? "\(done) of \(total)" : nil,
@@ -127,9 +117,7 @@ public struct SpotifyImportView: View {
         }
     }
 
-    /// The footer button carries the whole flow: connect, then import, then
-    /// close. One control that changes what it says beats four pages that each
-    /// grow their own.
+    /// One footer button for the whole flow: connect, import, close.
     private var primaryAction: MixSheetAction {
         guard auth.isAuthorized else {
             return MixSheetAction("Connect Spotify", isBusy: isConnecting, action: connect)
@@ -187,10 +175,7 @@ public struct SpotifyImportView: View {
                         toPlaylist: created.id
                     )
                 }
-                // Recorded here as well as in the library picker: the two are
-                // routes to the same import, and a playlist pasted in as a link
-                // should still read as "already imported" when the account's
-                // full listing is opened later.
+                // Also recorded here so a playlist imported by link shows as imported in the library picker.
                 if let ledger, let sourceID = SpotifyClient.playlistID(from: input) {
                     ledger.record(
                         SpotifyLibraryItem(sourceID: sourceID,

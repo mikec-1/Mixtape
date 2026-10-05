@@ -1,8 +1,5 @@
-// UsernamePromptView.swift
-// Mixtape
-//
-// One-time nudge after first social sign-in to replace the auto-generated
-// `user_xxxxxxxx` handle. Skippable — Skip keeps the auto name.
+// One-time prompt after first social sign-in to replace the generated
+// `user_xxxxxxxx` handle. Skip keeps it.
 
 import SwiftUI
 
@@ -29,7 +26,7 @@ struct UsernamePromptView: View {
         return nil
     }
 
-    /// Password is optional, but if the user typed one it must be ≥ 8 chars.
+    /// Password is optional, but if the user typed one it must be >= 8 chars.
     private var passwordError: String? {
         guard !password.isEmpty else { return nil }
         return password.count >= 8 ? nil : "At least 8 characters required."
@@ -44,10 +41,6 @@ struct UsernamePromptView: View {
     }
 
     var body: some View {
-        // This was an 80pt circled glyph over a centred paragraph over two
-        // full-width pills, in a 420×460 window — a phone's welcome screen with
-        // a Mac frame around it. It asks for one name and one optional
-        // password, so it looks like what it is: a short form.
         MixSheet(title: authService.promptNameOnly ? "Add a Display Name" : "Finish Setting Up",
                  subtitle: authService.promptNameOnly
                     ? "Your display name can be anything. Your username stays how people find you."
@@ -136,8 +129,7 @@ struct UsernamePromptView: View {
 
     // MARK: - Actions
 
-    /// Skip records a decision (never ask again), so it isn't the chrome's
-    /// dismiss button — it's its own control that says what it does.
+    /// Skip is its own control since it records "never ask again".
     private var actions: some View {
         #if os(macOS)
         HStack(spacing: 12) {

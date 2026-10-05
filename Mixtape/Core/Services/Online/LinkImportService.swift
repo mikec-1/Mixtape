@@ -1,34 +1,12 @@
-// LinkImportService.swift
-// Mixtape — Core/Services/Online
-//
-// "Here's a link, put this song in my library."
-//
-// The two links people actually paste point at different things, so they take
-// different routes to the same place:
-//
-//   Spotify  — a catalogue entry with no audio attached. Spotify will hand over
-//              title / artist / album / runtime and nothing else, so the link is
-//              metadata only: the resolver then goes and finds the song exactly
-//              the way saving from Discover does. Same identity, too, so a song
-//              saved by link and the same song saved from Discover are one row.
-//
-//   YouTube  — an *upload*, not a song. The user has already chosen which one,
-//              so searching for "the best match" would be a way of overruling
-//              them; the video id is pinned through the resolver instead. What
-//              YouTube won't reliably give is clean metadata ("Dave - Sprinter
-//              (Official Video)", uploaded by "Santan Dave"), so the title is
-//              tidied and then checked against the catalogue for a real album
-//              and cover.
-//
-// Both end at `importOnlineTrack`, which owns the copy, the artwork, the
-// All Songs membership and the duplicate rules — none of that is re-decided here.
+// Imports a song from a pasted link.
+// Spotify links are metadata only, so the resolver finds the audio like a Discover save.
+// YouTube links pin that video; the title is tidied and checked against the catalogue.
+// Both end at importOnlineTrack.
 
 import Foundation
 import AVFoundation
 
-/// Stateless on purpose — one call in, one `Outcome` out. The progress spinner
-/// and the error live in whichever sheet asked, so two sheets can't fight over
-/// one shared "is importing" flag.
+/// Stateless: progress and errors live in the calling sheet.
 @MainActor
 public final class LinkImportService {
 
@@ -56,8 +34,7 @@ public final class LinkImportService {
 
     public struct Outcome: Sendable {
         public let track: Track
-        /// True when the song was already there. The sheet says so rather than
-        /// claiming a save that didn't happen.
+        /// The song was already in the library.
         public let alreadySaved: Bool
     }
 
@@ -70,7 +47,7 @@ public final class LinkImportService {
         var artworkURL: URL?
         var isExplicit: Bool
         var sourceID: Int?
-        /// Set only for YouTube links — the upload to fetch instead of searching.
+        /// YouTube only: the video to fetch instead of searching.
         var pinnedVideoID: String?
     }
 
@@ -96,9 +73,15 @@ public final class LinkImportService {
 
     // MARK: - Public API
 
-    /// Import whatever song `raw` points at. Throws `Failure` with a message
-    /// that's safe to show as-is.
+    /// Imports the song `raw` points at. Failure messages are user-facing.
+    /// Liked too, unless the account sends imports to All Songs: a file holds itself.
     public func importTrack(from raw: String) async throws -> Outcome {
+        let outcome = try await fetchAndImport(raw)
+        if PlaylistMetadataService.shared.likesImports { library.saveToLibrary(trackID: outcome.track.id) }
+        return outcome
+    }
+
+    private func fetchAndImport(_ raw: String) async throws -> Outcome {
         guard let link = MusicLink.parse(raw) else { throw Failure.notATrackLink }
 
         let draft: Draft
@@ -117,9 +100,8 @@ public final class LinkImportService {
             isExplicit: draft.isExplicit
         )
 
-        // Already here? Answer without downloading anything — pasting a link
-        // twice is common, and the second paste shouldn't cost a resolve.
-        if let existing = library.track(id: online.stableTrackID) {
+        // Already here as a file, skip the download. A saved online row gets its audio instead.
+        if let existing = library.track(id: online.stableTrackID), !existing.isOnline {
             return Outcome(track: existing, alreadySaved: true)
         }
 
@@ -130,9 +112,7 @@ public final class LinkImportService {
             throw Failure.resolveFailed(error.localizedDescription)
         }
 
-        // The runtime on the file beats the runtime on the card: Spotify's is
-        // right for the master and not necessarily for the upload we got, and a
-        // YouTube link comes with no runtime at all.
+        // The file's runtime beats the card's.
         let duration = await Self.duration(of: audio.fileURL) ?? draft.duration
 
         let result = await importService.importOnlineTrack(
@@ -148,8 +128,7 @@ public final class LinkImportService {
 
         switch result {
         case .imported(let track, _):  return Outcome(track: track, alreadySaved: false)
-        // A hash match means this audio is already in the library under another
-        // song's row — the honest answer is "you have this", not "saved".
+        // Same audio already in the library.
         case .duplicate(let track):    return Outcome(track: track, alreadySaved: true)
         case .failed(_, let error):    throw Failure.importFailed(error.localizedDescription)
         }
@@ -169,9 +148,7 @@ public final class LinkImportService {
                          sourceID:   nil,
                          pinnedVideoID: nil)
         } catch let error as SpotifyPlaylistError {
-            // `SpotifyPlaylistError` words itself for playlists, because that's
-            // what it was written for. Re-say it for a song rather than telling
-            // someone who pasted a track link to check their playlist is public.
+            // Reword the playlist-flavoured Spotify errors for a song.
             switch error {
             case .invalidLink:       throw Failure.notATrackLink
             case .notFoundOrPrivate: throw Failure.lookupFailed("Spotify doesn't have a song at that link.")
@@ -202,10 +179,7 @@ public final class LinkImportService {
                           sourceID:   nil,
                           pinnedVideoID: id)
 
-        // A YouTube upload has no album and its cover is a video thumbnail with
-        // a face and a title card on it. If the catalogue recognises the song,
-        // take its metadata — the audio still comes from the pinned video, so
-        // this only changes what the row says, never what it plays.
+        // Use catalogue metadata when found. Only the row's details change, not the audio.
         if let match = await catalogueMatch(title: named.title, artist: named.artist) {
             draft.title      = match.trackName
             draft.artistName = match.artistName
@@ -218,10 +192,7 @@ public final class LinkImportService {
         return draft
     }
 
-    /// The catalogue entry for this song, or nil if nothing came back that we're
-    /// confident is the same song. Deliberately strict: a wrong match renames
-    /// the user's song and files it under someone else's album, which is worse
-    /// than no album at all.
+    /// A catalogue match, or nil. Strict because a wrong match renames the song.
     private func catalogueMatch(title: String, artist: String) async -> ITunesTrackResult? {
         let results = await catalogue.searchPopular(query: "\(artist) \(title)", limit: 8)
         let wantTitle  = Self.normalised(title)
@@ -233,9 +204,7 @@ public final class LinkImportService {
             let hitArtist = Self.normalised(hit.artistName)
             guard hitTitle == wantTitle || hitTitle.hasPrefix(wantTitle) || wantTitle.hasPrefix(hitTitle)
             else { return false }
-            // The artist has to line up too, but only loosely: YouTube says
-            // "Santan Dave" where the catalogue says "Dave", and a featured
-            // artist shows up on one side and not the other.
+            // Loose artist match ("Santan Dave" vs "Dave").
             return hitArtist.contains(wantArtist) || wantArtist.contains(hitArtist)
         }
     }
@@ -271,21 +240,14 @@ public final class LinkImportService {
         let thumbnailURL: URL?
     }
 
-    /// YouTube's public oEmbed endpoint: no key, no quota, no yt-dlp — which is
-    /// what makes this work on iOS as well, where there is no subprocess to
-    /// shell out to. It gives the video title and the channel and nothing else,
-    /// hence the tidy-up and the catalogue lookup that follow.
+    /// YouTube oEmbed: no key or yt-dlp, so it works on iOS. Title and channel only.
     private static func oEmbed(videoID: String) async throws -> OEmbed {
         struct Response: Decodable {
             let title: String
             let author_name: String?
             let thumbnail_url: String?
         }
-        // The watch URL is a *value* inside another URL's query, so every
-        // reserved character in it has to go. Neither `.urlQueryAllowed` nor
-        // `URLComponents.queryItems` escapes `?` — both produced
-        // `…oembed?url=…/watch?v=<id>&format=json`, two query strings spliced
-        // together. YouTube forgives that today; unreserved-only doesn't ask it to.
+        // The watch URL is a query value, so escape everything but unreserved chars.
         let unreserved = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
         let target = "https://www.youtube.com/watch?v=\(videoID)"
         guard let encoded = target.addingPercentEncoding(withAllowedCharacters: unreserved),
@@ -295,8 +257,7 @@ public final class LinkImportService {
         do {
             let (data, response) = try await URLSession.shared.data(from: url)
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            // oEmbed 401s/404s for private, deleted, and age-restricted videos —
-            // all of which mean the same thing to the user.
+            // Private, deleted and age-restricted all look the same to the user.
             guard status == 200 else {
                 throw Failure.lookupFailed("That video isn't available — it may be private or removed.")
             }
@@ -313,23 +274,15 @@ public final class LinkImportService {
 
     // MARK: - Title tidy-up
 
-    /// Bracketed suffixes that describe the *upload* rather than the song.
-    /// Matched on the lowercased contents, so "(Official Video)" and
-    /// "[OFFICIAL AUDIO]" go the same way.
+    /// Bracketed upload noise, matched lowercased.
     private static let uploadNoise: Set<String> = [
         "official video", "official music video", "official audio", "official lyric video",
         "official visualizer", "official visualiser", "official", "music video", "lyric video",
         "lyrics", "audio", "visualizer", "visualiser", "hd", "hq", "4k", "explicit", "clean",
     ]
 
-    /// Split a YouTube title into artist and song.
-    ///
-    /// Two shapes cover nearly everything: auto-generated "- Topic" channels,
-    /// where the title is already just the song and the channel is already just
-    /// the artist; and everything else, where uploaders write "Artist - Title".
-    /// When neither applies the channel is the best guess at the artist, which
-    /// is wrong for compilation channels — and visibly wrong, so it's fixable in
-    /// Get Info rather than quietly wrong.
+    /// Splits a YouTube title into artist and song. "- Topic" channels are already
+    /// split; otherwise "Artist - Title". Falls back to the channel as the artist.
     static func splitTitle(_ raw: String, uploader: String) -> (artist: String, title: String) {
         let title = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let channel = uploader.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -338,9 +291,7 @@ public final class LinkImportService {
             let artist = String(channel.dropLast("- topic".count)).trimmingCharacters(in: .whitespaces)
             return (artist.isEmpty ? channel : artist, cleaned(title))
         }
-        // " - " with spaces, or the en/em dashes uploaders use instead. Split at
-        // the first one: "Artist - Song - Live" is an artist and a song, not two
-        // artists.
+        // Split at the first dash only.
         for separator in [" - ", " – ", " — ", " ‒ "] {
             if let range = title.range(of: separator) {
                 let artist = String(title[..<range.lowerBound]).trimmingCharacters(in: .whitespaces)
@@ -351,14 +302,8 @@ public final class LinkImportService {
         return (channel.isEmpty ? "Unknown Artist" : channel, cleaned(title))
     }
 
-    /// Drop the "(Official Video)" furniture.
-    ///
-    /// Every bracketed group is judged on its contents, wherever it sits:
-    /// "Rick Astley - Never Gonna Give You Up (Official Video) (4K Remaster)"
-    /// and "SICKO MODE (Official Video) ft. Drake" both put the furniture in
-    /// the middle, and an earlier trailing-only version left it there. What
-    /// protects "(feat. Central Cee)" and "(Remix)" was never their position —
-    /// it's that they aren't on the list.
+    /// Removes "(Official Video)"-style groups anywhere in the title. Things like
+    /// "(feat. X)" and "(Remix)" stay because they aren't on the list.
     static func cleaned(_ title: String) -> String {
         var out = ""
         var opener: Character?
@@ -378,8 +323,7 @@ public final class LinkImportService {
                 out.append(ch)
             }
         }
-        // A group that never closed is a stray bracket in someone's title, not
-        // furniture — put it back rather than swallowing the rest of the line.
+        // Unclosed bracket: keep it.
         if let open = opener { out.append(open); out += inner }
 
         // Removing a group from the middle leaves a double space behind it.
@@ -388,8 +332,7 @@ public final class LinkImportService {
         return squeezed.isEmpty ? title : squeezed
     }
 
-    /// Case-, accent- and punctuation-insensitive form used to compare a YouTube
-    /// title against a catalogue one.
+    /// For comparing YouTube and catalogue titles.
     private static func normalised(_ raw: String) -> String {
         let folded = raw.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: nil)
         let stripped = folded.unicodeScalars.map { scalar -> Character in

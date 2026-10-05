@@ -1,18 +1,13 @@
-// ExportManager.swift
-// Mixtape — Core/Services
-//
-// Manages the user's chosen export/download directory using Security-Scoped Bookmarks.
-// Allows exporting a Track's local audio file to the chosen directory.
-// ID3TagWriter (below) is kept in this file to avoid needing a separate Xcode target entry.
+// Manages the export directory via security-scoped bookmarks and exports tracks to it.
+// ID3TagWriter lives here too.
 
 import Foundation
 import OSLog
 import Combine
 
 // MARK: - ID3TagWriter
-// Writes an ID3v2.3 tag to an MP3 file, replacing any pre-existing tag.
-// The audio payload is never re-encoded; only the metadata header is rebuilt.
-// Frame layout reference: https://id3.org/id3v2.3.0
+// Writes an ID3v2.3 tag to an MP3, replacing any existing one. Audio isn't re-encoded.
+// Reference: https://id3.org/id3v2.3.0
 
 private enum ID3TagWriter {
 
@@ -89,7 +84,7 @@ private enum ID3TagWriter {
                     imageData[2] == 0xFF) ? "image/jpeg" : "image/png"
         var payload = Data([0x03])
         payload += mime.data(using: .ascii)!
-        payload += [0x00, 0x03, 0x00]   // null + Cover(front) type + empty description null
+        payload += [0x00, 0x03, 0x00]  // null + front cover type + empty description
         payload += imageData
         var frame = "APIC".data(using: .ascii)!
         frame += Data(be32(payload.count))
@@ -143,9 +138,8 @@ public final class ExportManager: ObservableObject {
         return bookmarkKey + ".fallbackPath"
     }
 
-    /// True once the user has confirmed a location (even if the bookmark later fails to resolve),
-    /// and that location exists on disk.
-    /// Used by RootView to suppress the welcome prompt on subsequent launches.
+    /// True once the user has confirmed a location that exists on disk. RootView uses it
+    /// to skip the welcome prompt.
     public var isLocationConfigured: Bool {
         guard UserDefaults.standard.bool(forKey: configuredKey) else {
             return false
@@ -164,14 +158,12 @@ public final class ExportManager: ObservableObject {
         return false
     }
 
-    /// The account that chose `MixtapeLastGlobalExportPath` — the welcome prompt
-    /// offers that folder to the *next* account, so it has to name the previous one.
+    /// The account that chose `MixtapeLastGlobalExportPath`, so the welcome prompt can offer it to the next one.
     public var globalExportPathOwner: String? {
         if let name = UserDefaults.standard.string(forKey: "MixtapeLastGlobalExportOwner"), !name.isEmpty {
             return name
         }
-        // Chosen before the owner was recorded: the per-account subfolders say
-        // whose it was, when there is exactly one that isn't the current account.
+        // Older installs didn't record the owner: infer it from a single other-account subfolder.
         guard let path = UserDefaults.standard.string(forKey: "MixtapeLastGlobalExportPath"),
               let names = try? FileManager.default.contentsOfDirectory(atPath: path) else { return nil }
         let mine = currentUsername.map(Self.sanitizeFileName)
@@ -215,9 +207,7 @@ public final class ExportManager: ObservableObject {
         return Self.defaultExportURL
     }
 
-    /// Human-readable path for the current export location, suitable for display in Settings.
-    /// - macOS: `~/Documents/Mixtape` style (home-relative, full path visible)
-    /// - iOS:   last path component only
+    /// Display path for Settings: home-relative on macOS, last component on iOS.
     public var exportURLDisplayPath: String? {
         guard let url = exportURL else { return nil }
         #if os(macOS)
@@ -228,11 +218,8 @@ public final class ExportManager: ObservableObject {
         #endif
     }
 
-    /// The default export directory.
-    /// - macOS: ~/Documents/Mixtape (a named subfolder the user can find in Finder)
-    /// - iOS: the app's Documents root, which the Files app already shows as
-    ///   "On My iPhone › Mixtape". Adding a "Mixtape" subfolder would display
-    ///   "On My iPhone › Mixtape › Mixtape", so we avoid the extra component.
+    /// Default export directory: ~/Documents/Mixtape on macOS, Documents root on iOS
+    /// (Files already shows it as "On My iPhone > Mixtape").
     public static var defaultExportURL: URL {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         #if os(iOS)
@@ -252,8 +239,7 @@ public final class ExportManager: ObservableObject {
             return
         }
 
-        // Security-scoped bookmarks track moves, so a folder sent to Trash resolves
-        // to its new Trash path and fileExists returns true — catch it explicitly.
+        // Bookmarks follow a folder into the Trash, where fileExists is still true.
         if Self.isInTrash(resolved) {
             clearExportURL()
             return
@@ -266,12 +252,11 @@ public final class ExportManager: ObservableObject {
 
         // Previously-chosen folder no longer exists.
         #if os(iOS)
-        // The app's Documents dir is always writable on iOS — silently reset.
+        // Documents is always writable on iOS, so reset silently.
         exportURL = try? setDefaultMixtapeFolder()
         #else
-        // On macOS the sandbox blocks creating ~/Documents/Mixtape without user
-        // consent via NSOpenPanel. Clear the stored location so the welcome prompt
-        // reappears and the user can pick a new folder themselves.
+        // The macOS sandbox can't create the folder without NSOpenPanel, so clear it and let
+        // the welcome prompt ask again.
         clearExportURL()
         #endif
     }
@@ -287,8 +272,7 @@ public final class ExportManager: ObservableObject {
         UserDefaults.standard.set(url.path, forKey: "MixtapeLastGlobalExportPath")
         UserDefaults.standard.set(currentUsername, forKey: "MixtapeLastGlobalExportOwner")
 
-        // Always persist the plain path as a fallback so resolveExportURL() never
-        // returns nil just because the security-scoped bookmark failed or went stale.
+        // Plain-path fallback so resolveExportURL() works if the bookmark goes stale.
         UserDefaults.standard.set(url.path, forKey: fallbackPathKey)
 
         do {
@@ -307,12 +291,10 @@ public final class ExportManager: ObservableObject {
             #endif
             UserDefaults.standard.set(bookmarkData, forKey: bookmarkKey)
         } catch {
-            // Bookmark failed — plain-path fallback already saved above.
             UserDefaults.standard.removeObject(forKey: bookmarkKey)
         }
 
-        // Mark that the user has confirmed a location so the welcome prompt
-        // never reappears, even if the bookmark fails to resolve next launch.
+        // Stops the welcome prompt reappearing even if the bookmark fails next launch.
         UserDefaults.standard.set(true, forKey: configuredKey)
 
         self.exportURL = url
@@ -384,21 +366,11 @@ public final class ExportManager: ObservableObject {
     
     // MARK: - Export
 
-    /// Exports a track's audio to the chosen export directory, at `quality`, with
-    /// its metadata (title, artist, album, artwork, year) written into the copy.
-    ///
-    /// - Parameter from: Optional explicit source URL. When omitted the source is
-    ///   derived from `track.file.localPath` inside the app's Documents folder.
-    ///   Pass the URL returned by `SupabaseFileStorageService.download(track:)` when
-    ///   you have just fetched the file and the track's `localPath` isn't updated yet.
-    /// - Parameter quality: The Downloads setting. `.high` copies the bytes as they
-    ///   arrived; `.normal`/`.low` re-encode to AAC at 96/64 kbps.
-    ///
-    /// What this deliberately no longer does is transcode every non-MP3 source to
-    /// MP3. That was here to get artwork and titles showing in Finder, and it
-    /// worked — at the cost of a lossy re-encode on every single Discover song,
-    /// including when the user had asked for High. `MP4MetadataWriter` gets the
-    /// same result by rewriting the container's metadata atoms instead.
+    /// Exports a track's audio to the export directory at `quality`, with title, artist,
+    /// album, artwork and year written into the copy.
+    /// - Parameter from: explicit source URL, e.g. a just-downloaded file whose `localPath`
+    /// isn't updated yet. Defaults to `track.file.localPath`.
+    /// - Parameter quality: `.high` copies bytes as-is; `.normal`/`.low` re-encode to AAC at 96/64 kbps.
     public func export(track: Track,
                        from explicitSource: URL? = nil,
                        quality: DownloadQuality = .high) async throws {
@@ -409,8 +381,7 @@ public final class ExportManager: ObservableObject {
             MixSignpost.exporting.endInterval("export-track", signpost)
             MixLog.exporting.info("export-track \(Int((CFAbsoluteTimeGetCurrent() - started) * 1000), privacy: .public) ms")
         }
-        // Prefer the already-resolved in-memory URL; fall back to re-resolving from
-        // UserDefaults (handles cases where exportURL wasn't set in this process).
+        // Prefer the resolved URL, else re-resolve from UserDefaults.
         let destDir: URL
         if let existing = exportURL {
             destDir = existing
@@ -424,14 +395,10 @@ public final class ExportManager: ObservableObject {
         let startAccess = destDir.startAccessingSecurityScopedResource()
         defer { if startAccess { destDir.stopAccessingSecurityScopedResource() } }
 
-        // Ensure the destination directory is valid (not trashed, exists, writable).
-        // If it was deleted since launch, try to recreate it at the original path.
-        // If that also fails (e.g. the volume was removed), fall back to the default
-        // ~/Documents/Mixtape folder and update the stored location.
+        // Recreate the folder if it was deleted, else fall back to ~/Documents/Mixtape.
         let activeDestDir: URL
         if Self.isInTrash(destDir) {
-            // Folder was trashed after we resolved the bookmark — clear it so the
-            // next "Save to Disk" triggers the folder picker rather than writing to Trash.
+            // Trashed after resolving: clear it so the next save asks for a folder.
             clearExportURL()
             throw NSError(domain: "ExportManager", code: 3,
                 userInfo: [NSLocalizedDescriptionKey: "The download folder is in the Trash. Please choose a new location."])
@@ -449,7 +416,7 @@ public final class ExportManager: ObservableObject {
             }
         }
 
-        // Create a user-specific subfolder if logged in to prevent mixing songs from different accounts
+        // Per-account subfolder when signed in.
         var finalDestDir = activeDestDir
         if let username = currentUsername, !username.isEmpty {
             let sanitizedUsername = Self.sanitizeFileName(username)
@@ -460,8 +427,7 @@ public final class ExportManager: ObservableObject {
             try FileManager.default.createDirectory(at: finalDestDir, withIntermediateDirectories: true)
         }
 
-        // Resolve source: prefer an explicitly supplied URL (e.g. freshly downloaded),
-        // otherwise fall back to the path recorded on the track.
+        // Prefer an explicit source URL, else the track's recorded path.
         let sourceURL: URL
         if let explicit = explicitSource {
             guard FileManager.default.fileExists(atPath: explicit.path) else {
@@ -503,9 +469,7 @@ public final class ExportManager: ObservableObject {
             do {
                 try await AudioTranscoder.transcode(sourceURL, to: destinationURL, quality: quality)
             } catch {
-                // A failed re-encode means "file the original", not "the save
-                // failed" — the user asked for a copy of their song, and a
-                // bigger copy is a far better answer than none.
+                // A failed re-encode files the original instead.
                 try? FileManager.default.removeItem(at: destinationURL)
                 destinationURL = finalDestDir.appendingPathComponent("\(baseName).\(sourceExt)")
                 var retry = 2
@@ -519,8 +483,7 @@ public final class ExportManager: ObservableObject {
             try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
         }
 
-        // Metadata, by container. Errors are non-fatal — the audio is already
-        // saved, and a copy with no cover art still beats no copy.
+        // Metadata by container. Non-fatal: the audio is already saved.
         if destinationURL.pathExtension.lowercased() == "mp3" {
             try? ID3TagWriter.write(
                 to:          destinationURL,
@@ -535,10 +498,8 @@ public final class ExportManager: ObservableObject {
         } else if MP4MetadataWriter.supports(destinationURL) {
             try? await MP4MetadataWriter.write(track, to: destinationURL)
         } else {
-            // FLAC/Opus/WAV imports kept at High keep their original container,
-            // and there's no tagger here for those. The copy is correct audio
-            // with whatever tags it already carried.
-            MixLog.exporting.debug("No tagger for .\(destinationURL.pathExtension.lowercased()) — copied without rewriting metadata")
+            // FLAC/Opus/WAV at High keep their container and existing tags.
+            MixLog.exporting.debug("No tagger for .\(destinationURL.pathExtension.lowercased()), copied without rewriting metadata")
         }
 
         rememberExport(destinationURL, for: track.id)
@@ -546,15 +507,8 @@ public final class ExportManager: ObservableObject {
 
     // MARK: - Export index
 
-    /// Where each track's file copy actually went, keyed by track id.
-    ///
-    /// `exportedURL` used to reconstruct this by guessing: rebuild the filename
-    /// from the current title and artist, guess the extension, then try ten
-    /// numbered variants of each. It got the answer wrong in every case the
-    /// guess didn't hold — a renamed song, a file the user renamed themselves,
-    /// an eleventh duplicate — and "wrong" here means the app believes a copy
-    /// it did make doesn't exist. Writing down the path at the moment we choose
-    /// it costs one dictionary entry and is simply correct.
+    /// Where each track's copy went, keyed by track id. Recorded at export time instead of
+    /// guessing filenames, which broke on renames and duplicates.
     private static let exportIndexKey = "mix.exportedPaths"
 
     private var exportIndex: [String: String] {
@@ -575,16 +529,15 @@ public final class ExportManager: ObservableObject {
     }
 
     public func exportedURL(for track: Track) -> URL? {
-        // Recorded but gone — the user deleted or moved it. Drop the entry so
-        // it stops being consulted.
+        // Recorded but deleted or moved, drop it.
         if let path = exportIndex[track.id.uuidString], !FileManager.default.fileExists(atPath: path) {
             forgetExport(for: track.id)
         }
         return Self.exportedURL(for: track, in: lookup())
     }
 
-    /// Everything `exportedURL` reads from the manager, taken on the main actor
-    /// so the library scan can probe a whole library from a background thread.
+    /// What `exportedURL` needs from the manager, captured on the main actor so the library
+    /// scan can run in the background.
     nonisolated struct Lookup: Sendable {
         let index: [String: String]
         let root: URL?
@@ -599,8 +552,7 @@ public final class ExportManager: ObservableObject {
     }
 
     nonisolated static func exportedURL(for track: Track, in lookup: Lookup) -> URL? {
-        // The recorded path first. A miss falls through to the probe below,
-        // which is what finds copies exported before this index existed.
+        // Recorded path first. A miss falls through to probing, for copies exported before the index.
         if let path = lookup.index[track.id.uuidString], FileManager.default.fileExists(atPath: path) {
             return URL(fileURLWithPath: path)
         }
@@ -614,10 +566,7 @@ public final class ExportManager: ObservableObject {
             finalDestDir = destDir.appendingPathComponent(userFolder, isDirectory: true)
         }
 
-        // Candidate extensions: the source's own extension first, but ALWAYS
-        // also mp3 and m4a — export() transcodes non-mp3 sources to .mp3 on
-        // macOS, so an .m4a-sourced track's exported copy is a .mp3 and a
-        // remoteKey-only lookup would never find it.
+        // Source extension first, plus mp3 and m4a since older exports were transcoded to .mp3.
         var extensions: [String] = []
         if let remoteKey = track.file.remoteKey, !remoteKey.isEmpty {
             extensions.append(URL(fileURLWithPath: remoteKey).pathExtension.lowercased())
@@ -685,8 +634,7 @@ public final class ExportManager: ObservableObject {
             finalDestDir = destDir.appendingPathComponent(sanitizedUsername, isDirectory: true)
         }
 
-        // Probe the same extension candidates as exportedURL — the exported copy
-        // may be a transcoded .mp3 even when the source/remoteKey is .m4a.
+        // Same extension candidates as exportedURL.
         var candidateExts: [String] = []
         if let key = track.file.remoteKey, !key.isEmpty {
             candidateExts.append(URL(fileURLWithPath: key).pathExtension.lowercased())
@@ -721,14 +669,10 @@ public final class ExportManager: ObservableObject {
             if newFileURL.path != oldFileURL.path {
                 try FileManager.default.moveItem(at: oldFileURL, to: newFileURL)
             }
-            // The rename is exactly the case the old filename-guessing lookup
-            // got wrong, so the index has to learn the new path.
+            // Renames are exactly what the index has to learn.
             rememberExport(newFileURL, for: track.id)
 
-            // ID3 is an MP3-container construct — prepending a tag onto an
-            // .m4a pushes bytes ahead of the MP4 `ftyp` atom and corrupts it
-            // (see export()). Only rewrite tags for real MP3s; other formats
-            // just get the rename above.
+            // ID3 is MP3-only; prepending it to an .m4a corrupts the `ftyp` atom.
             if ext == "mp3" {
                 try ID3TagWriter.write(
                     to:          newFileURL,
@@ -748,10 +692,8 @@ public final class ExportManager: ObservableObject {
 
     // MARK: - Private helpers
 
-    /// Returns `true` if `url` lies inside the platform Trash / Recently Deleted folder.
-    /// Security-scoped bookmarks silently track moves, so a bookmarked folder that is
-    /// trashed resolves to its new Trash path — `fileExists` returns true there, so we
-    /// must detect it explicitly before treating the folder as a valid export destination.
+    /// True if `url` is inside the Trash or Recently Deleted. Bookmarks follow a trashed
+    /// folder and `fileExists` stays true, so this has to be checked explicitly.
     private static func isInTrash(_ url: URL) -> Bool {
         #if os(macOS)
         // macOS boot-volume Trash: ~/.Trash  External drives: /Volumes/<n>/.Trashes/<uid>
@@ -760,24 +702,20 @@ public final class ExportManager: ObservableObject {
             .appendingPathComponent(".Trash").path
         return path.hasPrefix(homeTrash) || path.contains("/.Trashes/")
         #else
-        // iOS/iPadOS: Files app "Recently Deleted" items live under a /.Trash component
-        // within the originating file provider's storage tree.
+        // Files app "Recently Deleted" lives under a /.Trash component.
         return url.path.contains("/.Trash")
         #endif
     }
 
-    /// Strips characters that are illegal in filenames on HFS+/APFS (iOS & macOS).
-    /// Replaces them with hyphens and trims surrounding whitespace/dots.
+    /// Replaces characters illegal in filenames with hyphens and trims whitespace/dots.
     nonisolated public static func sanitizeFileName(_ name: String) -> String {
-        // Characters disallowed in HFS+/APFS filenames.
-        // '/' is the path separator; ':' is the legacy Mac resource-fork separator
-        // and causes "invalid name" errors on iOS even though APFS technically allows it.
+        // ':' is allowed by APFS but gives "invalid name" errors on iOS.
         let illegal = "/:\\*?\"<>|\u{0000}"
         var result = name
         for ch in illegal {
             result = result.replacingOccurrences(of: String(ch), with: "-")
         }
-        // Collapse multiple consecutive hyphens (e.g. "Title---Subtitle" → "Title-Subtitle")
+        // Collapse "---" into "-".
         while result.contains("--") {
             result = result.replacingOccurrences(of: "--", with: "-")
         }

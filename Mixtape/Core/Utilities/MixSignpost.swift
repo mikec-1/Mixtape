@@ -1,30 +1,14 @@
-// MixSignpost.swift
-// Mixtape — Core/Utilities
-//
-// Logging and signposts, in one place so the subsystem string and the category
-// names are decided once.
-//
-// Everything here is os_log / os_signpost rather than `print`. The difference
-// that matters is that these are off by default and cost close to nothing until
-// something is listening: Console.app, `log stream`, or Instruments. `print`
-// formats its arguments and writes to stderr whether or not anyone cares, which
-// is exactly the wrong trade for a measurement that has to sit in a hot path.
-//
-// Filtering in Console.app:
-//   subsystem:com.mikey.Mixtape
-//   subsystem:com.mikey.Mixtape category:launch
-//
-// From the terminal:
-//   log stream --predicate 'subsystem == "com.mikey.Mixtape"' --style compact
-//   log show  --last 5m --predicate 'subsystem == "com.mikey.Mixtape"' --info
+// os_log/os_signpost helpers with one subsystem and category set. Near-free
+// until something listens (Console, `log stream`, Instruments).
+// Console filter: subsystem:com.mikey.Mixtape [category:launch]
+// Terminal: log stream --predicate 'subsystem == "com.mikey.Mixtape"' --style compact
 
 import Foundation
 import OSLog
 
 public nonisolated enum MixLog {
 
-    /// Matches the bundle identifier so Console's subsystem filter and the
-    /// app's own identity are the same string.
+    /// Same as the bundle id.
     public static let subsystem = Bundle.main.bundleIdentifier ?? "com.mikey.Mixtape"
 
     /// App startup through to the first usable window.
@@ -37,10 +21,7 @@ public nonisolated enum MixLog {
     public static let exporting = Logger(subsystem: subsystem, category: "export")
     /// Main-thread responsiveness. See `MainThreadHangMonitor`.
     public static let hangs     = Logger(subsystem: subsystem, category: "hangs")
-    /// Discover search: how long each stage of a query took. A search is a
-    /// chain of third-party round trips, so when it feels slow the only useful
-    /// question is *which* stage spent the time — this is where that is
-    /// answered. Filter Console on category "search".
+    /// Discover search stage timings. Filter Console on category "search".
     public static let search    = Logger(subsystem: subsystem, category: "search")
     /// Supabase sync, realtime, continuity and sharing.
     public static let sync      = Logger(subsystem: subsystem, category: "sync")
@@ -56,11 +37,7 @@ public nonisolated enum MixLog {
     public static let auth      = Logger(subsystem: subsystem, category: "auth")
 }
 
-/// Signposters, one per category.
-///
-/// Separate from the `Logger`s because Instruments groups intervals by
-/// signposter category — sharing one across launch and import would put an
-/// eight-minute transfer and a two-second launch on the same lane.
+/// One signposter per category, so Instruments puts each on its own lane.
 public enum MixSignpost {
 
     public static let launch    = OSSignposter(subsystem: MixLog.subsystem, category: "launch")
@@ -73,10 +50,7 @@ public enum MixSignpost {
 
 public extension OSSignposter {
 
-    /// Wraps `work` in a signpost interval.
-    ///
-    /// `name` has to be a literal because that is what `OSSignposter` records —
-    /// the interval name is baked into the trace, not formatted at runtime.
+    /// Wraps `work` in a signpost interval. `name` must be a literal.
     func interval<Result>(_ name: StaticString,
                           _ work: () throws -> Result) rethrows -> Result {
         let state = beginInterval(name, id: makeSignpostID())
@@ -94,18 +68,11 @@ public extension OSSignposter {
 
 // MARK: - Launch timeline
 
-/// The three moments a launch is measured between.
-///
-/// `processStart` is taken from the kernel rather than from the first line of
-/// Swift that runs, because everything before `main` — dyld, framework loading,
-/// the Objective-C runtime — is part of what a cold launch costs and is usually
-/// the larger half of it. Measuring from `MixtapeApp.init` would report a
-/// flattering number that no user experiences.
+/// Launch milestones, measured from kernel process start so pre-main time counts.
 @MainActor
 public enum LaunchTimeline {
 
-    /// Kernel-recorded process start, via `KERN_PROC_PID`. Falls back to now,
-    /// which makes the first reading a lower bound rather than a wrong one.
+    /// Kernel process start via `KERN_PROC_PID`. Falls back to now.
     public static let processStart: Date = {
         var info = kinfo_proc()
         var size = MemoryLayout<kinfo_proc>.stride
@@ -125,10 +92,7 @@ public enum LaunchTimeline {
         MixLog.launch.info("Launch began; \(elapsedMilliseconds(), privacy: .public) ms already spent before main")
     }
 
-    /// Called when the first window has content on screen and is usable.
-    ///
-    /// Idempotent: `RootView` can appear again — a second window, a scene
-    /// restore — and only the first one is a launch.
+    /// First usable window. Idempotent; later windows aren't launches.
     public static func firstWindowVisible() {
         guard !firstWindowReported else { return }
         firstWindowReported = true
@@ -142,17 +106,8 @@ public enum LaunchTimeline {
         MixLog.launch.notice("First window visible \(ms, privacy: .public) ms after process start")
     }
 
-    /// A named point on the launch path.
-    ///
-    /// The instrumented spans inside `AppDependencies.init` accounted for about
-    /// half a second of a twelve-second launch, which meant the rest was
-    /// happening somewhere nothing was watching. Timed spans only measure what
-    /// you already suspect; these marks measure the gaps *between* the things
-    /// you suspect, which is where that time turned out to be.
-    ///
-    /// Each line reports both the absolute offset from process start and the
-    /// delta from the previous mark, so a single log read top to bottom shows
-    /// which stretch is expensive without any arithmetic.
+    /// A named launch checkpoint, logging offset from process start and delta
+    /// from the previous mark, to find time between the timed spans.
     public static func mark(_ label: String) {
         let now = elapsedMilliseconds()
         let delta = now - lastMark
@@ -160,10 +115,7 @@ public enum LaunchTimeline {
         MixLog.launch.notice("⏱ \(label, privacy: .public) at \(now, privacy: .public) ms (+\(delta, privacy: .public) ms)")
     }
 
-    /// `mark`, but only the first time for a given label.
-    ///
-    /// SwiftUI evaluates a body whenever it likes; the first evaluation is the
-    /// launch, and every one after it is noise.
+    /// `mark`, once per label (SwiftUI re-evaluates bodies freely).
     @discardableResult
     public static func markOnce(_ label: String) -> Bool {
         guard marked.insert(label).inserted else { return false }
