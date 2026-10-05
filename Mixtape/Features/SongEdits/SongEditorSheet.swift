@@ -58,7 +58,8 @@ struct SongEditorSheet: View {
 
     /// One part, start to end, once: nothing to save.
     private var isWholeSong: Bool {
-        guard let only = sections?.first, sections?.count == 1 else { return true }
+        guard let sections else { return true }
+        guard sections.count == 1, let only = sections.first else { return false }
         return only.times == 1 && only.start < 0.05 && only.end > preview.length - 0.05
     }
 
