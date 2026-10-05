@@ -522,8 +522,10 @@ public final class ContinuityService: ObservableObject {
         }
         // Someone else's edit: rendered here from the original, never searched for by its own title.
         if let edit = s.edit {
+            let original = library.track(id: edit.of) ?? library.track(id: OnlineTrack.stableID(for: edit.sourceRef))
             return Track(id: id, title: s.title, artistName: s.artist, albumTitle: s.album,
-                         duration: s.duration, artworkData: remoteArtwork(for: id, summary: s),
+                         duration: s.duration,
+                         artworkData: original?.displayArtwork ?? remoteArtwork(for: id, summary: s),
                          artworkKey: s.artworkKey, sync: SyncMetadata(deviceID: ""),
                          file: .editPlaceholder, edit: edit)
         }
@@ -570,7 +572,8 @@ public final class ContinuityService: ObservableObject {
                     let probe = Track(id: id, title: summary.title, artistName: summary.artist,
                                       albumTitle: summary.album, duration: summary.duration,
                                       sync: SyncMetadata(deviceID: ""),
-                                      file: .onlinePlaceholder(sourceRef: summary.sourceRef ?? ""))
+                                      file: .onlinePlaceholder(sourceRef: summary.sourceRef ?? ""),
+                                      edit: summary.edit)
                     url = await LibraryService.catalogueArtworkURL(for: probe, catalogue: catalogue)
                 }
                 if let url { data = await LibraryService.fetchImage(url) }

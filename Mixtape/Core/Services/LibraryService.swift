@@ -2192,6 +2192,13 @@ public final class LibraryService: ObservableObject {
     /// client loads it itself. Callers memoize; this is a couple of round trips.
     static func catalogueArtworkURL(for track: Track,
                                     catalogue: ITunesSearchClient) async -> URL? {
+        var track = track
+        // An edit wears its original's cover; its own title finds some other song.
+        if let edit = track.edit {
+            let parts = edit.sourceRef.split(separator: "|", maxSplits: 1).map(String.init)
+            if let title = parts.first, !title.isEmpty { track.title = title }
+            if parts.count > 1 { track.artistName = parts[1] }
+        }
         let primaryArtist = ImportService.primaryArtistName(from: track.artistName)
         let query = "\(track.title) \(primaryArtist)".trimmingCharacters(in: .whitespaces)
 
