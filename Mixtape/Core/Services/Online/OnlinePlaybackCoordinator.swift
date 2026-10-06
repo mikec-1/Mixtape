@@ -695,6 +695,8 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
         let refused = exclusions(for: trackID)
         let pinned  = knownVideoID(forSourceRef: trackID)
         Task(priority: .background) { [weak self] in
+            // ponytail: a 5xx here drops the picked videoID, so the tap pays for the
+            // search twice. Record pickedVideoID(in:) if the box runs hot.
             let stream = try? await ytdlp.resolveStream(query: query,
                                                         expectedDuration: dur,
                                                         preferExplicit: exp,
@@ -1264,6 +1266,10 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
 
         // Marks the song missing and skips it, or says why it can't play.
         func giveUp(_ error: Error) async {
+            // "No result" means no video exists: mark it, skip, never retry.
+            // A 5xx with a videoID means one exists but the download failed: pin it
+            // before the error shows, so a retry tap skips the search.
+            if let picked = pickedVideoID(in: error) { recordVideoID(picked, for: result.id) }
             if isSongNotFound(error) {
                 UnavailableTracks.shared.mark(title: result.title, artist: result.artistName,
                                               announce: true)

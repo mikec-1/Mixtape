@@ -34,7 +34,7 @@ func userFacingPlaybackMessage(for error: Error) -> String {
             return "Streaming isn't set up on this device yet. Add your resolver in Settings → Discover."
         case .notFound:
             return "Couldn't find this song to stream. Try another version."
-        case .badResponse:
+        case .badResponse, .pickFailed:
             return "Couldn't play this song right now. Please try again."
         case .busy:
             // Not "couldn't find this song": the server was just out of slots.
@@ -69,4 +69,13 @@ func isSongNotFound(_ error: Error) -> Bool {
     if let remote = error as? RemoteResolverError, case .notFound = remote { return true }
     #endif
     return false
+}
+
+/// The video the resolver picked before failing, so a retry can skip the search.
+@MainActor
+func pickedVideoID(in error: Error) -> String? {
+    #if os(iOS)
+    if let remote = error as? RemoteResolverError, case .pickFailed(_, let videoID) = remote { return videoID }
+    #endif
+    return nil
 }
