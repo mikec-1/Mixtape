@@ -82,6 +82,15 @@ public protocol TrackResolver: Sendable {
                        excluding: Set<String>,
                        pinnedVideoID: String?) async throws -> StreamResolution?
 
+    /// Same, for the song the user tapped. `live` lets a hosted resolver stream
+    /// before it has the file. Only the play path asks: downloads need a real file.
+    func resolveStream(query: String,
+                       expectedDuration: TimeInterval,
+                       preferExplicit: Bool,
+                       excluding: Set<String>,
+                       pinnedVideoID: String?,
+                       live: Bool) async throws -> StreamResolution?
+
     /// Resolve to `<destinationDir>/<videoID>.m4a`. `expectedDuration` (0 = unknown)
     /// picks the upload whose runtime matches; `preferExplicit` favours uncensored.
     func download(query: String,
@@ -197,6 +206,20 @@ public extension TrackResolver {
                                 expectedDuration: expectedDuration,
                                 preferExplicit: preferExplicit,
                                 excluding: excluding)
+    }
+
+    /// Default: no live mode, resolve as before.
+    func resolveStream(query: String,
+                       expectedDuration: TimeInterval,
+                       preferExplicit: Bool,
+                       excluding: Set<String>,
+                       pinnedVideoID: String?,
+                       live: Bool) async throws -> StreamResolution? {
+        try await resolveStream(query: query,
+                                expectedDuration: expectedDuration,
+                                preferExplicit: preferExplicit,
+                                excluding: excluding,
+                                pinnedVideoID: pinnedVideoID)
     }
 
     /// Default: report both phases and pass exclusions through to `download`.

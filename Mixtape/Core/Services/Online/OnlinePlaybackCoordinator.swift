@@ -1290,7 +1290,8 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
                                                      expectedDuration: result.duration,
                                                      preferExplicit: result.isExplicit,
                                                      excluding: exclusions(for: result.id),
-                                                     pinnedVideoID: pinned)
+                                                     pinnedVideoID: pinned,
+                                                     live: true)
         } catch let unstreamable as StreamUnavailable {
             pinned = unstreamable.videoID
         } catch {
@@ -1307,6 +1308,9 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
 
         if let stream = resolved {
             guard token == playToken else { return }
+            // Which way the box answered, so a failing song in the wild says /live or /stream.
+            let via = stream.url.path.contains("/live/") ? "live" : "stream"
+            MixLog.playback.notice("cold tap via \(via, privacy: .public) vid=\(stream.videoID, privacy: .public)")
             ResolveTrace.shared.mark("stream resolve TOTAL")
             // Cancelling stops the yt-dlp child. warmAfterPlayback restarts it as a
             // cache fill pinned to the playing video.
