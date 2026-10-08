@@ -707,6 +707,7 @@ struct IOSDiscoverView: View {
         var seen = Set<String>()
         let candidates = ([results.topSong].compactMap { $0 } + results.songs)
             .filter { seen.insert($0.id).inserted }
+        // Only the first runs while the iOS prefetch cap is 1; the rest are skipped, not queued.
         for song in candidates.prefix(3) { coordinator.warm(song) }
     }
 

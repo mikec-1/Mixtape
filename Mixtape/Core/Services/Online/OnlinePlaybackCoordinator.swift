@@ -672,10 +672,10 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
         #endif
     }
 
-    /// Warms `result` on the resolver without downloading it here. iOS's /resolve
-    /// searches and downloads the whole track before answering, so asking early
-    /// leaves the file in the server's cache and the real tap only pays for the
-    /// search. One HTTP request, unlike prefetch, which spends cellular data.
+    /// Warms `result` on the resolver without downloading it here. Live, so the
+    /// box keeps the stream URL and playlist (ad already waited out) and downloads
+    /// the file in the background. A tap any time after that plays in about a
+    /// second. One HTTP request, unlike prefetch, which spends cellular data.
     public func warm(_ result: OnlineTrack) {
         guard PlaybackPrefetchSettings.shared.prefetchWhileBrowsing else { return }
         guard cacheURL(for: result) == nil else { return }   // already on disk
@@ -701,7 +701,8 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
                                                         expectedDuration: dur,
                                                         preferExplicit: exp,
                                                         excluding: refused,
-                                                        pinnedVideoID: pinned)
+                                                        pinnedVideoID: pinned,
+                                                        live: true)
             await MainActor.run {
                 guard let self else { return }
                 self.inFlightWarms -= 1
