@@ -44,6 +44,7 @@ extension SongEditor {
         .onDisappear { undos?.removeAllActions(withTarget: preview) }
         .onChange(of: snapshot) { old, new in record(old, new) }
         .onChange(of: preview.position) { old, new in follow(old, new) }
+        .task(id: edgePush) { await pushEdge() }
         // View > Zoom works on the timeline while the studio is open.
         .onReceive(NotificationCenter.default.publisher(for: .mixZoomIn)) { _ in setZoom(zoom * 2) }
         .onReceive(NotificationCenter.default.publisher(for: .mixZoomOut)) { _ in setZoom(zoom / 2) }
@@ -203,6 +204,11 @@ extension SongEditor {
             .help(preview.isPlaying ? "Pause (Space)" : "Play (Space)")
             .accessibilityLabel(preview.isPlaying ? "Pause preview" : "Play preview")
             skipButton(5).keyboardShortcut(plainKey(.rightArrow))
+            let looping = preview.looping != nil
+            toggleIcon("repeat", on: looping,
+                       help: looping ? "Stop looping (L)" : "Loop the part under the playhead (L)") { toggleLoop() }
+                .keyboardShortcut(plainKey("l"))
+                .disabled(sections == nil)
             Text("\(clock(preview.position / speed)) / \(clock(preview.duration / speed))")
                 .font(.system(size: 13, weight: .medium).monospacedDigit())
                 .foregroundStyle(Color.mixTextPrimary)
@@ -211,6 +217,28 @@ extension SongEditor {
         }
         // The saved card owns Return.
         .disabled(source == nil || busy || saved != nil)
+    }
+
+    /// Loops the part under the playhead, or stops looping.
+    func toggleLoop() {
+        naming = false
+        preview.loop(preview.looping == nil ? part(at: preview.now) : nil)
+    }
+
+    /// An icon that lights up while on.
+    func toggleIcon(_ symbol: String, on: Bool, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(on ? Color.mixOnAccent : Color.mixTextSecondary)
+                .frame(width: 26, height: 24)
+                .background(RoundedRectangle(cornerRadius: 6).fill(on ? Color.mixPrimary : Color.clear))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).mixHandCursor()
+        .help(help)
+        .accessibilityLabel(help)
+        .accessibilityAddTraits(on ? .isSelected : [])
     }
 
     // MARK: - Timeline
@@ -287,6 +315,14 @@ extension SongEditor {
         scrollTo(new / preview.duration - 0.05 / zoom)
     }
 
+    /// About half a screen a second while a dragged part is held at an edge.
+    func pushEdge() async {
+        while edgePush != 0, !Task.isCancelled {
+            scrollTo(scroll + Double(edgePush) * 0.008 / zoom)
+            try? await Task.sleep(for: .milliseconds(16))
+        }
+    }
+
     /// The part of a whole-arrangement waveform that's on screen.
     func window(_ peaks: [Float]) -> [Float] {
         guard zoom > 1, !peaks.isEmpty else { return peaks }
@@ -345,13 +381,47 @@ extension SongEditor {
         .padding(.horizontal, 12)
     }
 
-    /// Minutes and seconds on the edited song's clock. Click to jump.
+    /// The original's beats where they play in the arrangement, loops included, before speed.
+    var arrangedBeats: [Double] {
+        guard let beats else { return [] }
+        guard let sections else { return beats }
+        var out: [Double] = [], at = 0.0
+        for part in sections {
+            let inside = beats.filter { $0 >= part.start && $0 < part.end }
+            for k in 0..<part.times { out += inside.map { at + Double(k) * part.length + $0 - part.start } }
+            at += part.span
+        }
+        return out
+    }
+
+    /// Minutes and seconds on the edited song's clock, the looping part, and beats while cuts snap. Click to jump.
     var ruler: some View {
-        let total = preview.duration / max(speed, 0.01)
+        let k = max(speed, 0.01)
+        let total = preview.duration / k
         let from = scroll * total, shown = total / zoom
+        let loop: ClosedRange<Double>? = preview.looping.flatMap { i in
+            guard let sections, sections.indices.contains(i) else { return nil }
+            return arrangedStart(of: i) / k...(arrangedStart(of: i) + sections[i].span) / k
+        }
+        let marks = snapping ? arrangedBeats.map { $0 / k } : []
         return GeometryReader { geo in
             Canvas { ctx, size in
                 guard total > 0 else { return }
+                func place(_ t: Double) -> Double { (t - from) / shown * size.width }
+                if let loop {
+                    let a = max(place(loop.lowerBound), 0), b = min(place(loop.upperBound), size.width)
+                    if b > a {
+                        ctx.fill(Path(roundedRect: CGRect(x: a, y: 1, width: b - a, height: size.height - 2), cornerRadius: 4),
+                                 with: .color(Color.mixPrimary.opacity(0.18)))
+                    }
+                }
+                // Only once they're far enough apart to tell.
+                if marks.count > 1, place(from + (marks[marks.count - 1] - marks[0]) / Double(marks.count - 1)) >= 6 {
+                    for m in marks where m >= from && m <= from + shown {
+                        ctx.fill(Path(CGRect(x: place(m), y: size.height - 3, width: 1, height: 3)),
+                                 with: .color(Color.mixPrimary.opacity(0.7)))
+                    }
+                }
                 let step = [1.0, 2, 5, 10, 15, 30, 60, 120, 300].first { $0 / shown * size.width >= 70 } ?? 600
                 var t = (from / step).rounded(.down) * step
                 while t <= from + shown {
@@ -397,6 +467,12 @@ extension SongEditor {
             Label("Parts", systemImage: "scissors").font(.mixLabel).foregroundStyle(Color.mixTextPrimary)
             Spacer(minLength: 0)
             if sections != nil {
+                let canSnap = beats?.isEmpty == false
+                toggleIcon("metronome", on: snapping && canSnap,
+                           help: beats == nil ? "Finding the beat…" : !canSnap ? "No steady beat to snap cuts to"
+                               : snapping ? "Cuts land on the beat. Click to cut anywhere"
+                               : "Cuts land anywhere. Click to snap them to the beat") { snapping.toggle() }
+                    .disabled(!canSnap || busy)
                 iconButton("square.split.2x1", "Split at the playhead (⌘T)") { splitAtPlayhead() }
                     .keyboardShortcut("t")
                     .disabled(busy || (sections?.count ?? 0) >= SongEdit.maxSections)
@@ -411,10 +487,14 @@ extension SongEditor {
     }
 
     func removeCurrentPart() {
-        guard let sections, sections.count > 1 else { return }
-        let now = preview.now
-        let i = sections.indices.first { now < arrangedStart(of: $0) + sections[$0].span } ?? sections.count - 1
-        self.sections?.remove(at: i)
+        guard (sections?.count ?? 0) > 1, let i = part(at: preview.now) else { return }
+        sections?.remove(at: i)
+    }
+
+    /// The part playing at `t` in the arrangement.
+    func part(at t: TimeInterval) -> Int? {
+        guard let sections, !sections.isEmpty else { return nil }
+        return sections.indices.first { t < arrangedStart(of: $0) + sections[$0].span } ?? sections.count - 1
     }
 
     @ViewBuilder
@@ -426,7 +506,7 @@ extension SongEditor {
                 let scale = w * zoom / preview.duration
                 ZStack(alignment: .topLeading) {
                     ForEach(Array(sections.enumerated()), id: \.offset) { i, part in
-                        let x = (arrangedStart(of: i) - scroll * preview.duration) * scale + (dragging == i ? dragOffset : 0)
+                        let x = (arrangedStart(of: i) - scroll * preview.duration) * scale + (dragging == i ? lift(scale) : 0)
                         let full = part.span * scale
                         // Only the part that's on screen, so nothing off screen takes clicks.
                         let from = max(x, 0), to = min(x + full, w)
@@ -435,7 +515,7 @@ extension SongEditor {
                                 .frame(width: max(to - from - 2, 2))
                                 .offset(x: from + 1)
                                 .zIndex(dragging == i ? 1 : 0)
-                                .gesture(partDrag(i, scale: scale))
+                                .gesture(partDrag(i, scale: scale, width: w))
                         }
                     }
                     if let i = dragging {
@@ -469,25 +549,32 @@ extension SongEditor {
         }
     }
 
+    /// How far the dragged part has moved, counting any scrolling since it was picked up.
+    func lift(_ scale: CGFloat) -> CGFloat { dragOffset + (scroll - dragFrom) * preview.duration * scale }
+
     /// Where part `i` lands if let go now, counted among the others.
     func dropSlot(_ i: Int, scale: CGFloat) -> Int {
         guard let sections, scale > 0 else { return i }
-        let middle = arrangedStart(of: i) + sections[i].span / 2 + dragOffset / scale
+        let middle = arrangedStart(of: i) + sections[i].span / 2 + lift(scale) / scale
         return sections.indices.filter { $0 != i && arrangedStart(of: $0) + sections[$0].span / 2 < middle }.count
     }
 
     /// Drag a part along the strip to play it somewhere else.
-    func partDrag(_ i: Int, scale: CGFloat) -> some Gesture {
+    func partDrag(_ i: Int, scale: CGFloat, width: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 4, coordinateSpace: .named("parts"))
             .onChanged { v in
                 naming = false
+                if dragging == nil { dragFrom = scroll }
                 dragging = i
                 dragOffset = v.translation.width
+                // Held at an edge of a zoomed timeline, the view scrolls along.
+                edgePush = zoom <= 1 ? 0 : v.location.x < 30 ? -1 : v.location.x > width - 30 ? 1 : 0
             }
             .onEnded { _ in
                 let slot = dropSlot(i, scale: scale)
                 dragging = nil
                 dragOffset = 0
+                edgePush = 0
                 guard slot != i, var moved = sections else { return }
                 moved.insert(moved.remove(at: i), at: slot)
                 sections = moved
@@ -500,8 +587,9 @@ extension SongEditor {
         let starts = arrangedStart(of: i)
         let playing = (starts..<starts + part.span).contains(preview.position)
         let lifted = dragging == i
+        let looped = preview.looping == i
         return RoundedRectangle(cornerRadius: 6)
-            .fill(Color.mixPrimary.opacity(playing || lifted ? 0.32 : 0.16))
+            .fill(Color.mixPrimary.opacity(playing || lifted || looped ? 0.32 : 0.16))
             .overlay(alignment: .leading) {
                 // A line where each loop starts again.
                 ZStack(alignment: .leading) {
@@ -512,12 +600,17 @@ extension SongEditor {
                 }
                 .allowsHitTesting(false)
             }
-            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.mixPrimary.opacity(playing || lifted ? 0.9 : 0.45), lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.mixPrimary.opacity(playing || lifted || looped ? 0.9 : 0.45), lineWidth: 1))
             .overlay(alignment: .topLeading) {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(part.times > 1 ? "\(i + 1)  ×\(part.times)" : "\(i + 1)")
-                        .font(.mixCaptionBold.monospacedDigit())
-                        .foregroundStyle(Color.mixTextPrimary)
+                    HStack(spacing: 4) {
+                        Text(part.times > 1 ? "\(i + 1)  ×\(part.times)" : "\(i + 1)")
+                            .font(.mixCaptionBold.monospacedDigit())
+                            .foregroundStyle(Color.mixTextPrimary)
+                        if looped {
+                            Image(systemName: "repeat").font(.system(size: 9, weight: .bold)).foregroundStyle(Color.mixPrimary)
+                        }
+                    }
                     Text("\(clock(part.start)) – \(clock(part.end))")
                         .font(.mixMicro.monospacedDigit())
                         .foregroundStyle(Color.mixTextSecondary)
@@ -532,6 +625,11 @@ extension SongEditor {
             .help("Part \(i + 1). Click to play from here, drag to move it, right-click to loop, copy or remove it")
             .contextMenu {
                 Button("Play from Here") { preview.seek(to: starts); preview.play() }
+                if looped {
+                    Button("Stop Looping") { preview.loop(nil) }
+                } else {
+                    Button("Loop This Part") { naming = false; preview.loop(i); preview.play() }
+                }
                 Divider()
                 if part.times < SongEdit.maxLoops {
                     Button("Play One More Time") { sections?[i].times += 1 }
@@ -554,7 +652,7 @@ extension SongEditor {
                 }
             }
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Part \(i + 1), \(clock(part.start)) to \(clock(part.end)), plays \(part.times) times")
+            .accessibilityLabel("Part \(i + 1), \(clock(part.start)) to \(clock(part.end)), plays \(part.times) times\(looped ? ", looping" : "")")
             .accessibilityAddTraits(.isButton)
     }
 
@@ -681,7 +779,7 @@ extension SongEditor {
 
     var statusBar: some View {
         HStack(spacing: 10) {
-            Text("Space plays   ← → skip   ⌘T cuts   ⌫ removes   ⌘Z undoes   Pinch or ⌘ scroll zooms")
+            Text("Space plays   ← → skip   ⌘T cuts   L loops   ⌫ removes   ⌘Z undoes   Pinch or ⌘ scroll zooms")
                 .font(.mixCaption)
                 .foregroundStyle(Color.mixTextTertiary)
                 .lineLimit(1)

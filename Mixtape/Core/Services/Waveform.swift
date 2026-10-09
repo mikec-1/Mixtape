@@ -43,6 +43,16 @@ enum Waveform {
         return level.map { $0 / loudest }
     }
 
+    /// Every beat of `url` in seconds, for snapping cuts. Empty without a steady beat.
+    @concurrent static func beats(of url: URL) async -> [Double] {
+        guard let file = try? AVAudioFile(forReading: url) else { return [] }
+        let rate = file.processingFormat.sampleRate
+        let per = max(Int((rate * 0.0116).rounded()), 1)
+        // Over a few seconds this divides back to exactly `per` frames a slice, so slice times are exact.
+        guard let levels = await peaks(of: url, count: Int(file.length) / per, raw: true) else { return [] }
+        return LoudnessAnalyzer.beatTimes(levels.map { Double($0 * $0) }, hop: Double(per) / rate)
+    }
+
     /// Each stem's peaks, scaled together so all of them at full read as the song.
     @concurrent static func stems(_ files: [String: URL], count: Int) async -> [String: [Float]]? {
         var out: [String: [Float]] = [:]

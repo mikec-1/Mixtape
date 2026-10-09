@@ -4,8 +4,8 @@
 //       scripts/loudness-check.swift -o /tmp/loudcheck && /tmp/loudcheck
 //
 // EBU Tech 3341: a 997 Hz stereo sine at X dBFS reads X LUFS; the gates keep a
-// silent tail from dragging it down. Click tracks check the beat grid and that a
-// beat-matched crossfade puts a beat on a beat.
+// silent tail from dragging it down. Click tracks check the beat grid, that a
+// beat-matched crossfade puts a beat on a beat, and that whole-song beats follow a drift.
 
 import AVFoundation
 
@@ -98,6 +98,22 @@ struct LoudnessCheck {
         assert(miss < 0.015, "beats miss by \(miss)s")
         assert(LoudnessAnalyzer.alignedStart(out: ba, into: bc, leadIn: 1, near: 30, after: 29, fade: 6) == nil,
                "128 and 120 shouldn't match")
+
+        // Whole-song beats for snapping cuts: clicks drifting from 128 to 127 BPM still land on the grid.
+        do {
+            let hop = 0.0116
+            var times: [Double] = [], at = 1.0
+            while at < 60 { times.append(at); at += 60 / (128 - at / 60) }
+            var energies = [Double](repeating: 0.01, count: Int(61 / hop))
+            for t in times { energies[Int(t / hop)] += 1 }
+            let found = LoudnessAnalyzer.beatTimes(energies, hop: hop)
+            let worst = times.map { t in found.map { abs($0 - t) }.min()! }.max()!
+            print(String(format: "drifting clicks -> %d beats for %d, worst %.1f ms", found.count, times.count, worst * 1000))
+            assert(worst < 0.02, "beats off by \(worst)s")
+            // The grid runs on through the silence either side; between the clicks there's one beat per click.
+            let inside = found.filter { $0 > times.first! - 0.1 && $0 < times.last! + 0.1 }
+            assert(inside.count == times.count, "beat count off: \(inside.count)")
+        }
         print("ok")
     }
 }

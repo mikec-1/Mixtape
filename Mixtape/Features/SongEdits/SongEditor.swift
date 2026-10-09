@@ -61,6 +61,13 @@ struct SongEditor: View {
     /// The part being dragged and how far, in points.
     @State var dragging: Int?
     @State var dragOffset: CGFloat = 0
+    /// The scroll when the drag began, so the part stays under the pointer as the view moves.
+    @State var dragFrom = 0.0
+    /// -1 or 1 while a dragged part is held at an edge, scrolling that way.
+    @State var edgePush = 0
+    /// The original's beats in seconds, nil while they're found. Cuts snap to them while `snapping`.
+    @State var beats: [Double]?
+    @State var snapping = true
     /// Changes close together undo as one.
     @State var lastChange = Date.distantPast
     /// Set while undo puts settings back, so that isn't recorded as a change.
@@ -437,7 +444,10 @@ struct SongEditor: View {
         for (i, part) in sections.enumerated() {
             defer { at += part.span }
             guard now < at + part.span else { continue }
-            let cut = part.start + (now - at).truncatingRemainder(dividingBy: part.length)
+            var cut = part.start + (now - at).truncatingRemainder(dividingBy: part.length)
+            // The nearest beat inside the part, if there's one within half a second.
+            if snapping, let beat = beats?.filter({ $0 - part.start > 0.1 && part.end - $0 > 0.1 })
+                .min(by: { abs($0 - cut) < abs($1 - cut) }), abs(beat - cut) < 0.5 { cut = beat }
             guard cut - part.start > 0.1, part.end - cut > 0.1 else { return }
             self.sections?.replaceSubrange(i...i, with: [
                 SongEdit.Section(start: part.start, end: cut, times: part.times),
@@ -617,6 +627,9 @@ struct SongEditor: View {
             source = audio.url
             opened = edit.map { var e = $0; e.stems = track.edit?.stems; return e }
             Task { peaks = await Waveform.peaks(of: audio.url, count: peakCount) }
+            #if os(macOS)
+            Task { beats = await Waveform.beats(of: audio.url) }
+            #endif
         } catch {
             loadError = "Couldn't get this song's audio."
             return

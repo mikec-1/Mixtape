@@ -252,6 +252,10 @@ final class EditPreview: ObservableObject {
     private(set) var length: TimeInterval = 0
     private var sections: [SongEdit.Section]?
     var isScrubbing = false
+    /// The part playing over and over, by index. Seeking outside it ends the loop.
+    @Published private(set) var looping: Int?
+    /// That part's first frame in the arrangement, and how many frames it plays.
+    private var loopSpan: (start: AVAudioFramePosition, count: AVAudioFramePosition)?
 
     private let engine = AVAudioEngine()
     private var players: [AVAudioPlayerNode] = []
@@ -280,6 +284,8 @@ final class EditPreview: ObservableObject {
 
     /// Plays these parts in order. Nil is the whole song. Stops; play again after.
     func arrange(_ sections: [SongEdit.Section]?, at seconds: TimeInterval? = nil) {
+        // The loop follows its part when others change or move, and ends when that part changes.
+        let looped = looping.flatMap { i in self.sections.flatMap { $0.indices.contains(i) ? $0[i] : nil } }
         self.sections = sections
         guard let file else { return }
         halt()
@@ -288,6 +294,32 @@ final class EditPreview: ObservableObject {
         let at = min(max(seconds ?? position, 0), duration)
         startFrame = AVAudioFramePosition(at * rate)
         position = at
+        looping = looped.flatMap { sections?.firstIndex(of: $0) }
+        loopSpan = looping.flatMap { span(of: $0) }
+    }
+
+    /// Plays part `index` over and over, from its start unless the playhead is already in it. Nil plays on.
+    func loop(_ index: Int?) {
+        guard let file else { return }
+        let wasPlaying = isPlaying
+        let at = currentFrame
+        halt()
+        loopSpan = index.flatMap { span(of: $0) }
+        looping = loopSpan == nil ? nil : index
+        startFrame = at
+        if let loopSpan, !(loopSpan.start..<loopSpan.start + loopSpan.count).contains(at) { startFrame = loopSpan.start }
+        position = Double(startFrame) / file.processingFormat.sampleRate
+        if wasPlaying { play() }
+    }
+
+    /// Part `i`'s first frame in the arrangement and how many frames it plays.
+    private func span(of i: Int) -> (start: AVAudioFramePosition, count: AVAudioFramePosition)? {
+        guard let file, let sections, sections.indices.contains(i) else { return nil }
+        func frames(_ parts: [SongEdit.Section]) -> AVAudioFramePosition {
+            EditRenderer.pieces(of: file, parts).reduce(0) { $0 + AVAudioFramePosition($1.count) }
+        }
+        let count = frames([sections[i]])
+        return count > 0 ? (frames(Array(sections.prefix(i))), count) : nil
     }
 
     /// Where the preview is now, in the arrangement, before speed.
@@ -311,9 +343,17 @@ final class EditPreview: ObservableObject {
         if startFrame >= AVAudioFramePosition(duration * file.processingFormat.sampleRate) { startFrame = 0 }
         generation += 1
         let gen = generation
-        for (player, f) in zip(players, files) {
-            EditRenderer.schedule(f, EditRenderer.pieces(of: f, sections), from: startFrame, on: player) { [weak self] in
-                Task { @MainActor in self?.finished(gen) }
+        if let loopSpan {
+            if !(loopSpan.start..<loopSpan.start + loopSpan.count).contains(startFrame) { startFrame = loopSpan.start }
+            for p in players.indices {
+                queueLoop(p, from: startFrame - loopSpan.start, gen)
+                queueLoop(p, from: 0, gen)
+            }
+        } else {
+            for (player, f) in zip(players, files) {
+                EditRenderer.schedule(f, EditRenderer.pieces(of: f, sections), from: startFrame, on: player) { [weak self] in
+                    Task { @MainActor in self?.finished(gen) }
+                }
             }
         }
         // One start time for every stem, so they can't drift a render cycle apart.
@@ -342,6 +382,10 @@ final class EditPreview: ObservableObject {
         let at = min(max(seconds, 0), duration)
         startFrame = AVAudioFramePosition(at * file.processingFormat.sampleRate)
         position = at
+        if let loopSpan, !(loopSpan.start..<loopSpan.start + loopSpan.count).contains(startFrame) {
+            looping = nil
+            self.loopSpan = nil
+        }
         if wasPlaying { play() }
     }
 
@@ -353,7 +397,22 @@ final class EditPreview: ObservableObject {
     private var currentFrame: AVAudioFramePosition {
         guard let player = players.first, let now = player.lastRenderTime,
               let t = player.playerTime(forNodeTime: now) else { return startFrame }
-        return startFrame + max(t.sampleTime, 0)
+        let frame = startFrame + max(t.sampleTime, 0)
+        // A looping part comes round again.
+        guard let loopSpan, frame >= loopSpan.start else { return frame }
+        return loopSpan.start + (frame - loopSpan.start) % loopSpan.count
+    }
+
+    /// One pass of the looping part on player `p`. Each pass queues another as it ends, so one is always waiting.
+    private func queueLoop(_ p: Int, from offset: AVAudioFramePosition, _ gen: Int) {
+        guard let looping, let sections, sections.indices.contains(looping), files.indices.contains(p) else { return }
+        let f = files[p]
+        EditRenderer.schedule(f, EditRenderer.pieces(of: f, [sections[looping]]), from: offset, on: players[p]) { [weak self] in
+            Task { @MainActor in
+                guard let self, gen == self.generation else { return }
+                self.queueLoop(p, from: 0, gen)
+            }
+        }
     }
 
     private func tick() {

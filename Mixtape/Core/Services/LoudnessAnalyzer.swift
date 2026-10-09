@@ -184,11 +184,47 @@ public enum LoudnessAnalyzer {
     /// Tempo from the autocorrelation of the onset envelope, then a beat grid fitted near each end.
     private nonisolated static func beatGrid(_ energies: [Double], hop: Double, start: Double, end: Double) -> Beats {
         guard energies.count > Int(20 / hop) else { return .unclear }
-        // Onset strength: the rise in log energy from one hop to the next.
-        var env = [Double](repeating: 0, count: energies.count)
-        for i in 1..<energies.count { env[i] = max(0, log(energies[i] + 1e-9) - log(energies[i - 1] + 1e-9)) }
+        let env = onsets(energies)
+        guard let tempo = tempo(env, hop: hop) else { return .unclear }
+        let intro = grid(env, period: tempo.period, from: start / hop, to: start / hop + 20 / hop)
+        let outro = grid(env, period: tempo.period, from: max(start, end - 30) / hop, to: end / hop)
+        return Beats(introPeriod: intro.period * hop, introBeat: intro.first * hop,
+                     outroPeriod: outro.period * hop, outroBeat: outro.first * hop, strength: tempo.strength)
+    }
 
-        let mean = env.reduce(0, +) / Double(env.count)
+    /// Every beat in the song, in seconds, from energies `hop` seconds apart. The grid is fitted again every
+    /// 8 seconds so a song that drifts off a click still lines up. Empty without a steady beat.
+    nonisolated static func beatTimes(_ energies: [Double], hop: Double) -> [Double] {
+        guard energies.count > Int(20 / hop) else { return [] }
+        let env = onsets(energies)
+        // ponytail: same 0.12 floor as beat matching.
+        guard let tempo = tempo(env, hop: hop), tempo.strength > 0.12 else { return [] }
+        let window = 8 / hop, last = Double(env.count - 1)
+        var beats: [Double] = []
+        var from = 0.0
+        while from < last {
+            let fit = grid(env, period: tempo.period, from: from, to: from + window)
+            var t = fit.first
+            while t < min(from + window, last) {
+                // Neighbouring windows can land a hair apart at the seam.
+                if beats.last.map({ t * hop - $0 > fit.period * hop / 2 }) ?? true { beats.append(t * hop) }
+                t += fit.period
+            }
+            from += window
+        }
+        return beats
+    }
+
+    /// Onset strength: the rise in log energy from one hop to the next.
+    private nonisolated static func onsets(_ energies: [Double]) -> [Double] {
+        var env = [Double](repeating: 0, count: energies.count)
+        for i in 1..<max(energies.count, 1) { env[i] = max(0, log(energies[i] + 1e-9) - log(energies[i - 1] + 1e-9)) }
+        return env
+    }
+
+    /// The beat period in hops, from the autocorrelation of the onsets, and how strongly it repeats (0 to 1).
+    private nonisolated static func tempo(_ env: [Double], hop: Double) -> (period: Double, strength: Double)? {
+        let mean = env.reduce(0, +) / Double(max(env.count, 1))
         let x = env.map { $0 - mean }
         func ac(_ lag: Int) -> Double {
             var sum = 0.0
@@ -197,7 +233,7 @@ public enum LoudnessAnalyzer {
         }
         let minLag = Int(60 / 200 / hop), maxLag = Int(60 / 60 / hop) + 1
         let zero = ac(0)
-        guard zero > 0, minLag > 1, maxLag + 1 < x.count else { return .unclear }
+        guard zero > 0, minLag > 1, maxLag + 1 < x.count else { return nil }
         var values = [Double](repeating: 0, count: maxLag + 2)
         for lag in (minLag - 1)...(maxLag + 1) { values[lag] = ac(lag) }
         // Leans toward 120 BPM so half or double time doesn't win on a technicality.
@@ -205,12 +241,7 @@ public enum LoudnessAnalyzer {
         let best = (minLag...maxLag).max { score($0) < score($1) } ?? minLag
         let a = values[best - 1], b = values[best], c = values[best + 1]
         let bend = a - 2 * b + c
-        let period = Double(best) + (bend == 0 ? 0 : max(-0.5, min(0.5, 0.5 * (a - c) / bend)))
-
-        let intro = grid(env, period: period, from: start / hop, to: start / hop + 20 / hop)
-        let outro = grid(env, period: period, from: max(start, end - 30) / hop, to: end / hop)
-        return Beats(introPeriod: intro.period * hop, introBeat: intro.first * hop,
-                     outroPeriod: outro.period * hop, outroBeat: outro.first * hop, strength: b / zero)
+        return (Double(best) + (bend == 0 ? 0 : max(-0.5, min(0.5, 0.5 * (a - c) / bend))), b / zero)
     }
 
     /// The comb within 2% of `period` (in hops) that lands on the most onset in [from, to), and its first tooth.
