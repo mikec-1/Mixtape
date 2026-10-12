@@ -648,13 +648,15 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
     }
 
     /// Max concurrent speculative downloads. A preference on macOS. On iOS the
-    /// hosted resolver serves two at a time, so one slot is kept free for taps.
+    /// hosted resolver serves four at a time (two per core), so one slot is kept
+    /// free for taps. Most of these are warms, which cost the phone no data.
     private var maxConcurrentPrefetches: Int {
-        let preference = max(PlaybackPrefetchSettings.shared.concurrentPrefetches, 1)
         #if os(iOS)
-        return min(preference, 1)
+        // ponytail: assumes the 2-core box and one phone on it. Read the slot
+        // count from /health if either changes.
+        return 3
         #else
-        return preference
+        return max(PlaybackPrefetchSettings.shared.concurrentPrefetches, 1)
         #endif
     }
 
