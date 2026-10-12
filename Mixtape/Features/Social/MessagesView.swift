@@ -150,7 +150,7 @@ struct MessagesView: View {
     /// Their name, your last line or theirs, and a dot while unread.
     private func row(_ t: MessagesService.Thread) -> some View {
         HStack(spacing: 12) {
-            AvatarView(url: t.profile.avatarURL, fallbackText: t.profile.username, size: 52)
+            AvatarView(url: t.profile.avatarURL, seed: t.profile.username, size: 52)
 
             VStack(alignment: .leading, spacing: 3) {
                 (Text(t.profile.name).bold()

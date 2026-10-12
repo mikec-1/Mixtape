@@ -158,7 +158,7 @@ struct MessageThreadView: View {
 
     private func who(size: CGFloat) -> some View {
         HStack(spacing: 10) {
-            AvatarView(url: person.avatarURL, fallbackText: person.username, size: size)
+            AvatarView(url: person.avatarURL, seed: person.username, size: size)
             VStack(alignment: .leading, spacing: 1) {
                 Text(person.name)
                     .font(.mixBodyBold)
@@ -231,7 +231,7 @@ struct MessageThreadView: View {
     /// The top of the conversation: who this is, and a way to their profile.
     private var intro: some View {
         VStack(spacing: 4) {
-            AvatarView(url: person.avatarURL, fallbackText: person.username, size: 88)
+            AvatarView(url: person.avatarURL, seed: person.username, size: 88)
                 .padding(.bottom, 6)
             Text(person.name)
                 .font(.mixTitle2)
@@ -267,7 +267,7 @@ struct MessageThreadView: View {
                     Spacer(minLength: 56)
                 } else if endsRun {
                     // Their face sits under the last message of a run.
-                    AvatarView(url: person.avatarURL, fallbackText: person.username, size: 28)
+                    AvatarView(url: person.avatarURL, seed: person.username, size: 28)
                 } else {
                     Color.clear.frame(width: 28, height: 1)
                 }

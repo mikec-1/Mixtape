@@ -5,18 +5,20 @@
 
 import SwiftUI
 
-/// `avatarURL` nil falls back to a monogram, like `AvatarView`.
+/// `avatarURL` nil falls back to the blob `AvatarView` draws from `username`.
 public struct BylineMember: Identifiable, Hashable, Sendable {
 
     public let id: UUID
     public let name: String
+    public let username: String?
     public let avatarURL: URL?
     /// Draws the app's mark instead of a monogram.
     public let isApp: Bool
 
-    public init(id: UUID = UUID(), name: String, avatarURL: URL? = nil, isApp: Bool = false) {
+    public init(id: UUID = UUID(), name: String, username: String? = nil, avatarURL: URL? = nil, isApp: Bool = false) {
         self.id        = id
         self.name      = name
+        self.username  = username
         self.avatarURL = avatarURL
         self.isApp     = isApp
     }
@@ -87,7 +89,7 @@ public struct PlaylistByline: View {
         if member.isApp {
             MixtapeMark(size: Self.avatarSize)
         } else {
-            AvatarView(url: member.avatarURL, fallbackText: member.name, size: Self.avatarSize)
+            AvatarView(url: member.avatarURL, seed: member.username ?? member.name, size: Self.avatarSize)
         }
     }
 

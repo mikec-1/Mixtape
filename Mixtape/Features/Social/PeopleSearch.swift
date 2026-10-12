@@ -76,7 +76,7 @@ struct PersonResultRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            AvatarView(url: profile.avatarURL, fallbackText: profile.username, size: 40)
+            AvatarView(url: profile.avatarURL, seed: profile.username, size: 40)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(profile.name)

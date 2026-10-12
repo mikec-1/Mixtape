@@ -516,7 +516,7 @@ private struct SharePeopleRow: View {
         let busy = sending.contains(p.id)
         return Button { send(to: p) } label: {
             VStack(spacing: 8) {
-                AvatarView(url: p.avatarURL, fallbackText: p.username, size: 58)
+                AvatarView(url: p.avatarURL, seed: p.username, size: 58)
                     .overlay {
                         if busy || done {
                             Circle().fill(.black.opacity(0.55))

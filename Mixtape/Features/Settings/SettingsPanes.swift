@@ -43,7 +43,7 @@ struct AccountPane: View {
             if let user = vm.currentUser {
                 SettingsCard {
                     HStack(spacing: 14) {
-                        AvatarView(url: user.avatarURL, fallbackText: user.displayName, size: 56)
+                        AvatarView(url: user.avatarURL, seed: user.username ?? user.displayName, size: 56)
                         VStack(alignment: .leading, spacing: 3) {
                             Text(user.displayName)
                                 .font(.mixTitle2)

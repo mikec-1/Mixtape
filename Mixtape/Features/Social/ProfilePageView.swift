@@ -173,7 +173,7 @@ public struct ProfilePageView: View {
     private var header: some View {
         HStack(alignment: .bottom, spacing: Metrics.headerSpacing) {
             AvatarView(url: profile.avatarURL,
-                       fallbackText: profile.username,
+                       seed: profile.username,
                        size: Metrics.avatar)
                 .mixShadow(color: .black.opacity(0.35), radius: 18, y: 8)
 

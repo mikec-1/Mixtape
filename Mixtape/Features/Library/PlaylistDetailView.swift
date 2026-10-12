@@ -101,10 +101,10 @@ public struct PlaylistDetailView: View {
     private var madeForMember: BylineMember? {
         guard livePlaylist.origin == .mix else { return nil }
         if let me {
-            return BylineMember(id: me.id, name: me.name, avatarURL: me.avatarURL)
+            return BylineMember(id: me.id, name: me.name, username: me.username, avatarURL: me.avatarURL)
         }
         guard let user = deps.authService.currentUser, !user.displayName.isEmpty else { return nil }
-        return BylineMember(id: user.id, name: user.displayName, avatarURL: user.avatarURL)
+        return BylineMember(id: user.id, name: user.displayName, username: user.username, avatarURL: user.avatarURL)
     }
 
     /// Handles taps on byline names. Nil when there's nothing to open, so names render as plain text.

@@ -27,10 +27,14 @@ public final class JamService: ObservableObject {
         public let deviceID: String
         public let userID: String
         public let name: String
+        /// Missing from older clients.
+        public var username: String?
         public let host: Bool
         public var id: String { deviceID }
+        /// What picks the blob, so it matches the person's profile.
+        public var avatarSeed: String { username ?? name }
         enum CodingKeys: String, CodingKey {
-            case deviceID = "device_id", userID = "user_id", name, host
+            case deviceID = "device_id", userID = "user_id", name, username, host
         }
     }
 
@@ -362,7 +366,7 @@ public final class JamService: ObservableObject {
         if s.isHost, s.nearby ?? true { nearby.advertise(code: s.code, host: s.hostName) }
         if channel?.topic == "realtime:\(topic)", channel?.status == .subscribing { return }
         me = Member(deviceID: deviceID, userID: user.id.uuidString.lowercased(),
-                    name: s.isHost ? s.hostName : user.displayName, host: s.isHost)
+                    name: s.isHost ? s.hostName : user.displayName, username: user.username, host: s.isHost)
         let old = channel
         channel = nil
         channelTask?.cancel()

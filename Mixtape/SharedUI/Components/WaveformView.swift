@@ -123,7 +123,7 @@ struct WaveformView: View {
     private func markView(_ mark: WaveMark) -> some View {
         Group {
             if mark.avatar != nil || !mark.name.isEmpty {
-                AvatarView(url: mark.avatar, fallbackText: mark.name, size: 16)
+                AvatarView(url: mark.avatar, seed: mark.name, size: 16)
                     .overlay(Circle().stroke(Color.mixSurface, lineWidth: 1))
             } else {
                 Circle().fill(Color.mixPrimary)

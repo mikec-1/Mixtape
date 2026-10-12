@@ -80,11 +80,11 @@ struct MixDetailPage: View {
     /// which carries the id that makes the name tappable.
     private var madeForMember: BylineMember? {
         if let me {
-            return BylineMember(id: me.id, name: me.name, avatarURL: me.avatarURL)
+            return BylineMember(id: me.id, name: me.name, username: me.username, avatarURL: me.avatarURL)
         }
         guard let user = deps.authService.currentUser,
               !user.displayName.isEmpty else { return nil }
-        return BylineMember(id: user.id, name: user.displayName, avatarURL: user.avatarURL)
+        return BylineMember(id: user.id, name: user.displayName, username: user.username, avatarURL: user.avatarURL)
     }
 
     var body: some View {

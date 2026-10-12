@@ -212,7 +212,7 @@ struct InboxView: View {
                 .accessibilityHidden(true)
         } else {
             AvatarView(url: notice.actorAvatarURL.flatMap(URL.init(string:)),
-                       fallbackText: notice.phrase.who,
+                       seed: notice.actorUsername ?? notice.phrase.who,
                        size: side)
                 .overlay(alignment: .bottomTrailing) {
                     if notice.subjectID != nil { subject(notice).offset(x: 4, y: 4) }

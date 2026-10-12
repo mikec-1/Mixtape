@@ -179,7 +179,7 @@ public struct ProfileMenuButton: View {
 
     private func avatar(for user: AppUser) -> some View {
         AvatarView(url: me?.avatarURL ?? user.avatarURL,
-                   fallbackText: user.displayName,
+                   seed: me?.username ?? user.displayName,
                    size: size)
             // Hover ring marks it as a control, since an avatar has no tint to change.
             #if os(macOS)

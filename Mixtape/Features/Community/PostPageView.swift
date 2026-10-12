@@ -338,7 +338,7 @@ struct PostPageView: View {
     private func commentRow(_ c: PostComment, to parent: PostComment?, post: CommunityPost) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Button { onOpenProfile(c.author) } label: {
-                AvatarView(url: c.author.avatarURL, fallbackText: c.author.username, size: 32)
+                AvatarView(url: c.author.avatarURL, seed: c.author.username, size: 32)
             }
             .buttonStyle(.plain).mixHandCursor()
 

@@ -351,7 +351,7 @@ struct InviteCollaboratorsSheet: View {
         let isBusy    = busyIDs.contains(profile.id)
 
         return HStack(spacing: 10) {
-            AvatarView(url: profile.avatarURL, fallbackText: profile.username, size: 34)
+            AvatarView(url: profile.avatarURL, seed: profile.username, size: 34)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(profile.name)
@@ -423,7 +423,7 @@ struct InviteCollaboratorsSheet: View {
     private func memberRow(_ member: Member) -> some View {
         HStack(spacing: 10) {
             AvatarView(url: member.profile.avatarURL,
-                       fallbackText: member.profile.username,
+                       seed: member.profile.username,
                        size: 34)
 
             VStack(alignment: .leading, spacing: 1) {

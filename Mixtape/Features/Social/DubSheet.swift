@@ -72,7 +72,7 @@ struct DubSheet: View {
 
     private func sendingTo(_ profile: UserProfile) -> some View {
         HStack(spacing: 8) {
-            AvatarView(url: profile.avatarURL, fallbackText: profile.username, size: 20)
+            AvatarView(url: profile.avatarURL, seed: profile.username, size: 20)
             Text("Goes to @\(profile.username)\u{2019}s inbox")
                 .font(.mixCaption)
                 .foregroundStyle(Color.mixTextSecondary)

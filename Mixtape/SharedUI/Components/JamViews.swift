@@ -42,7 +42,7 @@ struct JamStrip: View {
         if let session = jam.session {
             Button { jam.isSheetPresented = true } label: {
                 HStack(spacing: 8) {
-                    JamAvatarStack(names: people(jam).map(\.name), size: 20, ring: .mixPrimaryDark)
+                    JamAvatarStack(names: people(jam).map(\.avatarSeed), size: 20, ring: .mixPrimaryDark)
                     Text(title(session))
                         .font(.mixCaptionBold)
                         .lineLimit(1)
@@ -115,22 +115,15 @@ struct JamBanner: View {
 
 // MARK: - Avatars
 
-/// An initial on a colour picked from the name, so a person keeps theirs.
+/// The person's blob. Pass `Member.avatarSeed`; nearby Jams only know the host's name.
 struct JamAvatar: View {
     let name: String
     var size: CGFloat = 32
 
     var body: some View {
-        let hue = Double(name.unicodeScalars.reduce(0) { $0 + Int($1.value) } % 360) / 360
-        Circle()
-            .fill(Color(hue: hue, saturation: 0.55, brightness: 0.85))
-            .overlay {
-                Text(name.first.map { String($0).uppercased() } ?? "?")
-                    .font(.system(size: size * 0.45, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
-            }
+        BlobAvatar(seed: name)
             .frame(width: size, height: size)
-            .accessibilityHidden(true)
+            .clipShape(Circle())
     }
 }
 
@@ -371,7 +364,7 @@ private struct JamLiveView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 10) {
-                JamAvatarStack(names: people(jam).map(\.name), size: 40, ring: .mixAccentFill)
+                JamAvatarStack(names: people(jam).map(\.avatarSeed), size: 40, ring: .mixAccentFill)
                 Button { showInvite = true } label: {
                     Image(systemName: "plus")
                         .font(.system(size: 16, weight: .bold))
@@ -592,7 +585,7 @@ private struct JamLiveView: View {
             JamSectionTitle("In this Jam")
             ForEach(people(jam)) { member in
                 HStack(spacing: 12) {
-                    JamAvatar(name: member.name, size: 32)
+                    JamAvatar(name: member.avatarSeed, size: 32)
                     Text(member.name)
                         .font(.mixBody)
                         .foregroundStyle(Color.mixTextPrimary)

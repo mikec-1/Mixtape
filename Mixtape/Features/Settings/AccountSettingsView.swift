@@ -107,7 +107,7 @@ public struct AccountSettingsView: View {
             HStack(spacing: 16) {
                 AvatarView(
                     url: deps.authService.currentUser?.avatarURL,
-                    fallbackText: currentUsername,
+                    seed: currentUsername,
                     size: 72
                 )
 
