@@ -26,6 +26,13 @@ final class CrashReporter: NSObject, MXMetricManagerSubscriber {
             SentrySDK.start { options in
                 options.dsn = Self.sentryDSN
                 options.sendDefaultPii = false
+                // Only our own servers. Lyric and catalogue APIs 5xx all the time.
+                options.failedRequestTargets = ["mixtaped.tech", "supabase.co"]
+                #if DEBUG
+                // Unoptimised builds stall on every sync; MainThreadHangMonitor covers hangs locally.
+                options.environment = "debug"
+                options.enableAppHangTracking = false
+                #endif
             }
         }
         #endif
