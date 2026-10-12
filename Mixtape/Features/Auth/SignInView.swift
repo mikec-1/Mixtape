@@ -50,166 +50,216 @@ public struct SignInView: View {
 
     private var authForm: some View {
         ScrollView {
-            VStack(spacing: 0) {
-                brandHeader
-                    .padding(.top, 72)
-                    .padding(.bottom, 48)
-
-                formCard
-                    .padding(.horizontal, 24)
-
-                socialSection
-                    .padding(.horizontal, 24)
-                    .padding(.top, 20)
-
-                modeToggle
-                    .padding(.top, 24)
-
-                Spacer(minLength: 40)
-            }
+            AuthCard(vm: vm)
+                .padding(.horizontal, 16)
+                .padding(.top, 64)
+                .padding(.bottom, 40)
         }
         #if os(iOS)
         .scrollDismissesKeyboard(.interactively)
         #endif
     }
+}
 
-    // MARK: - Subviews
+// MARK: - Auth Card (iOS and MacAuthFlowView)
 
-    private var brandHeader: some View {
-        VStack(spacing: 12) {
-            ZStack {
-                Circle()
-                    .fill(Color.mixPrimary.opacity(0.15))
-                    .frame(width: 80, height: 80)
-                Image(systemName: MixtapeMark.symbolName)
-                    .font(.system(size: 44))
-                    .foregroundStyle(Color.mixPrimary)
-            }
-            Text("Mixtape")
-                .font(.mixDisplay)
-                .foregroundStyle(Color.mixTextPrimary)
-                .mixTightened()
-            Text("Your music, everywhere.")
-                .font(.mixBody)
-                .foregroundStyle(Color.mixTextSecondary)
+/// Glass card from the web /login and /signup pages, with the listener row under it.
+/// isSignUpMode picks the fields. Forgot password opens vm.showForgotPassword.
+struct AuthCard: View {
+
+    @ObservedObject var vm: AuthViewModel
+
+    // Same Unsplash photos as the web AuthCard.
+    /// Seeds that land on four different blobs.
+    private static let faces = ["rico", "sam", "jo", "zed"]
+
+    var body: some View {
+        VStack(spacing: 48) {
+            card
+            proof
         }
+        .frame(maxWidth: 384)
+        .frame(maxWidth: .infinity)
     }
 
-    private var formCard: some View {
-        VStack(spacing: 16) {
-            Text(vm.isSignUpMode ? "Create Account" : "Welcome Back")
+    private var card: some View {
+        VStack(spacing: 0) {
+            Image(systemName: MixtapeMark.symbolName)
+                .font(.system(size: 28))
+                .foregroundStyle(Color.mixTextPrimary)
+                .frame(width: 48, height: 48)
+                .background(Color.mixTextPrimary.opacity(0.2), in: Circle())
+                .padding(.bottom, 24)
+
+            Text("Mixtape")
                 .font(.mixTitle)
                 .foregroundStyle(Color.mixTextPrimary)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.bottom, 24)
 
-            if vm.isSignUpMode {
-                MixtapeTextField(
-                    label: "Display name",
-                    placeholder: "What should we call you?",
-                    text: $vm.displayName,
-                    icon: "person.text.rectangle"
-                )
-                .transition(.move(edge: .top).combined(with: .opacity))
-                MixtapeTextField(
-                    label: "Username",
-                    placeholder: "Choose a username",
-                    text: $vm.username,
-                    icon: MixtapeIcons.account,
-                    errorMessage: vm.usernameError
-                )
-                .transition(.move(edge: .top).combined(with: .opacity))
-            }
+            VStack(spacing: 12) {
+                if vm.isSignUpMode {
+                    AuthInput(placeholder: "Display name", text: $vm.displayName)
+                    AuthInput(placeholder: "Username (letters, numbers, _)", text: $vm.username,
+                              error: vm.usernameError)
+                }
+                AuthInput(placeholder: "Email", text: $vm.email, isEmail: true, error: vm.emailError)
+                AuthInput(placeholder: vm.isSignUpMode ? "Password (8+ characters)" : "Password",
+                          text: $vm.password, isSecure: true, error: vm.passwordError)
 
-            MixtapeTextField(
-                label: "Email",
-                placeholder: "you@example.com",
-                text: $vm.email,
-                icon: "envelope",
-                isEmail: true,
-                errorMessage: vm.emailError
-            )
-
-            MixtapeSecureField(
-                label: "Password",
-                placeholder: vm.isSignUpMode ? "Min. 8 characters" : "Password",
-                text: $vm.password,
-                errorMessage: vm.passwordError
-            )
-
-            if !vm.isSignUpMode {
-                HStack {
-                    Spacer()
-                    Button("Forgot password?") {
+                if !vm.isSignUpMode {
+                    Button("Forgot your password?") {
                         vm.resetEmail = vm.email
                         vm.showForgotPassword = true
                     }
-                    .font(.mixLabel)
-                    .foregroundStyle(Color.mixPrimary)
+                    .font(.mixSubtext)
+                    .foregroundStyle(Color.mixTextTertiary)
+                    .buttonStyle(.plain).mixHandCursor()
+                    .frame(maxWidth: .infinity, alignment: .trailing)
                 }
-                .padding(.top, -4)
             }
 
-            Button {
-                Task { await vm.submit() }
-            } label: {
-                Group {
+            Rectangle()
+                .fill(Color.mixTextPrimary.opacity(0.1))
+                .frame(height: 1)
+                .padding(.vertical, 16)
+
+            VStack(spacing: 12) {
+                Button {
+                    Task { await vm.submit() }
+                } label: {
                     if vm.isLoading {
-                        ProgressView()
-                            .tint(.white)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 24)
+                        ProgressView().controlSize(.small)
                     } else {
-                        Text(vm.isSignUpMode ? "Create Account" : "Sign In")
-                            .font(.mixButton)
-                            .frame(maxWidth: .infinity)
+                        Text(vm.isSignUpMode ? "Create account" : "Sign in")
                     }
                 }
-                .padding(.vertical, 16)
-                .background(vm.isFormValid ? Color.mixAccentFill : Color.mixAccentFill.opacity(0.4))
-                .foregroundStyle(Color.mixOnAccent)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .buttonStyle(AuthPillStyle())
+                .disabled(!vm.isFormValid || vm.isLoading)
+                .opacity(vm.isFormValid ? 1 : 0.5)
+                .mixAnimation(.easeInOut(duration: 0.15), value: vm.isFormValid)
+
+                GoogleSignInButton { Task { await vm.signInWithGoogle() } }
+                    .disabled(vm.isSocialLoading)
+                    .opacity(vm.isSocialLoading ? 0.6 : 1)
+
+                Button(action: vm.toggleMode) {
+                    HStack(spacing: 4) {
+                        Text(vm.isSignUpMode ? "Already have an account?" : "Don't have an account?")
+                            .foregroundStyle(Color.mixTextTertiary)
+                        Text(vm.isSignUpMode ? "Sign in" : "Sign up, it's free!")
+                            .foregroundStyle(Color.mixTextPrimary.opacity(0.8))
+                            .underline()
+                    }
+                    .font(.mixSubtext)
+                }
+                .buttonStyle(.plain).mixHandCursor()
             }
-            .disabled(!vm.isFormValid || vm.isLoading)
-            .mixAnimation(.easeInOut(duration: 0.15), value: vm.isFormValid)
-            .padding(.top, 8)
         }
-        .padding(24)
-        .background(Color.mixSurface)
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .padding(32)
+        .background(
+            LinearGradient(colors: [Color.mixTextPrimary.opacity(0.06), Color.mixBackground],
+                           startPoint: .leading, endPoint: .trailing),
+            in: RoundedRectangle(cornerRadius: 24, style: .continuous)
+        )
+        .shadow(color: .black.opacity(0.25), radius: 24, y: 12)
     }
 
-    // MARK: - Social Sign-In
+    private var proof: some View {
+        VStack(spacing: 8) {
+            Text("Join **listeners** who already keep their music in Mixtape.")
+                .font(.mixSubtext)
+                .foregroundStyle(Color.mixTextTertiary)
+                .multilineTextAlignment(.center)
 
-    @ViewBuilder
-    private var socialSection: some View {
-        VStack(spacing: 14) {
-            HStack(spacing: 10) {
-                Rectangle().fill(Color.mixSeparator).frame(height: 1)
-                Text("or continue with")
+            HStack(spacing: 0) {
+                ForEach(Self.faces, id: \.self) { seed in
+                    BlobAvatar(seed: seed)
+                        .frame(width: 32, height: 32)
+                        .clipShape(Circle())
+                        .overlay(Circle().strokeBorder(Color.mixSurface, lineWidth: 2))
+                }
+            }
+            .accessibilityHidden(true)
+        }
+    }
+}
+
+/// Placeholder-only field on a faint fill, like the web .auth-input.
+private struct AuthInput: View {
+    let placeholder: String
+    @Binding var text: String
+    var isSecure = false
+    var isEmail = false
+    var error: String? = nil
+
+    @State private var isRevealed = false
+    @FocusState private var hasFocus: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Group {
+                    if isSecure && !isRevealed {
+                        SecureField(placeholder, text: $text)
+                    } else {
+                        TextField(placeholder, text: $text)
+                    }
+                }
+                .textFieldStyle(.plain)
+                .font(.mixBody)
+                .foregroundStyle(Color.mixTextPrimary)
+                .focused($hasFocus)
+                .autocorrectionDisabled()
+                #if os(iOS)
+                .keyboardType(isEmail ? .emailAddress : .default)
+                .textInputAutocapitalization(.never)
+                #endif
+
+                if isSecure {
+                    Button { isRevealed.toggle() } label: {
+                        Image(systemName: isRevealed ? "eye.slash" : "eye")
+                            .foregroundStyle(Color.mixTextTertiary)
+                    }
+                    .buttonStyle(.plain).mixHandCursor()
+                    .accessibilityLabel(isRevealed ? "Hide password" : "Show password")
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+            .background(Color.mixTextPrimary.opacity(0.1), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(ring, lineWidth: 2)
+            )
+
+            if let error {
+                Text(error)
                     .font(.mixCaption)
-                    .foregroundStyle(Color.mixTextTertiary)
-                    .fixedSize()
-                Rectangle().fill(Color.mixSeparator).frame(height: 1)
+                    .foregroundStyle(Color.mixDestructive)
+                    .transition(.opacity)
             }
-
-            GoogleSignInButton { Task { await vm.signInWithGoogle() } }
-            .disabled(vm.isSocialLoading)
-            .opacity(vm.isSocialLoading ? 0.6 : 1)
         }
+        .mixAnimation(.easeInOut(duration: 0.15), value: error)
+        .mixAnimation(.easeInOut(duration: 0.12), value: hasFocus)
     }
 
-    private var modeToggle: some View {
-        Button(action: vm.toggleMode) {
-            HStack(spacing: 4) {
-                Text(vm.isSignUpMode ? "Already have an account?" : "Don't have an account?")
-                    .font(.mixLabel)
-                    .foregroundStyle(Color.mixTextSecondary)
-                Text(vm.isSignUpMode ? "Sign In" : "Create one")
-                    .font(.mixBodyBold)
-                    .foregroundStyle(Color.mixPrimary)
-            }
-        }
-        .buttonStyle(.plain).mixHandCursor()
+    private var ring: Color {
+        if error != nil { return Color.mixDestructive.opacity(0.6) }
+        return hasFocus ? Color.mixTextTertiary : .clear
+    }
+}
+
+/// Faint pill that deepens on press, sized to match GoogleSignInButton.
+private struct AuthPillStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(GoogleSignInButton.font)
+            .foregroundStyle(Color.mixTextPrimary)
+            .frame(maxWidth: .infinity)
+            .frame(height: GoogleSignInButton.height)
+            .background(Color.mixTextPrimary.opacity(configuration.isPressed ? 0.2 : 0.1), in: Capsule())
+            .contentShape(Capsule())
+            .mixHandCursor()
     }
 }
 
@@ -417,58 +467,6 @@ private struct CheckEmailView: View {
 }
 
 // MARK: - Input Components
-
-private struct MixtapeTextField: View {
-    let label: String
-    let placeholder: String
-    @Binding var text: String
-    var icon: String? = nil
-    var isEmail: Bool = false
-    var errorMessage: String? = nil
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(label)
-                .font(.mixLabel)
-                .foregroundStyle(Color.mixTextSecondary)
-
-            HStack(spacing: 10) {
-                if let icon {
-                    Image(systemName: icon)
-                        .font(.system(size: 15))
-                        .foregroundStyle(Color.mixTextTertiary)
-                        .frame(width: 20)
-                }
-                TextField(placeholder, text: $text)
-                    .font(.mixBody)
-                    .foregroundStyle(Color.mixTextPrimary)
-                    .autocorrectionDisabled()
-                    #if os(iOS)
-                    .keyboardType(isEmail ? .emailAddress : .default)
-                    .textInputAutocapitalization(.never)
-                    #endif
-            }
-            .padding(14)
-            .background(Color.mixSurface2)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(
-                        errorMessage != nil ? Color.mixDestructive.opacity(0.6) : Color.mixSeparator,
-                        lineWidth: 1
-                    )
-            )
-
-            if let err = errorMessage {
-                Text(err)
-                    .font(.mixCaption)
-                    .foregroundStyle(Color.mixDestructive)
-                    .transition(.opacity)
-            }
-        }
-        .mixAnimation(.easeInOut(duration: 0.15), value: errorMessage)
-    }
-}
 
 private struct MixtapeSecureField: View {
     let label: String

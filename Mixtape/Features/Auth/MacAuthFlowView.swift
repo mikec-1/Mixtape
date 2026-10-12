@@ -1,8 +1,5 @@
-// macOS onboarding:
-// Landing -> Sign In (passkey first, email fallback)
-// -> Create Account -> Check Email (if confirmation is needed)
-// Navigation is an enum with a spring animation. Each screen sets
-// `vm.isSignUpMode` before submit().
+// macOS onboarding: the shared AuthCard (sign in or sign up via vm.isSignUpMode)
+// -> Check Email (if confirmation is needed). A reset link jumps to Set New Password.
 
 #if os(macOS)
 import SwiftUI
@@ -10,7 +7,7 @@ import SwiftUI
 // MARK: - Screen State
 
 private enum MacAuthScreen: Equatable {
-    case landing, signIn, createAccount, checkEmail, setNewPassword
+    case card, checkEmail, setNewPassword
 }
 
 // MARK: - Flow Container
@@ -19,7 +16,7 @@ struct MacAuthFlowView: View {
 
     @StateObject  private var vm:          AuthViewModel
     @ObservedObject private var authService: SupabaseAuthService
-    @State private var screen:      MacAuthScreen = .landing
+    @State private var screen:      MacAuthScreen = .card
     @State private var pushForward: Bool          = true
 
     init(authService: SupabaseAuthService) {
@@ -33,25 +30,23 @@ struct MacAuthFlowView: View {
 
             Group {
                 switch screen {
-                case .landing:
-                    MacAuthLandingView(
-                        onSignIn:        { navigate(to: .signIn,         forward: true) },
-                        onCreateAccount: { navigate(to: .createAccount,  forward: true) }
-                    )
+                case .card:
+                    ScrollView {
+                        AuthCard(vm: vm)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 48)
+                    }
+                    .defaultScrollAnchor(.center)
                     .transition(slide(forward: pushForward))
-
-                case .signIn:
-                    MacSignInView(vm: vm, onBack: { navigate(to: .landing, forward: false) })
-                        .transition(slide(forward: pushForward))
-
-                case .createAccount:
-                    MacCreateAccountView(vm: vm, onBack: { navigate(to: .landing, forward: false) })
-                        .transition(slide(forward: pushForward))
 
                 case .checkEmail:
                     MacCheckEmailView(
                         vm:     vm,
-                        onBack: { navigate(to: .createAccount, forward: false) }
+                        onBack: {
+                            // Cleared so the next sign-up's onChange fires again.
+                            vm.showCheckEmail = false
+                            navigate(to: .card, forward: false)
+                        }
                     )
                     .transition(slide(forward: pushForward))
 
@@ -67,6 +62,9 @@ struct MacAuthFlowView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(vm.errorMessage ?? "Something went wrong. Please try again.")
+        }
+        .sheet(isPresented: $vm.showForgotPassword) {
+            ForgotPasswordSheet(vm: vm)
         }
         // Navigate to checkEmail as soon as the VM signals it
         .onChange(of: vm.showCheckEmail) { _, show in
@@ -88,207 +86,6 @@ struct MacAuthFlowView: View {
             insertion:  .move(edge: forward ? .trailing : .leading).combined(with: .opacity),
             removal:    .move(edge: forward ? .leading  : .trailing).combined(with: .opacity)
         )
-    }
-}
-
-// MARK: - Landing
-
-private struct MacAuthLandingView: View {
-
-    let onSignIn:        () -> Void
-    let onCreateAccount: () -> Void
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Spacer()
-
-            // Wordmark
-            VStack(spacing: 14) {
-                Image(systemName: MixtapeMark.symbolName)
-                    .font(.system(size: 54, weight: .light))
-                    .foregroundStyle(Color.mixPrimary)
-
-                VStack(spacing: 5) {
-                    Text("Mixtape")
-                        .font(.system(size: 30, weight: .bold))
-                        .foregroundStyle(Color.mixTextPrimary)
-                        .mixTightened()
-
-                    Text("Your music, everywhere.")
-                        .font(.system(size: 13))
-                        .foregroundStyle(Color.mixTextTertiary)
-                }
-            }
-
-            Spacer().frame(height: 56)
-
-            VStack(spacing: 11) {
-                MixAuthPrimaryButton("Sign In", action: onSignIn)
-                MixAuthSecondaryButton("Create Account", action: onCreateAccount)
-            }
-            .frame(maxWidth: 300)
-
-            Spacer()
-
-            Text("Your files. Your library. No algorithms.")
-                .font(.system(size: 11))
-                .foregroundStyle(Color.mixTextTertiary.opacity(0.45))
-                .padding(.bottom, 36)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
-// MARK: - Sign In
-
-private struct MacSignInView: View {
-
-    @ObservedObject var vm: AuthViewModel
-    let onBack: () -> Void
-
-    @State private var showForgotPassword = false
-
-    var body: some View {
-        ZStack(alignment: .topLeading) {
-            MixAuthBackButton(action: onBack)
-                .padding(.horizontal, 40)
-                .padding(.top, 32)
-
-            VStack(spacing: 30) {
-                authHeading(
-                    title:    "Welcome back",
-                    subtitle: "Sign in to your Mixtape account"
-                )
-
-                MacSocialButtons(vm: vm)
-
-                MixAuthDivider(label: "or continue with email")
-
-                VStack(spacing: 12) {
-                    MixAuthField(
-                        label:        "Email",
-                        placeholder:  "you@example.com",
-                        text:         $vm.email,
-                        errorMessage: vm.emailError
-                    )
-                    MixAuthField(
-                        label:        "Password",
-                        placeholder:  "Password",
-                        text:         $vm.password,
-                        isSecure:     true,
-                        errorMessage: vm.passwordError
-                    )
-
-                    HStack {
-                        Spacer()
-                        Button("Forgot password?") {
-                            vm.resetEmail = vm.email
-                            showForgotPassword = true
-                        }
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color.mixTextTertiary)
-                        .buttonStyle(.plain).mixHandCursor()
-                    }
-                    .padding(.top, -4)
-                }
-
-                MixAuthPrimaryButton(
-                    vm.isLoading ? "" : "Sign In",
-                    isLoading: vm.isLoading,
-                    isEnabled: vm.isFormValid && !vm.isLoading
-                ) {
-                    Task { await vm.submit() }
-                }
-            }
-            .frame(maxWidth: 320)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .onAppear { vm.isSignUpMode = false }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .sheet(isPresented: $showForgotPassword) {
-            ForgotPasswordSheet(vm: vm)
-        }
-    }
-}
-
-// MARK: - Social Sign-In Buttons (shared by Sign In + Create Account)
-
-private struct MacSocialButtons: View {
-
-    @ObservedObject var vm: AuthViewModel
-
-    var body: some View {
-        VStack(spacing: 10) {
-            GoogleSignInButton { Task { await vm.signInWithGoogle() } }
-            .disabled(vm.isSocialLoading)
-            .opacity(vm.isSocialLoading ? 0.6 : 1)
-        }
-    }
-}
-
-// MARK: - Create Account
-
-private struct MacCreateAccountView: View {
-
-    @ObservedObject var vm: AuthViewModel
-    let onBack: () -> Void
-
-    var body: some View {
-        ZStack(alignment: .topLeading) {
-            MixAuthBackButton(action: onBack)
-                .padding(.horizontal, 40)
-                .padding(.top, 32)
-
-            VStack(spacing: 30) {
-                authHeading(
-                    title:    "Create account",
-                    subtitle: "Your library lives in the cloud."
-                )
-
-                MacSocialButtons(vm: vm)
-
-                MixAuthDivider(label: "or sign up with email")
-
-                VStack(spacing: 12) {
-                    MixAuthField(
-                        label:        "Display name",
-                        placeholder:  "What should we call you?",
-                        text:         $vm.displayName
-                    )
-                    MixAuthField(
-                        label:        "Username",
-                        placeholder:  "Choose a username",
-                        text:         $vm.username,
-                        errorMessage: vm.usernameError
-                    )
-                    MixAuthField(
-                        label:        "Email",
-                        placeholder:  "you@example.com",
-                        text:         $vm.email,
-                        errorMessage: vm.emailError
-                    )
-                    MixAuthField(
-                        label:        "Password",
-                        placeholder:  "Min. 8 characters",
-                        text:         $vm.password,
-                        isSecure:     true,
-                        errorMessage: vm.passwordError
-                    )
-                }
-
-                MixAuthPrimaryButton(
-                    vm.isLoading ? "" : "Create Account",
-                    isLoading: vm.isLoading,
-                    isEnabled: vm.isFormValid && !vm.isLoading
-                ) {
-                    Task { await vm.submit() }
-                }
-            }
-            .frame(maxWidth: 320)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .onAppear { vm.isSignUpMode = true }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -506,48 +303,6 @@ private struct MixAuthPrimaryButton: View {
         .buttonStyle(.plain).mixHandCursor()
         .disabled(!isEnabled || isLoading)
         .mixAnimation(.easeInOut(duration: 0.14), value: isEnabled)
-    }
-}
-
-private struct MixAuthSecondaryButton: View {
-
-    let label:  String
-    let action: () -> Void
-
-    init(_ label: String, action: @escaping () -> Void) {
-        self.label  = label
-        self.action = action
-    }
-
-    var body: some View {
-        Button(action: action) {
-            Text(label)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(Color.mixTextSecondary)
-                .frame(maxWidth: .infinity)
-                .frame(height: 42)
-                .background(Color.clear)
-                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .strokeBorder(Color.mixSeparator, lineWidth: 1)
-                )
-        }
-        .buttonStyle(.plain).mixHandCursor()
-    }
-}
-
-private struct MixAuthDivider: View {
-    let label: String
-    var body: some View {
-        HStack(spacing: 12) {
-            Rectangle().fill(Color.mixSeparator).frame(height: 1)
-            Text(label)
-                .font(.system(size: 11))
-                .foregroundStyle(Color.mixTextTertiary)
-                .fixedSize()
-            Rectangle().fill(Color.mixSeparator).frame(height: 1)
-        }
     }
 }
 

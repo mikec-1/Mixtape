@@ -1,4 +1,4 @@
-// Matches the web's Google button: pill, hairline border, real four-colour G.
+// Matches the web's Google button: pill, surface gradient, real four-colour G.
 
 import SwiftUI
 
@@ -7,12 +7,13 @@ struct GoogleSignInButton: View {
 
     @State private var isHovering = false
 
+    // The auth card's pills use these too so the two buttons line up.
     #if os(macOS)
-    private let height: CGFloat = 42
-    private let font = Font.system(size: 14, weight: .semibold)
+    static let height: CGFloat = 42
+    static var font: Font { .system(size: 14, weight: .semibold) }
     #else
-    private let height: CGFloat = 50
-    private let font = Font.system(size: MixFontScale.size(16), weight: .semibold)
+    static let height: CGFloat = 50
+    static var font: Font { .system(size: MixFontScale.size(16), weight: .semibold) }
     #endif
 
     var body: some View {
@@ -22,15 +23,16 @@ struct GoogleSignInButton: View {
                     .resizable()
                     .frame(width: 18, height: 18)
                 Text("Continue with Google")
-                    .font(font)
+                    .font(Self.font)
             }
             .frame(maxWidth: .infinity)
-            .frame(height: height)
+            .frame(height: Self.height)
             .foregroundStyle(Color.mixTextPrimary)
-            .background(Color.mixSurface, in: Capsule())
-            .overlay(
-                Capsule().strokeBorder(isHovering ? Color.mixTextTertiary : Color.mixSeparator, lineWidth: 1)
+            .background(
+                LinearGradient(colors: [Color.mixSurface, Color.mixSurface2], startPoint: .top, endPoint: .bottom),
+                in: Capsule()
             )
+            .brightness(isHovering ? 0.05 : 0)
             .contentShape(Capsule())
         }
         .buttonStyle(.plain).mixHandCursor()
