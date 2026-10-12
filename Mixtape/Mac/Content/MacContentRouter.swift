@@ -13,20 +13,7 @@ struct MacContentRouter: View {
     @EnvironmentObject private var deps:     AppDependencies
 
     var body: some View {
-        Group {
-            contentBody
-        }
-        // Switching sections clears any album/playlist/profile/account drill-down.
-        .onChange(of: appState.selection) { _, newValue in
-            if newValue != nil {
-                appState.selectedAlbum = nil
-                appState.selectedPlaylist = nil
-                appState.showingAccount = false
-                appState.profileTarget = nil
-                appState.publicPlaylistTarget = nil
-                appState.messagesPage = nil
-            }
-        }
+        contentBody
     }
 
     @ViewBuilder

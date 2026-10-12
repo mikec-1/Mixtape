@@ -220,6 +220,16 @@ final class MacAppState: ObservableObject {
                 leaveSearchOnSectionChange(); libraryArtistID = nil
                 if let selection { Analytics.screen(selection.rawValue.lowercased()) }
             }
+            // Switching sections clears any drill-down. Here rather than in the view, so a caller
+            // that sets a section and then a page (showPlaylist) keeps the page.
+            if oldValue != selection, selection != nil {
+                selectedAlbum = nil
+                selectedPlaylist = nil
+                showingAccount = false
+                profileTarget = nil
+                publicPlaylistTarget = nil
+                messagesPage = nil
+            }
             // Old section items open Library on that tab. Set here so the history sees the tab in the same turn.
             if let tab = selection?.libraryTab { libraryTab = tab }
             selectedCrateID = nil
@@ -312,7 +322,7 @@ final class MacAppState: ObservableObject {
 
     /// Drops pages that take over the whole content area, including fullscreen lyrics.
     /// Called from the drill-down setters too: a sidebar playlist sets `selection = nil`,
-    /// so the router's `onChange` never runs.
+    /// so the `selection` setter never clears them.
     private func dismissContentOverlays() {
         showingAccount       = false
         profileTarget        = nil
@@ -1013,7 +1023,7 @@ final class MacAppState: ObservableObject {
     func showOnlineArtist(name: String, trackID: Int?) {
         leaveFullscreenLyricsForNavigation()
         clearSearch()
-        // Explicit: the router's `onChange(of: selection)` doesn't fire when Discover was already selected.
+        // Explicit: the `selection` setter doesn't clear anything when Discover was already selected.
         dismissContentOverlays()
         pendingDiscover       = .artist(name: name, trackID: trackID)
         resolvingDiscoverLink = name

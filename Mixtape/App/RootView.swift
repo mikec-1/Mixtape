@@ -114,6 +114,9 @@ public struct RootView: View {
             pendingLink = nil
             open(url)
         }
+        #if DEBUG && os(macOS)
+        .task(id: isReady) { if isReady { await ScreenshotSetup.run(deps) } }
+        #endif
         // Answered once it's seen, so quitting with it open doesn't bring it back.
         .sheet(isPresented: $askNotifications) {
             NotificationsPrompt()
