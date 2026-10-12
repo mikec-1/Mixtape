@@ -14,6 +14,10 @@
 	<true/>
 	<key>SUPublicEDKey</key>
 	<string>Axi5/vurmFfaB2/44dTXduXerRGHiTniGjWsg9/Z/S4=</string>
+	<!-- The beta number ("1" for 2.0.0 beta 1). release.sh sets MIXTAPE_BETA when it
+	     archives a beta, so this is empty in stable and Xcode builds. -->
+	<key>MixtapeBeta</key>
+	<string>$(MIXTAPE_BETA)</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

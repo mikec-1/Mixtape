@@ -1367,7 +1367,8 @@ struct AboutPane: View {
 
     #if os(macOS)
     // Subscribes Sparkle to the "beta" channel. UpdaterController reads the same key.
-    @AppStorage(UpdaterController.receiveDevelopmentBuildsKey) private var receiveDevelopmentBuilds = false
+    @AppStorage(UpdaterController.receiveDevelopmentBuildsKey)
+    private var receiveDevelopmentBuilds = UpdaterController.betaNumber != nil
     #endif
 
     var body: some View {
@@ -1406,10 +1407,10 @@ struct AboutPane: View {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
     }
 
-    /// On macOS dev-channel builds this reads e.g. "2.0.0 (beta)".
+    /// "2.0.0 beta 1" in a beta build. The toggle doesn't change what's installed.
     private var displayVersion: String {
         #if os(macOS)
-        return receiveDevelopmentBuilds ? "\(appVersion) (beta)" : appVersion
+        return UpdaterController.betaNumber.map { "\(appVersion) beta \($0)" } ?? appVersion
         #else
         return appVersion
         #endif

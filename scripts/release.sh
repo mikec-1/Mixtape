@@ -1,74 +1,117 @@
 #!/usr/bin/env bash
 #
-# release.sh — Build, package, sign, and prepare a Mixtape macOS release.
+# release.sh — Number, build, package, and sign a Mixtape macOS release.
+# RELEASING.md says when to run what.
 #
-# Produces:
-#   build/Mixtape-<version>.dmg      → upload as a GitHub Release asset
-#   docs/appcast.xml                 → Sparkle feed (served via GitHub Pages)
+# Usage:  ./scripts/release.sh [--beta] [--dry-run] [patch|minor|major] ["<release notes HTML>"]
+#   --beta     A beta of the current version, cut from develop. Goes out on the
+#              Sparkle "beta" channel, tagged vX.Y.Z-beta.N.
+#   --dry-run  Print the version, build, and names this run would use. Changes nothing.
+#   patch|minor|major
+#              Bump MARKETING_VERSION first: patch for a hotfix on main, minor or
+#              major for the first beta of the next version on develop.
+#   The optional release-notes argument is the body shown in the Sparkle update
+#   window (simple HTML — <ul><li>… or <p>…). Defaults to a generic note.
+#
+# The build number is always one past the highest build in the live feed, so a
+# beta on develop and a hotfix on main can never get the same number.
+#
+# Produces build/Mixtape-<version>[-beta.N].dmg, docs/appcast.xml, and (stable
+# only) docs/index.html. It never commits, tags, or uploads; it prints those steps.
 #
 # Distribution is un-notarized: the app is ad-hoc signed and update integrity
 # is guaranteed by Sparkle's EdDSA signature (private key in the login Keychain).
 # First manual install needs a one-time Open Anyway (System Settings → Privacy
-# & Security) on macOS 15+; Sparkle updates are
-# seamless thereafter.
+# & Security) on macOS 15+; Sparkle updates are seamless thereafter.
 #
-# Usage:  ./scripts/release.sh [--beta] ["<release notes HTML>"]
-#   --beta  Cut an opt-in development build on the Sparkle "beta" channel:
-#             • bumps CURRENT_PROJECT_VERSION so Sparkle sees a newer build
-#             • tags the appcast item with <sparkle:channel>beta</sparkle:channel>
-#               (only users who enabled "Receive development builds" get it; the
-#               existing stable item is preserved in the feed)
-#             • marks the GitHub Release as a pre-release (--prerelease)
-#   The optional release-notes argument is the body shown in the Sparkle update
-#   window (simple HTML — <ul><li>… or <p>…). Defaults to a generic note.
 # Run from the repo root (the dir containing Mixtape.xcodeproj).
 
 set -euo pipefail
 
 # ── Parse arguments ──────────────────────────────────────────────────────────
 BETA=false
+DRY_RUN=false
+BUMP=""
 NOTES_BODY="<p>Bug fixes and improvements.</p>"
 for arg in "$@"; do
     case "$arg" in
-        --beta) BETA=true ;;
-        *)      NOTES_BODY="$arg" ;;
+        --beta)            BETA=true ;;
+        --dry-run)         DRY_RUN=true ;;
+        patch|minor|major) BUMP="$arg" ;;
+        *)                 NOTES_BODY="$arg" ;;
     esac
 done
 
 # ── Config ───────────────────────────────────────────────────────────────────
 PROJECT="Mixtape.xcodeproj"
+PBXPROJ="$PROJECT/project.pbxproj"
 SCHEME="Mixtape"
 APP_NAME="Mixtape"
 REPO="mikec-1/Mixtape"
+FEED_URL="https://mikec-1.github.io/Mixtape/appcast.xml"
 BUILD_DIR="build"
 ARCHIVE="$BUILD_DIR/$APP_NAME.xcarchive"
+[ -f "$PBXPROJ" ] || { echo "✗ Run from the repo root (can't find $PBXPROJ)"; exit 1; }
 
-# ── Beta: bump the build number so Sparkle sees a newer build ────────────────
-if [ "$BETA" = true ]; then
-    echo "▸ Beta build — bumping CURRENT_PROJECT_VERSION…"
-    PBXPROJ="$PROJECT/project.pbxproj"
-    CUR_BUILD=$(awk -F'= ' '/CURRENT_PROJECT_VERSION = /{gsub(/[ ;]/,"",$2); print $2; exit}' "$PBXPROJ")
-    [ -n "$CUR_BUILD" ] || { echo "✗ Could not read CURRENT_PROJECT_VERSION"; exit 1; }
-    NEXT_BUILD=$((CUR_BUILD + 1))
-    sed -i '' "s/CURRENT_PROJECT_VERSION = $CUR_BUILD;/CURRENT_PROJECT_VERSION = $NEXT_BUILD;/g" "$PBXPROJ"
-    echo "  build $CUR_BUILD → $NEXT_BUILD"
+# ── Betas come from develop, everything else from main ───────────────────────
+BRANCH=$(git branch --show-current)
+if [ "$BETA" = true ]; then WANT=develop; else WANT=main; fi
+if [ "$BRANCH" != "$WANT" ]; then
+    echo "✗ This release is cut from $WANT, you're on $BRANCH. See RELEASING.md."
+    [ "$DRY_RUN" = true ] || exit 1
 fi
 
-# ── Resolve version from build settings ──────────────────────────────────────
-echo "▸ Reading version…"
-SETTINGS=$(xcodebuild -project "$PROJECT" -scheme "$SCHEME" \
-    -destination 'generic/platform=macOS' -showBuildSettings 2>/dev/null)
-VERSION=$(echo "$SETTINGS" | awk -F' = ' '/ MARKETING_VERSION =/{print $2; exit}')
-BUILD_NUM=$(echo "$SETTINGS" | awk -F' = ' '/ CURRENT_PROJECT_VERSION =/{print $2; exit}')
-[ -n "$VERSION" ]   || { echo "✗ Could not read MARKETING_VERSION"; exit 1; }
-[ -n "$BUILD_NUM" ] || { echo "✗ Could not read CURRENT_PROJECT_VERSION"; exit 1; }
-echo "  version $VERSION (build $BUILD_NUM)"
+# ── Version ──────────────────────────────────────────────────────────────────
+CUR_VERSION=$(grep -m1 'MARKETING_VERSION = ' "$PBXPROJ" | sed -E 's/.*= ([^;]+);.*/\1/')
+CUR_BUILD=$(grep -m1 'CURRENT_PROJECT_VERSION = ' "$PBXPROJ" | sed -E 's/.*= ([^;]+);.*/\1/')
+IFS='.' read -r MAJ MIN PAT <<<"$CUR_VERSION"
+MAJ=${MAJ:-0}; MIN=${MIN:-0}; PAT=${PAT:-0}
+case "$BUMP" in
+    patch) PAT=$((PAT + 1)) ;;
+    minor) MIN=$((MIN + 1)); PAT=0 ;;
+    major) MAJ=$((MAJ + 1)); MIN=0; PAT=0 ;;
+esac
+VERSION="$MAJ.$MIN.$PAT"
 
-DMG="$BUILD_DIR/$APP_NAME-$VERSION.dmg"
-DOWNLOAD_URL="https://github.com/$REPO/releases/download/v$VERSION/$APP_NAME-$VERSION.dmg"
+# Tags already on GitHub for this version: v2.0.0, v2.0.0-beta.1, …
+TAGS=$(git ls-remote --tags origin "v$VERSION*" | sed -E 's|.*refs/tags/||; s|\^\{\}$||' | sort -u)
+if grep -qx "v$VERSION" <<<"$TAGS"; then
+    echo "✗ $VERSION is already out. Add patch (hotfix on main) or minor (next beta on develop)."
+    exit 1
+fi
 
-# ── Release notes (shown in the Sparkle update window) ───────────────────────
-# NOTES_BODY is resolved during argument parsing above.
+# ── Build number: one past anything users can already have ───────────────────
+FEED=$(curl -fsS "$FEED_URL") || { echo "✗ Couldn't read $FEED_URL"; exit 1; }
+FEED_BUILD=$(echo "$FEED" | sed -nE 's/.*<sparkle:version>([0-9]+)<.*/\1/p' | sort -n | tail -1)
+FEED_BUILD=${FEED_BUILD:-0}
+BUILD_NUM=$(( (FEED_BUILD > CUR_BUILD ? FEED_BUILD : CUR_BUILD) + 1 ))
+
+# ── Names ────────────────────────────────────────────────────────────────────
+if [ "$BETA" = true ]; then
+    LAST_BETA=$(echo "$TAGS" | sed -nE "s/^v$VERSION-beta\.([0-9]+)$/\1/p" | sort -n | tail -1)
+    BETA_NUM=$(( ${LAST_BETA:-0} + 1 ))
+    LABEL="$VERSION beta $BETA_NUM"
+    TAG="v$VERSION-beta.$BETA_NUM"
+else
+    BETA_NUM=""
+    LABEL="$VERSION"
+    TAG="v$VERSION"
+fi
+DMG_NAME="$APP_NAME-${TAG#v}.dmg"
+DMG="$BUILD_DIR/$DMG_NAME"
+DOWNLOAD_URL="https://github.com/$REPO/releases/download/$TAG/$DMG_NAME"
+
+echo "▸ $APP_NAME $LABEL (build $BUILD_NUM), tag $TAG"
+echo "  version $CUR_VERSION → $VERSION"
+echo "  build $CUR_BUILD → $BUILD_NUM (highest in the live feed: $FEED_BUILD)"
+echo "  $DMG"
+if [ "$DRY_RUN" = true ]; then
+    echo "Dry run, nothing changed."
+    exit 0
+fi
+
+sed -i '' -E "s/MARKETING_VERSION = [^;]+;/MARKETING_VERSION = $VERSION;/g" "$PBXPROJ"
+sed -i '' -E "s/CURRENT_PROJECT_VERSION = [^;]+;/CURRENT_PROJECT_VERSION = $BUILD_NUM;/g" "$PBXPROJ"
 
 # ── Locate Sparkle's sign_update tool ────────────────────────────────────────
 SIGN_UPDATE=$(find ~/Library/Developer/Xcode/DerivedData/Mixtape-*/SourcePackages/artifacts/sparkle/Sparkle/bin \
@@ -76,6 +119,7 @@ SIGN_UPDATE=$(find ~/Library/Developer/Xcode/DerivedData/Mixtape-*/SourcePackage
 [ -n "$SIGN_UPDATE" ] || { echo "✗ sign_update not found — build the app once in Xcode first"; exit 1; }
 
 # ── Archive (Release, unsigned) ──────────────────────────────────────────────
+# MIXTAPE_BETA lands in Info.plist, which is how the app knows it's a beta.
 echo "▸ Archiving…"
 mkdir -p "$BUILD_DIR"
 rm -rf "$ARCHIVE"
@@ -83,6 +127,7 @@ xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration Release \
     -destination 'generic/platform=macOS' \
     -archivePath "$ARCHIVE" \
     CODE_SIGNING_ALLOWED=NO \
+    MIXTAPE_BETA="$BETA_NUM" \
     archive > "$BUILD_DIR/archive.log" 2>&1 \
     || { echo "✗ Archive failed — see $BUILD_DIR/archive.log"; tail -20 "$BUILD_DIR/archive.log"; exit 1; }
 
@@ -131,16 +176,14 @@ touch docs/.nojekyll
 # <sparkle:channel>beta</sparkle:channel> so only opted-in users receive them.
 if [ "$BETA" = true ]; then
     CHANNEL_TAG=$'\n      <sparkle:channel>beta</sparkle:channel>'
-    ITEM_TITLE="Version $VERSION (beta)"
 else
     CHANNEL_TAG=""
-    ITEM_TITLE="Version $VERSION"
 fi
 
 ITEM_FILE="$BUILD_DIR/appcast-item.xml"
 cat > "$ITEM_FILE" <<XML
     <item>
-      <title>$ITEM_TITLE</title>
+      <title>Version $LABEL</title>
       <description><![CDATA[
         <html><head><meta charset="utf-8"><style>
           body { font: -apple-system-body, -apple-system; margin: 0; color: #1d1d1f;
@@ -150,13 +193,13 @@ cat > "$ITEM_FILE" <<XML
           p { margin: 0 0 8px; }
           @media (prefers-color-scheme: dark) { body { color: #f5f5f7; } }
         </style></head><body>
-          <h1>Mixtape $VERSION</h1>
+          <h1>Mixtape $LABEL</h1>
           $NOTES_BODY
         </body></html>
       ]]></description>
       <pubDate>$PUB_DATE</pubDate>
       <sparkle:version>$BUILD_NUM</sparkle:version>
-      <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
+      <sparkle:shortVersionString>$LABEL</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>$CHANNEL_TAG
       <enclosure url="$DOWNLOAD_URL"
                  type="application/octet-stream"
@@ -164,22 +207,22 @@ cat > "$ITEM_FILE" <<XML
     </item>
 XML
 
-if [ "$BETA" = true ] && [ -f docs/appcast.xml ]; then
-    # Preserve the existing stable item; insert the new beta item just after the
-    # <language> line so stable users keep their feed entry.
-    awk -v itemfile="$ITEM_FILE" '
+if [ "$BETA" = true ]; then
+    # Added to the live feed, not the local copy, so the stable item stays even
+    # if this branch hasn't caught up with main.
+    echo "$FEED" | awk -v itemfile="$ITEM_FILE" '
         /<language>/ { print; while ((getline line < itemfile) > 0) print line; next }
         { print }
-    ' docs/appcast.xml > docs/appcast.xml.tmp && mv docs/appcast.xml.tmp docs/appcast.xml
+    ' > docs/appcast.xml
 else
-    # Stable release (or no existing feed): full rewrite with this single item.
+    # Stable release: full rewrite with this single item.
     {
         cat <<HEADER
 <?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
   <channel>
     <title>Mixtape</title>
-    <link>https://mikec-1.github.io/Mixtape/appcast.xml</link>
+    <link>$FEED_URL</link>
     <description>Mixtape updates</description>
     <language>en</language>
 HEADER
@@ -207,31 +250,42 @@ else
     echo "⚠️  $SITE not found — skipping site update."
 fi
 
-# ── Summary ──────────────────────────────────────────────────────────────────
-if [ "$BETA" = true ]; then
-    PRERELEASE_FLAG=" --prerelease"
-    REL_TITLE="Mixtape $VERSION (beta)"
-    CHANNEL_NOTE="
-   • Channel:  beta (only users with \"Receive development builds\" enabled)"
-else
-    PRERELEASE_FLAG=""
-    REL_TITLE="Mixtape $VERSION"
-    CHANNEL_NOTE=""
-fi
+# ── Next steps ───────────────────────────────────────────────────────────────
+TODAY=$(date +%d.%m.%Y)
+FIRST_LAUNCH="First launch: if macOS blocks it, open System Settings → Privacy & Security and click Open Anyway (one-time, un-notarized build)."
 
 cat <<DONE
 
-✅ Release artifacts ready for v$VERSION (build $BUILD_NUM):
+✅ $APP_NAME $LABEL (build $BUILD_NUM) is built. Nothing is public yet.
    • DMG:      $DMG
-   • Appcast:  docs/appcast.xml$CHANNEL_NOTE
-   • Website:  docs/index.html (download link + version badge updated)
-
-Next steps (single release commit — do NOT commit before this point):
-   1. Create the GitHub Release and upload the DMG (the download URL must
-      exist before the appcast/site that point at it are committed):
-        gh release create v$VERSION "$DMG"$PRERELEASE_FLAG \\
-          --repo $REPO --title "$REL_TITLE" \\
-          --notes "First launch: if macOS blocks it, open System Settings → Privacy & Security and click Open Anyway (one-time, un-notarized build)."
-   2. Commit code + version bump + feed + site in ONE commit, then push:
-        git add -A && git commit -m "Mixtape $VERSION - Release <DD.MM.YYYY> - <summary>" && git push
+   • Appcast:  docs/appcast.xml
 DONE
+
+if [ "$BETA" = true ]; then
+    cat <<DONE
+
+Next, in order. Testers get it at step 3, when the feed reaches main.
+   1. Upload the DMG as a pre-release (the feed must never point at a missing file):
+        gh release create $TAG "$DMG" --prerelease \\
+          --repo $REPO --title "$APP_NAME $LABEL" --notes "$FIRST_LAUNCH"
+   2. One release commit on develop:
+        git add -A && git commit -m "$APP_NAME $LABEL - Release $TODAY - <summary>" && git push
+   3. Publish the feed from main, then bring main back into develop:
+        git checkout main && git checkout develop -- docs/appcast.xml
+        git commit -m "Appcast: $LABEL" && git push
+        git checkout develop && git merge main && git push
+DONE
+else
+    cat <<DONE
+   • Website:  docs/index.html (download link + version badge)
+
+Next, in order. Everyone gets it at step 2.
+   1. Upload the DMG (the feed must never point at a missing file):
+        gh release create $TAG "$DMG" \\
+          --repo $REPO --title "$APP_NAME $LABEL" --notes "$FIRST_LAUNCH"
+   2. One release commit on main:
+        git add -A && git commit -m "$APP_NAME $LABEL - Release $TODAY - <summary>" && git push
+   3. Bring it into develop:
+        git checkout develop && git merge main && git push
+DONE
+fi
