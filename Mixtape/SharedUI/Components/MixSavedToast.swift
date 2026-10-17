@@ -181,7 +181,7 @@ public struct SavedToastHost: View {
 
     /// Slightly overdamped.
     static var animation: Animation {
-        .spring(response: 0.34, dampingFraction: 0.86)
+        .mixSnappy
     }
 }
 

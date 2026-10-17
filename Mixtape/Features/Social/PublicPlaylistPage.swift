@@ -407,7 +407,7 @@ public struct PublicPlaylistPage: View {
         }
         .buttonStyle(.plain).mixHandCursor()
         .disabled(isDone || summary.tracks.isEmpty)
-        .mixAnimation(.snappy(duration: 0.2), value: isDone)
+        .mixAnimation(.mixSnappy, value: isDone)
         .help(help(for: state))
     }
 

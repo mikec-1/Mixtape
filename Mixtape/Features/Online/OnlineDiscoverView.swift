@@ -42,7 +42,7 @@ struct OnlineDiscoverView: View {
                 header
                 Divider().padding(.top, 12)
             }
-            content
+            content.mixPageTransition(path.last)
         }
         .background(MixPageBackground())
         .onAppear {
@@ -732,11 +732,15 @@ struct OnlineDiscoverView: View {
     }
 
     /// Per section, so one failed fetch doesn't blank the rest.
+    @ViewBuilder
     private var landingPlaceholder: some View {
-        VStack(spacing: 12) {
-            if browseLoading || store.personalLoading {
-                ProgressView().controlSize(.large)
-            } else {
+        if browseLoading || store.personalLoading {
+            VStack(alignment: .leading, spacing: 28) {
+                CarouselSkeleton(cardSize: 160)
+                CarouselSkeleton(cardSize: 160)
+            }
+        } else {
+            VStack(spacing: 12) {
                 Image(systemName: "wifi.slash")
                     .font(.system(size: 32))
                     .foregroundStyle(Color.mixTextTertiary)
@@ -744,8 +748,8 @@ struct OnlineDiscoverView: View {
                     .font(.system(size: 13))
                     .foregroundStyle(Color.mixTextSecondary)
             }
+            .frame(maxWidth: .infinity, minHeight: 320)
         }
-        .frame(maxWidth: .infinity, minHeight: 320)
     }
 
     // MARK: - For You
@@ -1114,19 +1118,22 @@ private enum TopResult {
 
 // MARK: - Link placeholder
 
-/// Placeholder naming what was clicked while a link resolves.
+/// Placeholder naming what was clicked while a link resolves, shaped like the page to come.
 private struct DiscoverLinkLoading: View {
     let name: String
 
     var body: some View {
-        VStack(spacing: 14) {
-            ProgressView().controlSize(.large)
+        VStack(alignment: .leading, spacing: 24) {
             Text(name)
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: 30, weight: .bold))
                 .foregroundStyle(Color.mixTextSecondary)
                 .lineLimit(1)
+            TrackListSkeleton(rows: 5, numbered: true)
+            CarouselSkeleton(cardSize: 160)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, 24)
+        .padding(.top, 52)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
@@ -1576,7 +1583,8 @@ private struct DiscoverArtistPage: View {
                     }
                 VStack(alignment: .leading, spacing: 28) {
                     if loading {
-                        ProgressView().frame(maxWidth: .infinity).padding(.top, 40)
+                        TrackListSkeleton(rows: 5, numbered: true)
+                        CarouselSkeleton(cardSize: 160)
                     } else {
                         // Popular and the artist facts side by side at the top.
                         if !topTracks.isEmpty { popularSection }
@@ -1836,7 +1844,7 @@ private struct DiscoverAlbumPage: View {
                 }
 
                 if loading {
-                    ProgressView().frame(maxWidth: .infinity).padding(.top, 40)
+                    TrackListSkeleton(rows: 8, numbered: true)
                 } else {
                     VStack(spacing: 2) {
                         ForEach(Array(tracks.enumerated()), id: \.element.id) { idx, song in

@@ -1272,7 +1272,7 @@ private struct MessageFocus<Preview: View>: View {
             .opacity(shown ? 1 : 0)
         }
         .presentationBackground(.clear)
-        .onAppear { withMixAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { shown = true } }
+        .onAppear { withMixAnimation(.mixSnappy) { shown = true } }
     }
 
     private var menu: some View {

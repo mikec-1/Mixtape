@@ -14,6 +14,9 @@ struct CommunityView: View {
     @State private var allTime = false
     @State private var refreshes = 0
     @State private var posting: Track?
+    @Namespace private var feedPill
+    @Namespace private var periodPill
+    @Namespace private var stylePill
 
     private struct Query: Hashable {
         let feed: CommunityFeed, style: PostStyle?, allTime: Bool, refreshes: Int, viewer: UUID?
@@ -29,13 +32,14 @@ struct CommunityView: View {
                 if signedIn { YourEdits(library: deps.libraryService) { posting = $0 } }
 
                 chips(CommunityFeed.allCases.filter { $0 != .following || signedIn }, selected: feed,
-                      title: \.title) { feed = $0 }
+                      in: feedPill, title: \.title) { feed = $0 }
                 if feed == .top {
-                    chips([false, true], selected: allTime, title: { $0 ? "All Time" : "This Week" }) { allTime = $0 }
+                    chips([false, true], selected: allTime, in: periodPill,
+                          title: { $0 ? "All Time" : "This Week" }) { allTime = $0 }
                 }
                 if feed != .following {
                     chips([nil] + PostStyle.allCases.map(Optional.some), selected: style,
-                          title: { $0?.title ?? "All" }) { style = $0 }
+                          in: stylePill, title: { $0?.title ?? "All" }) { style = $0 }
                 }
 
                 PostList(key: Query(feed: feed, style: style, allTime: allTime, refreshes: refreshes,
@@ -82,14 +86,16 @@ struct CommunityView: View {
                 "Post an edit from your library and it shows up here.")
     }
 
-    private func chips<T: Hashable>(_ options: [T], selected: T, title: @escaping (T) -> String,
+    private func chips<T: Hashable>(_ options: [T], selected: T, in pill: Namespace.ID,
+                                    title: @escaping (T) -> String,
                                     pick: @escaping (T) -> Void) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(options, id: \.self) { option in
-                    SectionChip(title: title(option), isSelected: option == selected) { pick(option) }
+                    SectionChip(title: title(option), isSelected: option == selected, namespace: pill) { pick(option) }
                 }
             }
+            .mixAnimation(.mixSnappy, value: selected)
         }
         .scrollClipDisabled()
     }

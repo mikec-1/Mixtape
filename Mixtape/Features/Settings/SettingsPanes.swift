@@ -1299,7 +1299,7 @@ struct ConnectionsPane: View {
             async let probe = resolverStatus.refresh()
             try? await Task.sleep(for: .milliseconds(450))
             let source = await probe
-            withMixAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+            withMixAnimation(.mixSnappy) {
                 resolverTesting = false
                 resolverTestResult = source != nil
                     ? .success("Connected — streaming is working.")

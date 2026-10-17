@@ -10,6 +10,7 @@ public struct LibraryView: View {
     // The + menu and its chosen sheet. Separate because the sheet waits for the
     // menu to dismiss; see `pendingRoute`.
     @State private var showCreateMenu = false
+    @Namespace private var sectionPill
     @State private var pendingRoute: LibraryCreateRoute?
     @State private var activeRoute:  LibraryCreateRoute?
 
@@ -47,7 +48,7 @@ public struct LibraryView: View {
 
                     // Sync and import progress, shown on the list they change.
                     LibraryActivityBar(library: deps.libraryService)
-                        .mixAnimation(.spring(response: 0.32, dampingFraction: 0.86),
+                        .mixAnimation(.mixSnappy,
                                       value: deps.libraryService.activity)
 
                     DownloadStatusBar(downloads: deps.downloadManager)
@@ -196,9 +197,10 @@ public struct LibraryView: View {
                 ForEach(LibrarySection.allCases) { section in
                     SectionChip(
                         title: section.rawValue,
-                        isSelected: vm.selectedSection == section
+                        isSelected: vm.selectedSection == section,
+                        namespace: sectionPill
                     ) {
-                        withMixAnimation(.easeInOut(duration: 0.18)) {
+                        withMixAnimation(.mixSnappy) {
                             vm.selectedSection = vm.selectedSection == section ? nil : section
                         }
                     }
@@ -298,24 +300,34 @@ struct SectionChip: View {
     let title: String
     var icon: String? = nil
     let isSelected: Bool
+    /// Chips sharing one slide the selection between them.
+    var namespace: Namespace.ID? = nil
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 5) {
+            fill(HStack(spacing: 5) {
                 if let icon {
                     Image(systemName: icon).font(.system(size: MixFontScale.size(11), weight: .semibold))
                 }
                 Text(title)
-            }
-                .font(.mixButtonSmall)
-                .foregroundStyle(isSelected ? .white : Color.mixTextSecondary)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-                .background(isSelected ? Color.mixPrimary : Color.mixSurface)
-                .clipShape(Capsule())
+            })
         }
         .buttonStyle(.plain).mixHandCursor()
+    }
+
+    @ViewBuilder
+    private func fill(_ label: some View) -> some View {
+        let label = label
+            .font(.mixButtonSmall)
+            .foregroundStyle(isSelected ? .white : Color.mixTextSecondary)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+        if let namespace {
+            label.mixSlidingPill(isSelected: isSelected, in: namespace, selected: Color.mixPrimary, idle: Color.mixSurface)
+        } else {
+            label.background(Capsule().fill(isSelected ? Color.mixPrimary : Color.mixSurface))
+        }
     }
 }
 

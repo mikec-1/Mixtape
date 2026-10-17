@@ -51,7 +51,7 @@ struct GenerateMixSheet: View {
                 ForEach(MixVibe.presets) { preset in
                     Button {
                         Haptics.play(.light)
-                        withMixAnimation(.snappy(duration: 0.18)) { vibe = preset }
+                        withMixAnimation(.mixSnappy) { vibe = preset }
                     } label: {
                         HStack(spacing: 8) {
                             Image(systemName: preset.icon)

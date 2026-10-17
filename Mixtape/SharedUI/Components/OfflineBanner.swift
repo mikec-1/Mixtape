@@ -90,7 +90,7 @@ struct OfflineStrip: View {
                     .accessibilityElement(children: .combine)
             }
         }
-        .mixAnimation(.snappy(duration: 0.25), value: back)
+        .mixAnimation(.mixSnappy, value: back)
         .onAppear { if offline { back = false } }
         .onChange(of: offline) { _, isOffline in
             generation &+= 1

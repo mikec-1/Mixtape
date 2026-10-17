@@ -436,7 +436,7 @@ struct MixDetailPage: View {
         }
         .buttonStyle(.plain).mixHandCursor()
         .disabled(isSaved || mix.tracks.isEmpty)
-        .mixAnimation(.snappy(duration: 0.2), value: isSaved)
+        .mixAnimation(.mixSnappy, value: isSaved)
         .help(isSaved ? "This mix is in your library" : "Add this mix to your library")
         .accessibilityLabel(isSaved ? "In your library" : "Add to library")
     }
@@ -782,7 +782,7 @@ struct MixDetailPage: View {
         guard !isSaved else { return }
 
         // Flip first, then write, so the checkmark animates in while the songs land.
-        withMixAnimation(.snappy(duration: 0.2)) { optimisticallySaved = true }
+        withMixAnimation(.mixSnappy) { optimisticallySaved = true }
 
         Task { @MainActor in
             await Task.yield()

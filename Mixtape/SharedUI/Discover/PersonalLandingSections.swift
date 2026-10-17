@@ -992,7 +992,7 @@ struct GenerateMixTile: View {
         .contentShape(Rectangle())
         .mixTapAction(action)
         .mixHoverCursor { isHovered = $0 }
-        .mixAnimation(.spring(response: 0.28, dampingFraction: 0.7), value: isHovered)
+        .mixAnimation(.mixSnappy, value: isHovered)
         .accessibilityLabel(title)
     }
 }

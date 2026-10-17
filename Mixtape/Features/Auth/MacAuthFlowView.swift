@@ -55,7 +55,7 @@ struct MacAuthFlowView: View {
                         .transition(slide(forward: pushForward))
                 }
             }
-            .mixAnimation(.spring(response: 0.36, dampingFraction: 0.86), value: screen)
+            .mixAnimation(.mixSoft, value: screen)
         }
         .frame(minWidth: 480, minHeight: 540)
         .alert("Error", isPresented: $vm.showError) {

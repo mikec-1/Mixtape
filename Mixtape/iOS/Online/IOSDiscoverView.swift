@@ -319,7 +319,7 @@ struct IOSDiscoverView: View {
 
         if landing.isEmpty {
             if store.personalLoading {
-                ProgressView().frame(maxWidth: .infinity, minHeight: 120)
+                CarouselSkeleton(showTitle: false)
             } else if filter == .mixes {
                 Text("Play a few songs and Mixtape starts building mixes around them.")
                     .font(.mixBody)
@@ -653,11 +653,15 @@ struct IOSDiscoverView: View {
         .buttonStyle(.plain)
     }
 
+    @ViewBuilder
     private var landingPlaceholder: some View {
-        VStack(spacing: 12) {
-            if browseLoading || store.personalLoading {
-                ProgressView()
-            } else {
+        if browseLoading || store.personalLoading {
+            VStack(alignment: .leading, spacing: 28) {
+                CarouselSkeleton()
+                CarouselSkeleton()
+            }
+        } else {
+            VStack(spacing: 12) {
                 Image(systemName: "wifi.slash")
                     .font(.system(size: 30))
                     .foregroundStyle(Color.mixTextTertiary)
@@ -665,8 +669,8 @@ struct IOSDiscoverView: View {
                     .font(.mixSubtext)
                     .foregroundStyle(Color.mixTextSecondary)
             }
+            .frame(maxWidth: .infinity, minHeight: 280)
         }
-        .frame(maxWidth: .infinity, minHeight: 280)
     }
 
     /// The song verbs, for the landing cards that only knew how to be tapped.

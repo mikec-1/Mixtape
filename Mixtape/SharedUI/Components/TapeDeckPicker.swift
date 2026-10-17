@@ -9,6 +9,7 @@ struct TapeDeckPicker: View {
     @State private var isRenaming = false
     @State private var isSaving   = false
     @State private var draft      = ""
+    @Namespace private var pill
 
     var body: some View {
         HStack(spacing: 6) {
@@ -24,7 +25,7 @@ struct TapeDeckPicker: View {
                         .foregroundStyle(isOn ? Color.mixOnAccent : Color.mixTextPrimary)
                         .padding(.horizontal, 12)
                         .frame(height: 28)
-                        .background(isOn ? Color.mixAccentFill : Color.mixSurface2, in: Capsule())
+                        .mixSlidingPill(isSelected: isOn, in: pill, selected: Color.mixAccentFill, idle: Color.mixSurface2)
                         .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
@@ -57,6 +58,7 @@ struct TapeDeckPicker: View {
             .frame(width: 28)
             .accessibilityLabel("Deck options")
         }
+        .mixAnimation(.mixSnappy, value: decks.activeID)
         .alert("Rename Deck", isPresented: $isRenaming) {
             TextField("Name", text: $draft)
             Button("Rename") { decks.rename(decks.activeID, to: draft) }

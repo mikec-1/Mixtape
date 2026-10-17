@@ -422,6 +422,7 @@ public struct NowPlayingView: View {
         .mixShadow(color: .black.opacity(0.45), radius: 28, y: 14)
         .scaleEffect(engine.state.isPlaying ? 1.0 : 0.94)
         .offset(x: artworkSlide)
+        // Not a token: the bounce on play is the point.
         .mixAnimation(.spring(response: 0.45, dampingFraction: 0.7), value: engine.state.isPlaying)
         .gesture(
             DragGesture(minimumDistance: 30)
@@ -441,7 +442,7 @@ public struct NowPlayingView: View {
                         Task {
                             await engine.playNext()
                             artworkSlide = 320
-                            withMixAnimation(.spring(response: 0.4, dampingFraction: 0.8)) { artworkSlide = 0 }
+                            withMixAnimation(.mixSoft) { artworkSlide = 0 }
                         }
                     } else if value.translation.width > 50 {
                         // Swipe right -> previous.
@@ -449,7 +450,7 @@ public struct NowPlayingView: View {
                         Task {
                             await engine.playPrevious()
                             artworkSlide = -320
-                            withMixAnimation(.spring(response: 0.4, dampingFraction: 0.8)) { artworkSlide = 0 }
+                            withMixAnimation(.mixSoft) { artworkSlide = 0 }
                         }
                     }
                 }
@@ -466,7 +467,7 @@ public struct NowPlayingView: View {
         if value.translation.height > 140 || value.predictedEndTranslation.height > 500 {
             dismiss()
         } else {
-            withMixAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { dismissOffset = 0 }
+            withMixAnimation(.mixSoft) { dismissOffset = 0 }
         }
     }
 

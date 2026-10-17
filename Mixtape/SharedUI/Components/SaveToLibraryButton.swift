@@ -73,7 +73,7 @@ struct SaveToLibraryButton: View {
                 .foregroundStyle(saved ? Color.mixPrimary : Color.mixTextSecondary)
                 // Morph plus into check.
                 .mixSymbolReplace()
-                .mixAnimation(.snappy(duration: 0.22), value: saved)
+                .mixAnimation(.mixSnappy, value: saved)
                 .frame(width: size + 13, height: size + 13)
                 .opacity(saved || !dimmed ? 1 : 0.4)
                 .savePop(trigger: popCount)

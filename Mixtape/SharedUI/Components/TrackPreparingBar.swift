@@ -30,9 +30,9 @@ public struct TrackPreparingBar: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .mixAnimation(.spring(response: 0.32, dampingFraction: 0.86),
+        .mixAnimation(.mixSnappy,
                       value: coordinator.preparing == nil)
-        .mixAnimation(.spring(response: 0.32, dampingFraction: 0.86),
+        .mixAnimation(.mixSnappy,
                       value: unavailable.recentSkips.count)
     }
 
@@ -101,7 +101,7 @@ public struct TrackPreparingBar: View {
         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .mixTapAction { isExpanded.toggle() }
         .onHover { isHovering = $0 }
-        .mixAnimation(.spring(response: 0.28, dampingFraction: 0.85), value: isExpanded)
+        .mixAnimation(.mixSnappy, value: isExpanded)
         .help(isExpanded ? "Hide the detail" : "Show what's happening")
     }
 

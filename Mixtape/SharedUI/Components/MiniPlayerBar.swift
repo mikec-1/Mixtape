@@ -89,7 +89,7 @@ public struct MiniPlayerBar: View {
                                 .font(.system(size: 17))
                                 .foregroundStyle(favoured ? Color.mixPrimary : Color.mixTextSecondary)
                                 .mixSymbolReplace()
-                                .mixAnimation(.snappy(duration: 0.22), value: favoured)
+                                .mixAnimation(.mixSnappy, value: favoured)
                                 .frame(width: 36, height: 36)
                                 .savePop(trigger: favouritePops)
                                 .contentShape(Rectangle())
@@ -123,6 +123,7 @@ public struct MiniPlayerBar: View {
                 .onGeometryChange(for: CGFloat.self, of: \.size.width) { rowWidth = $0 }
                 // The next song, one row-width behind, so the drag reveals it.
                 .overlay(alignment: .leading) { incomingPreview }
+                // Not a token: it follows the finger.
                 .mixAnimation(.interactiveSpring(response: 0.3, dampingFraction: 0.8), value: dragX)
                 .simultaneousGesture(swipe)
                 #endif

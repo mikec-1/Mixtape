@@ -517,9 +517,9 @@ struct MacRootView: View {
             }
         }
         .mixAnimation(.easeInOut(duration: 0.14), value: isDropTargeted)
-        .mixAnimation(.spring(response: 0.28, dampingFraction: 0.88), value: appState.isRightPanelOpen)
+        .mixAnimation(.mixSoft, value: appState.isRightPanelOpen)
         // The single animator for the fold, so width, cross-fade and content all move together.
-        .mixAnimation(.spring(response: 0.34, dampingFraction: 0.9), value: appState.sidebarCollapsed)
+        .mixAnimation(.mixSoft, value: appState.sidebarCollapsed)
     }
 
     // Sidebar column
@@ -985,7 +985,7 @@ private struct PreparingBarSlot: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .mixAnimation(.spring(response: 0.32, dampingFraction: 0.88), value: savedIn.request)
+        .mixAnimation(.mixSoft, value: savedIn.request)
     }
 
     private func bottom(inWindowOfHeight height: CGFloat) -> CGFloat {

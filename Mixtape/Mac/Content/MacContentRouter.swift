@@ -13,7 +13,28 @@ struct MacContentRouter: View {
     @EnvironmentObject private var deps:     AppDependencies
 
     var body: some View {
-        contentBody
+        contentBody.mixPageTransition(pageKey)
+    }
+
+    /// Which page is showing, in the same order as `contentBody`. A change fades the new page in.
+    private var pageKey: String {
+        if appState.showingAccount { return "account" }
+        if let target = appState.publicPlaylistTarget { return "public-\(target.id)" }
+        if appState.messagesPage != nil { return "messages" }
+        if let profile = appState.profileTarget { return "profile-\(profile.id)" }
+        // Search, name links, Home and Discover share one view; its own drill-downs animate inside it.
+        if appState.isSearching || appState.discoverLinkActive { return "discover" }
+        if let album = appState.selectedAlbum { return "album-\(album.id)" }
+        if let smart = appState.selectedSmartPlaylist { return "smart-\(smart.id)" }
+        if let playlist = appState.selectedPlaylist { return "playlist-\(playlist.id)" }
+        if let crateID = appState.selectedCrateID { return "crate-\(crateID)" }
+        switch appState.selection ?? .home {
+        case .home, .discover:                               return "discover"
+        case .library, .songs, .albums, .artists, .playlists: return "library"
+        case .localFiles:                                    return "localFiles"
+        case .community:                                     return "community"
+        case .settings:                                      return "settings"
+        }
     }
 
     @ViewBuilder

@@ -190,7 +190,7 @@ public struct ImportView: View {
                 isImporting = false
                 buildResultMessage()
 
-                withMixAnimation(.spring(duration: 0.3)) {
+                withMixAnimation(.mixSnappy) {
                     showResultBanner = true
                 }
 

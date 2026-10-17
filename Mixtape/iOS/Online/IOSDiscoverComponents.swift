@@ -488,6 +488,7 @@ struct IOSFeatureCard<Cover: View, Actions: View>: View {
 struct IOSFilterPills<Filter: Hashable & RawRepresentable>: View where Filter.RawValue == String {
     let filters: [Filter]
     @Binding var selection: Filter
+    @Namespace private var pill
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -496,14 +497,14 @@ struct IOSFilterPills<Filter: Hashable & RawRepresentable>: View where Filter.Ra
                     let isOn = filter == selection
                     Button {
                         Haptics.play(.selection)
-                        withMixAnimation(.easeInOut(duration: 0.18)) { selection = filter }
+                        withMixAnimation(.mixSnappy) { selection = filter }
                     } label: {
                         Text(filter.rawValue)
                             .font(.mixButtonSmall)
                             .foregroundStyle(isOn ? Color.mixOnAccent : Color.mixTextPrimary)
                             .padding(.horizontal, 14)
                             .frame(height: 32)
-                            .background(isOn ? Color.mixAccentFill : Color.mixSurface2, in: Capsule())
+                            .mixSlidingPill(isSelected: isOn, in: pill, selected: Color.mixAccentFill, idle: Color.mixSurface2)
                             .frame(minHeight: 44)
                             .contentShape(Rectangle())
                     }
@@ -560,7 +561,8 @@ struct IOSDiscoverArtistPage: View {
                     // Below the banner: beside the portrait a phone has no room for it.
                     playButton
                     if loading {
-                        ProgressView().frame(maxWidth: .infinity).padding(.top, 40)
+                        TrackListSkeleton(rows: 5, numbered: true)
+                        CarouselSkeleton()
                     } else {
                         // Same two halves as the Mac, stacked on a phone.
                         if !topTracks.isEmpty { popularSection }
@@ -785,7 +787,7 @@ struct IOSDiscoverAlbumPage: View {
                 }
 
                 if loading {
-                    ProgressView().frame(maxWidth: .infinity).padding(.top, 40)
+                    TrackListSkeleton(rows: 8)
                 } else {
                     ForEach(Array(tracks.enumerated()), id: \.element.id) { idx, song in
                         IOSSongRow(

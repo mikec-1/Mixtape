@@ -489,7 +489,7 @@ private struct PlayPauseButton: View {
                         color: Color.mixPrimary.opacity(isHovered ? 0.45 : 0.2),
                         radius: isHovered ? 10 : 5
                     )
-                    .mixAnimation(.spring(response: 0.22, dampingFraction: 0.65), value: isHovered)
+                    .mixAnimation(.mixSnappy, value: isHovered)
 
                 Image(systemName: playPauseIcon)
                     .font(.system(size: 14, weight: .bold))

@@ -196,7 +196,7 @@ struct TrackListTools: View {
             searchControl
             sortMenu
         }
-        .mixAnimation(.spring(response: 0.3, dampingFraction: 0.85), value: isSearchOpen)
+        .mixAnimation(.mixSnappy, value: isSearchOpen)
     }
 
     // MARK: Search

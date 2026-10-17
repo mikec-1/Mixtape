@@ -12,6 +12,7 @@ struct MacLibraryView: View {
 
     /// The Smart tab's empty state can open the editor; the + menu's copy lives in `MacTopBar`.
     @State private var showSmartEditor = false
+    @Namespace private var tabPill
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -67,11 +68,13 @@ struct MacLibraryView: View {
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(on ? Color.mixBackground : Color.mixTextPrimary)
                             .padding(.horizontal, 14).padding(.vertical, 7)
-                            .background(Capsule().fill(on ? Color.mixTextPrimary : Color.primary.opacity(0.08)))
+                            .mixSlidingPill(isSelected: on, in: tabPill,
+                                            selected: Color.mixTextPrimary, idle: Color.primary.opacity(0.08))
                     }
                     .buttonStyle(.plain).mixHandCursor()
                 }
             }
+            .mixAnimation(.mixSnappy, value: appState.libraryTab)
         }
         .padding(.horizontal, 24)
         .padding(.top, 20)

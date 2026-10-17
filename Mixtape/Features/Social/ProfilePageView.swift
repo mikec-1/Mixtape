@@ -42,6 +42,7 @@ public struct ProfilePageView: View {
     @State private var blocked: Bool?
     @State private var confirmingBlock = false
     @State private var postsTab: ProfilePostsTab = .posts
+    @Namespace private var postsPill
     #if os(iOS)
     @State private var pushedPost: String?
     @State private var pushedProfile: UserProfile?
@@ -355,9 +356,10 @@ public struct ProfilePageView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 ForEach(ProfilePostsTab.allCases) { tab in
-                    SectionChip(title: tab.title, isSelected: postsTab == tab) { postsTab = tab }
+                    SectionChip(title: tab.title, isSelected: postsTab == tab, namespace: postsPill) { postsTab = tab }
                 }
             }
+            .mixAnimation(.mixSnappy, value: postsTab)
             PostList(key: "\(profile.id)\(postsTab)\(viewer?.uuidString ?? "")",
                      empty: postsEmpty,
                      load: { [id = profile.id, tab = postsTab, community = deps.community] in

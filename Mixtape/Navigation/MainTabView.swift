@@ -205,7 +205,7 @@ public struct MainTabView: View {
                 .padding(.horizontal, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .mixAnimation(.spring(response: 0.35, dampingFraction: 0.8), value: shows)
+        .mixAnimation(.mixSoft, value: shows)
         .ignoresSafeArea(.keyboard, edges: .bottom)
     }
 

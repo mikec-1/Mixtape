@@ -155,7 +155,7 @@ struct KaraokeView: View {
     /// One control for both adjustments, like the macOS lyrics header.
     private var tuning: some View {
         Button {
-            withMixAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+            withMixAnimation(.mixSnappy) {
                 showsTuning.toggle()
             }
             wake()

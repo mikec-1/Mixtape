@@ -1171,7 +1171,7 @@ private struct NewSmartPlaylistCard: View {
         }
         .buttonStyle(.plain)
         .mixHoverCursor { isHovered = $0 }
-        .mixAnimation(.spring(response: 0.28, dampingFraction: 0.7), value: isHovered)
+        .mixAnimation(.mixSnappy, value: isHovered)
         .accessibilityLabel("New smart playlist")
     }
 }

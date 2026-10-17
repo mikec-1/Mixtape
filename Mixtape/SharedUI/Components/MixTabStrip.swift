@@ -40,7 +40,7 @@ struct MixTabStrip<Tab: Hashable>: View {
 
         return Button {
             guard !isActive else { return }
-            withMixAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
+            withMixAnimation(.mixSnappy) {
                 selection = tab
             }
         } label: {

@@ -85,6 +85,8 @@ public struct PlaylistDetailView: View {
     /// Set when the server says a saved playlist's original is no longer public.
     /// Never set from a failed request.
     @State private var sourceUnavailable = false
+    /// An empty shared or followed playlist fetching its tracks. Shows a skeleton, not the empty state.
+    @State private var refreshing = false
     /// The side being renamed, and the name being typed.
     @State private var renamingSide: SideGroup?
     @State private var sideName = ""
@@ -296,6 +298,11 @@ public struct PlaylistDetailView: View {
             #endif
             // Pull the latest shared track list. No-op for non-shared playlists.
             .task(id: playlist.id) {
+                refreshing = tracks.isEmpty
+                    && (livePlaylist.followsRemoteSource
+                        || PlaylistSharingService.shared.linkedShare(forLocalPlaylist: playlist.id) != nil
+                        || deps.spotifyFollowService.isFollowing(playlistID: playlist.id))
+                defer { refreshing = false }
                 if livePlaylist.followsRemoteSource {
                     // The owner's copy is the truth. This also tells us if it stopped being public.
                     let status = await PlaylistSharingService.shared.refreshSubscription(
@@ -584,7 +591,11 @@ public struct PlaylistDetailView: View {
         ScrollView {
             VStack(spacing: 0) {
                 header
-                if tracks.isEmpty {
+                if tracks.isEmpty, refreshing {
+                    TrackListSkeleton()
+                        .padding(.horizontal, 24)
+                        .padding(.top, 12)
+                } else if tracks.isEmpty {
                     emptyState
                         .frame(maxWidth: .infinity)
                         .padding(.top, 60)
@@ -712,7 +723,11 @@ public struct PlaylistDetailView: View {
             }
 
             // Track rows (or empty state)
-            if tracks.isEmpty {
+            if tracks.isEmpty, refreshing {
+                TrackListSkeleton()
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+            } else if tracks.isEmpty {
                 emptyState
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
@@ -2596,7 +2611,7 @@ struct AddToPlaylistSheet: View {
                                           : (isPartial ? Color.mixPrimary.opacity(0.55)
                                                        : Color.mixTextTertiary))
                     .mixSymbolReplace()
-                    .mixAnimation(.snappy(duration: 0.22), value: isIn)
+                    .mixAnimation(.mixSnappy, value: isIn)
                     .savePop(trigger: unfilePops[playlist.id] ?? 0, direction: .remove)
                     .help(isPartial ? "Holds some of the selected songs" : "")
             }

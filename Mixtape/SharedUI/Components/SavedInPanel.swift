@@ -86,7 +86,7 @@ public struct SavedInPanelHost: View {
                     .onExitCommand { center.dismiss() }
             }
         }
-        .mixAnimation(.spring(response: 0.32, dampingFraction: 0.88), value: center.request)
+        .mixAnimation(.mixSoft, value: center.request)
     }
 }
 #endif

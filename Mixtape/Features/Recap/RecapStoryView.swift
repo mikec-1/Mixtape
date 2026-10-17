@@ -663,7 +663,7 @@ struct RecapStoryView: View {
                 if t.height > abs(t.width), t.height > 120 || value.predictedEndTranslation.height > 320 {
                     onClose()
                 } else {
-                    withAnimation(.spring(duration: 0.3)) { pull = 0 }
+                    withMixAnimation(.mixSnappy) { pull = 0 }
                 }
             }
     }

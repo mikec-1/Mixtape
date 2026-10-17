@@ -82,6 +82,21 @@ public func withMixAnimation<Result>(
     try withAnimation(MixMotion.current.resolve(animation), body)
 }
 
+/// The app's motion tokens. Run them through `withMixAnimation` or `.mixAnimation`
+/// so the motion setting can turn them off.
+public extension Animation {
+    /// Controls: toggles, pills, hover lifts, small badges.
+    static var mixSnappy: Animation { .spring(response: 0.3, dampingFraction: 0.85) }
+    /// Big surfaces: panels, sidebars, sheets of content.
+    static var mixSoft: Animation { .spring(response: 0.42, dampingFraction: 0.9) }
+    /// Colour and opacity flips.
+    static var mixMicro: Animation { .easeOut(duration: 0.12) }
+    /// Short fades and reveals.
+    static var mixQuick: Animation { .easeOut(duration: 0.2) }
+    /// A Mac page coming in: quick start, long settle.
+    static var mixPage: Animation { .timingCurve(0.22, 1, 0.36, 1, duration: 0.22) }
+}
+
 // MARK: - Chrome
 
 /// How much the app decorates. `flat`: no artwork wash, no decorative shadows,
@@ -215,6 +230,26 @@ public extension View {
         modifier(MixAnimationModifier(animation: animation, value: value))
     }
 
+    /// Fades the page in with a few points of lift whenever `key` changes. Reduce
+    /// Motion keeps the fade only; reduced app motion swaps instantly.
+    func mixPageTransition<Key: Hashable>(_ key: Key) -> some View {
+        modifier(MixPageTransition(key: key))
+    }
+
+    /// A selection fill that slides between the options sharing `namespace`.
+    /// Animate the selection change for it to move.
+    func mixSlidingPill(isSelected: Bool, in namespace: Namespace.ID,
+                        selected: some ShapeStyle, idle: some ShapeStyle) -> some View {
+        background {
+            ZStack {
+                Capsule().fill(idle)
+                if isSelected {
+                    Capsule().fill(selected).matchedGeometryEffect(id: "mixSlidingPill", in: namespace)
+                }
+            }
+        }
+    }
+
     /// Injects the three axes. Applied once, at the root.
     func mixAppearance(density: MixDensity, motion: MixMotion, chrome: MixChrome) -> some View {
         environment(\.mixDensity, density)
@@ -247,6 +282,22 @@ public extension View {
     /// Shadows that show layering (toast, palette, banners) use plain `.shadow`.
     func mixShadow(color: Color, radius: CGFloat, x: CGFloat = 0, y: CGFloat = 0) -> some View {
         modifier(MixShadowModifier(color: color, radius: radius, x: x, y: y))
+    }
+}
+
+private struct MixPageTransition<Key: Hashable>: ViewModifier {
+    @Environment(\.mixMotion) private var motion
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let key: Key
+
+    func body(content: Content) -> some View {
+        ZStack {
+            content
+                .id(key)
+                .transition(.asymmetric(insertion: reduceMotion ? .opacity : .opacity.combined(with: .offset(y: 8)),
+                                        removal: .identity))
+        }
+        .animation(motion.resolve(.mixPage), value: key)
     }
 }
 

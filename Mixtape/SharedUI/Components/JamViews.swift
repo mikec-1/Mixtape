@@ -486,7 +486,7 @@ private struct JamLiveView: View {
                     .foregroundStyle(Color.mixTextPrimary)
                 Spacer()
                 if !jam.upNext.isEmpty {
-                    Button { withAnimation(.snappy) { editing.toggle() } } label: {
+                    Button { withMixAnimation(.mixSnappy) { editing.toggle() } } label: {
                         JamPill(title: editing ? "Done" : "Edit", filled: editing)
                     }
                     .buttonStyle(.plain).mixHandCursor()

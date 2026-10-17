@@ -34,8 +34,8 @@ public struct SignInView: View {
                     ))
             }
         }
-        .mixAnimation(.spring(response: 0.36, dampingFraction: 0.86), value: authService.isAwaitingPasswordReset)
-        .mixAnimation(.spring(response: 0.36, dampingFraction: 0.86), value: vm.showCheckEmail)
+        .mixAnimation(.mixSoft, value: authService.isAwaitingPasswordReset)
+        .mixAnimation(.mixSoft, value: vm.showCheckEmail)
         .alert("Sign In Error", isPresented: $vm.showError) {
             Button("OK", role: .cancel) {}
         } message: {
