@@ -10,8 +10,8 @@ import UniformTypeIdentifiers
 
 struct WallpaperSettingsRow: View {
 
-    @ObservedObject var theme: ThemeManager
-    @EnvironmentObject private var deps: AppDependencies
+    var theme: ThemeManager
+    @Environment(AppDependencies.self) private var deps
 
     #if os(iOS)
     @State private var item: PhotosPickerItem?

@@ -3,13 +3,15 @@
 import Foundation
 import Combine
 import SwiftUI
+import Observation
 
+@Observable
 @MainActor
-public final class PlaylistMetadataService: ObservableObject {
+public final class PlaylistMetadataService {
     
     public static let shared = PlaylistMetadataService()
     
-    public var currentUserID: String? = nil {
+    @ObservationIgnored public var currentUserID: String? = nil {
         didSet {
             loadMetadata()
         }
@@ -36,13 +38,13 @@ public final class PlaylistMetadataService: ObservableObject {
         return "MixtapePlaylistLastPlayed"
     }
     
-    @Published public private(set) var pinnedPlaylistIDs: Set<UUID> = []
+    public private(set) var pinnedPlaylistIDs: Set<UUID> = []
 
     /// Whether library lists show the All Songs row. Off by default; search and
     /// ⌘K still find it. Per account, `user_metadata.show_all_songs`; the default
     /// is only a cache for launch. Lives here because the sidebar and library
     /// screens already observe this service.
-    @Published public var showsAllSongs: Bool = UserDefaults.standard.bool(forKey: "mix.showAllSongs") {
+    public var showsAllSongs: Bool = UserDefaults.standard.bool(forKey: "mix.showAllSongs") {
         didSet {
             guard showsAllSongs != oldValue else { return }
             UserDefaults.standard.set(showsAllSongs, forKey: "mix.showAllSongs")
@@ -51,11 +53,11 @@ public final class PlaylistMetadataService: ObservableObject {
         }
     }
     /// Writes the switch to the account. Installed by `AppDependencies`.
-    public var showsAllSongsWriter: ((Bool) -> Void)?
+    @ObservationIgnored public var showsAllSongsWriter: ((Bool) -> Void)?
 
     /// Where songs imported from files and links go. All Songs leaves them unliked,
     /// so picking it shows All Songs. Per account, `user_metadata.imports_to`.
-    @Published public var importDestination: ImportDestination =
+    public var importDestination: ImportDestination =
         ImportDestination(rawValue: UserDefaults.standard.string(forKey: "mix.importsTo") ?? "") ?? .liked {
         didSet {
             guard importDestination != oldValue else { return }
@@ -66,8 +68,8 @@ public final class PlaylistMetadataService: ObservableObject {
         }
     }
     /// Installed by `AppDependencies`.
-    public var importDestinationWriter: ((String) -> Void)?
-    private var isApplyingRemote = false
+    @ObservationIgnored public var importDestinationWriter: ((String) -> Void)?
+    @ObservationIgnored private var isApplyingRemote = false
 
     /// An account that never set it is off, the same default as the web.
     public func adoptRemoteShowsAllSongs(_ remote: Bool?) {
@@ -90,8 +92,8 @@ public final class PlaylistMetadataService: ObservableObject {
     /// Whether imports should be liked.
     public var likesImports: Bool { importDestination == .liked }
     /// Only non-empty until the one-shot handover; order now lives on `Playlist.sortIndex`.
-    private var sidebarPlaylistIDs: [UUID] = []
-    @Published public private(set) var playlistLastPlayedDates: [UUID: Date] = [:]
+    @ObservationIgnored private var sidebarPlaylistIDs: [UUID] = []
+    public private(set) var playlistLastPlayedDates: [UUID: Date] = [:]
     
     private init() {
         loadMetadata()
@@ -154,7 +156,7 @@ public final class PlaylistMetadataService: ObservableObject {
 
     /// Writes a pin to the playlist row. Installed by `AppDependencies`, since
     /// this service has no repository.
-    public var pinWriter: ((UUID, Bool) -> Void)?
+    @ObservationIgnored public var pinWriter: ((UUID, Bool) -> Void)?
 
     public func togglePin(playlistID: UUID) {
         let pinning = !pinnedPlaylistIDs.contains(playlistID)
@@ -168,7 +170,6 @@ public final class PlaylistMetadataService: ObservableObject {
 
         // Pinned-first ordering comes from `LibraryService.playlists`, so it has to
         // be told to re-sort.
-        objectWillChange.send()
         NotificationCenter.default.post(name: .mixPlaylistPinsChanged, object: nil)
     }
 
@@ -207,15 +208,11 @@ public final class PlaylistMetadataService: ObservableObject {
     public func markAlbumPlayed(title: String, artistName: String) {
         albumLastPlayedDates[SavedAlbumsService.key(title: title, artistName: artistName)] = Date()
         UserDefaults.standard.set(albumLastPlayedDates.mapValues(\.timeIntervalSince1970), forKey: "MixtapeAlbumLastPlayed")
-        objectWillChange.send()
     }
 
     public func markPlayed(playlistID: UUID) {
         playlistLastPlayedDates[playlistID] = Date()
         saveLastPlayed()
-        
-        // Notify the app
-        objectWillChange.send()
     }
 }
 

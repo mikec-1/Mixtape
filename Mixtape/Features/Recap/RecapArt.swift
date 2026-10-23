@@ -17,26 +17,54 @@ struct RecapCassette: View {
     private static let ink = Color(hex: "140B05")
     private static let mono = Font.system(size: 10, weight: .medium, design: .monospaced)
 
+    /// Drawn in layers so a frame redraws nothing: the hubs spin as whole layers, and the packs only
+    /// redraw while the tape winds. One canvas used to redraw the label text every frame.
     var body: some View {
+        ZStack {
+            Back(wound: wound)
+                .shadow(color: .black.opacity(0.55), radius: 10, y: 8)
+            Hub(x: 148).rotationEffect(.degrees(reel / 2.6 * 360), anchor: UnitPoint(x: 148.0 / 400, y: 122.0 / 256))
+            Hub(x: 252).rotationEffect(.degrees(reel / 1.6 * 360), anchor: UnitPoint(x: 252.0 / 400, y: 122.0 / 256))
+            Face(month: month, name: name).equatable()
+        }
+        .aspectRatio(400 / 256, contentMode: .fit)
+        .accessibilityHidden(true)
+    }
+
+    /// A canvas in the cassette's own 400 x 256 space.
+    private static func layer(_ draw: @escaping (inout GraphicsContext) -> Void) -> some View {
         Canvas { ctx, size in
             ctx.scaleBy(x: size.width / 400, y: size.height / 256)
             draw(&ctx)
         }
-        .gpuRendered()
-        .aspectRatio(400 / 256, contentMode: .fit)
-        .shadow(color: .black.opacity(0.55), radius: 10, y: 8)
-        .accessibilityHidden(true)
     }
 
-    private func rr(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat, _ r: CGFloat) -> Path {
+    private struct Back: View {
+        let wound: Double
+        var body: some View { RecapCassette.layer { RecapCassette.drawBack(&$0, wound: wound) } }
+    }
+
+    private struct Hub: View {
+        let x: CGFloat
+        var body: some View { RecapCassette.layer { RecapCassette.drawHub(&$0, x: x) } }
+    }
+
+    private struct Face: View, Equatable {
+        let month: String
+        let name: String
+        var body: some View { RecapCassette.layer { RecapCassette.drawFace(&$0, month: month, name: name) } }
+    }
+
+    private static func rr(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat, _ r: CGFloat) -> Path {
         Path(roundedRect: CGRect(x: x, y: y, width: w, height: h), cornerRadius: r)
     }
 
-    private func circle(_ x: CGFloat, _ y: CGFloat, _ r: CGFloat) -> Path {
+    private static func circle(_ x: CGFloat, _ y: CGFloat, _ r: CGFloat) -> Path {
         Path(ellipseIn: CGRect(x: x - r, y: y - r, width: r * 2, height: r * 2))
     }
 
-    private func draw(_ ctx: inout GraphicsContext) {
+    /// Shell, window and tape packs.
+    private static func drawBack(_ ctx: inout GraphicsContext, wound: Double) {
         ctx.fill(rr(1, 1, 398, 254, 16), with: .linearGradient(
             Gradient(colors: [Color(hex: "3C3C42"), Color(hex: "1B1B1F")]),
             startPoint: CGPoint(x: 0, y: 1), endPoint: CGPoint(x: 0, y: 255)))
@@ -54,19 +82,25 @@ struct RecapCassette: View {
             let c = CGPoint(x: x, y: 122)
             packs.fill(circle(x, 122, r), with: .radialGradient(pack, center: c, startRadius: 0, endRadius: r))
         }
-        for (x, period) in [(148.0, 2.6), (252.0, 1.6)] {
-            var hub = ctx
-            hub.translateBy(x: x, y: 122)
-            hub.rotate(by: .degrees(reel / period * 360))
-            let cream = Color(hex: "EEE7DB")
-            hub.fill(circle(0, 0, 17), with: .color(cream))
-            hub.fill(circle(0, 0, 10.5), with: .color(Color(hex: "101012")))
-            for k in 0..<6 {
-                var tooth = hub
-                tooth.rotate(by: .degrees(Double(k) * 60))
-                tooth.fill(rr(-2, -11, 4, 5, 1), with: .color(cream))
-            }
+    }
+
+    /// One hub, unturned; its layer does the turning.
+    private static func drawHub(_ ctx: inout GraphicsContext, x: CGFloat) {
+        var hub = ctx
+        hub.translateBy(x: x, y: 122)
+        let cream = Color(hex: "EEE7DB")
+        hub.fill(circle(0, 0, 17), with: .color(cream))
+        hub.fill(circle(0, 0, 10.5), with: .color(Color(hex: "101012")))
+        for k in 0..<6 {
+            var tooth = hub
+            tooth.rotate(by: .degrees(Double(k) * 60))
+            tooth.fill(rr(-2, -11, 4, 5, 1), with: .color(cream))
         }
+    }
+
+    /// Window glass, label, text and the bottom of the shell.
+    private static func drawFace(_ ctx: inout GraphicsContext, month: String, name: String) {
+        let window = rr(92, 88, 216, 68, 34)
         ctx.fill(window, with: .linearGradient(
             Gradient(stops: [.init(color: .white.opacity(0.2), location: 0),
                              .init(color: .white.opacity(0.02), location: 0.5),

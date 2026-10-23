@@ -5,18 +5,19 @@ import SwiftUI
 import AVFoundation
 import Combine
 import MediaPlayer
+import Observation
 
 // MARK: - Clock, clips, images
 
 /// Seconds into the current slide. Everything on a slide is drawn from it, so
 /// pausing stops it all. Held outside the story's state so a tick only redraws
 /// the views that watch it.
-@MainActor final class StoryClock: ObservableObject {
-    @Published private(set) var elapsed: Double = 0
-    private(set) var duration: TimeInterval?
+@MainActor @Observable final class StoryClock {
+    private(set) var elapsed: Double = 0
+    @ObservationIgnored private(set) var duration: TimeInterval?
     var progress: Double { duration.map { min(1, elapsed / $0) } ?? 1 }
-    var paused = false
-    private var task: Task<Void, Never>?
+    @ObservationIgnored var paused = false
+    @ObservationIgnored private var task: Task<Void, Never>?
 
     func run(for duration: TimeInterval?, onEnd: @escaping () -> Void) {
         task?.cancel()
@@ -465,7 +466,7 @@ struct RecapStoryView: View {
     let startAtCard: Bool
     let onClose: () -> Void
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
     // Not observed here: only the stage and the bars redraw per tick.
     @State private var clock = StoryClock()
     @StateObject private var clips = RecapClips()
@@ -784,7 +785,7 @@ struct RecapStoryView: View {
 
 /// The current slide, and while it's coming in, the one it's covering.
 private struct SlideStage<Page: View>: View {
-    @ObservedObject var clock: StoryClock
+    var clock: StoryClock
     let index: Int
     let leaving: Leaving?
     let change: RecapChange
@@ -823,7 +824,7 @@ private struct SlideStage<Page: View>: View {
 private struct StoryBars: View {
     let count: Int
     let index: Int
-    @ObservedObject var clock: StoryClock
+    var clock: StoryClock
     let color: Color
 
     var body: some View {
@@ -902,8 +903,8 @@ struct ArtistDisc: View {
 
 /// Full screen cover on iOS; on the Mac the story covers the window.
 struct RecapPresenter: View {
-    @ObservedObject var recap: RecapService
-    @EnvironmentObject private var deps: AppDependencies
+    @Bindable var recap: RecapService
+    @Environment(AppDependencies.self) private var deps
 
     var body: some View {
         #if os(macOS)
@@ -916,7 +917,7 @@ struct RecapPresenter: View {
         #else
         Color.clear
             // Clear, so dragging the story down shows the app under it.
-            .fullScreenCover(item: $recap.presented) { story($0).environmentObject(deps).presentationBackground(.clear) }
+            .fullScreenCover(item: $recap.presented) { story($0).environment(deps).presentationBackground(.clear) }
         #endif
     }
 

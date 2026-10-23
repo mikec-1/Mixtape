@@ -7,9 +7,11 @@ import ImageIO
 import os
 import Supabase
 import UniformTypeIdentifiers
+import Observation
 
+@Observable
 @MainActor
-public final class MessagesService: ObservableObject {
+public final class MessagesService {
 
     public static let shared = MessagesService()
 
@@ -123,20 +125,23 @@ public final class MessagesService: ObservableObject {
 
     public static let pageSize = 50
 
-    @Published public private(set) var threads: [Thread] = []
-    @Published public private(set) var loaded = false
+    public private(set) var threads: [Thread] = [] { didSet { threadsSubject.send(threads) } }
+    /// `$threads` for Combine users; sent after the set.
+    public var threadsPublisher: AnyPublisher<[Thread], Never> { threadsSubject.prepend(threads).eraseToAnyPublisher() }
+    @ObservationIgnored private let threadsSubject = PassthroughSubject<[Thread], Never>()
+    public private(set) var loaded = false
     /// Every message row realtime delivers, sent or received. An open thread picks out its own.
     public let incoming = PassthroughSubject<Message, Never>()
     /// Rows changed after they arrived: read, edited, unsent or reacted to.
     public let updated = PassthroughSubject<Message, Never>()
     /// The thread on screen, so its arrivals neither toast nor banner.
-    public var viewing: UUID?
+    @ObservationIgnored public var viewing: UUID?
 
     public var unreadCount: Int { threads.reduce(0) { $0 + $1.unread } }
 
-    private var owner: UUID?
-    private var listenTask: Task<Void, Never>?
-    private var pokeTask: Task<Void, Never>?
+    @ObservationIgnored private var owner: UUID?
+    @ObservationIgnored private var listenTask: Task<Void, Never>?
+    @ObservationIgnored private var pokeTask: Task<Void, Never>?
 
     // MARK: Reading
 
@@ -169,7 +174,7 @@ public final class MessagesService: ObservableObject {
     }
 
     /// Foreground arrivals toast instead of bannering. Wired by AppDependencies.
-    public var onToast: ((String) -> Void)?
+    @ObservationIgnored public var onToast: ((String) -> Void)?
 
     /// Newest first. RLS only returns rows you're in and nobody messages themselves,
     /// so "they sent it or received it" is exactly this thread.
@@ -380,7 +385,7 @@ public final class MessagesService: ObservableObject {
     }
 
     // ponytail: one request per photo, kept for the session; batch if threads get photo-heavy.
-    private var signed: [String: URL] = [:]
+    @ObservationIgnored private var signed: [String: URL] = [:]
 
     /// A day-long link to a photo in a message you're part of.
     public func attachmentURL(_ path: String) async -> URL? {

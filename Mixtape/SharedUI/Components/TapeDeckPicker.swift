@@ -2,9 +2,9 @@ import SwiftUI
 
 /// The queue's tape decks. Tapping one parks this queue and picks that one up where it stopped.
 struct TapeDeckPicker: View {
-    @ObservedObject var decks: TapeDeckService
+    var decks: TapeDeckService
     /// Observed so "Save as Playlist" hides on an empty queue.
-    @EnvironmentObject private var queueService: QueueService
+    @Environment(QueueService.self) private var queueService
 
     @State private var isRenaming = false
     @State private var isSaving   = false

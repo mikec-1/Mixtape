@@ -27,13 +27,13 @@ private struct KaraokeChrome: ViewModifier {
 @MainActor
 struct MacRootView: View {
 
-    @StateObject  private var appState = MacAppState()
+    @State        private var appState = MacAppState()
     @StateObject  private var keyHandler = KeyboardShortcutHandler()
 
-    @EnvironmentObject private var deps:    AppDependencies
-    @EnvironmentObject private var engine:  PlaybackEngine
-    @EnvironmentObject private var library: LibraryService
-    @EnvironmentObject private var sync:    SupabaseSyncService
+    @Environment(AppDependencies.self) private var deps
+    @Environment(PlaybackEngine.self) private var engine
+    @Environment(LibraryService.self) private var library
+    @Environment(SupabaseSyncService.self) private var sync
     @Environment(\.mixChrome) private var chrome
 
     @State private var isDropTargeted   = false
@@ -43,10 +43,10 @@ struct MacRootView: View {
     // Refreshed on track/mode change, not per playback tick.
     @State private var lyricsHeaderColor: NSColor? = nil
     // Top colour of the current screen's artwork wash, carried up through the chrome.
-    @ObservedObject private var washTint = ArtworkWashTint.shared
-    @ObservedObject private var theme = ThemeManager.shared
+    private var washTint: ArtworkWashTint { .shared }
+    private var theme = ThemeManager.shared
     // Type-ahead panel under the search field. MacTopBar drives it; we draw it so it paints over the split view.
-    @ObservedObject private var suggestions = SearchSuggestionsStore.shared
+    private var suggestions: SearchSuggestionsStore { .shared }
     // Custom right panel: `.inspector` can't be stopped from drag-dismissing.
     @State      private var rightPanelWidth: CGFloat  = 300
     // Resets itself when the drag ends and survives re-renders during it.
@@ -91,30 +91,31 @@ struct MacRootView: View {
     }
 
     var body: some View {
-        GeometryReader { geo in
+        ZoomFrame(scale: appState.uiScale) {
             VStack(spacing: 0) {
                 // The bar is a `safeAreaInset`, not a sibling: with `.hiddenTitleBar` the split view draws
                 // across the whole window and would paint over a sibling. Kept inside the zoom transform so ⌘+/⌘- scales it.
+                // Not `safeAreaPadding` plus an overlay: measured slower, it re-sized every column's content per pass.
                 splitView
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .safeAreaInset(edge: .top, spacing: 0) {
                         MacTopBar(tint: chromeTintColor)
-                            .environmentObject(appState)
-                            .environmentObject(deps)
-                            .environmentObject(sync)
+                            .environment(appState)
+                            .environment(deps)
+                            .environment(sync)
                             .modifier(KaraokeChrome(hidden: chromeHidden))
                     }
 
                 // Player bar. In karaoke it's an overlay instead so the lyrics get the full height.
                 if !karaokeTakeover {
                     MacPlayerBar()
-                        .environmentObject(appState)
+                        .environment(appState)
                 }
             }
             .overlay(alignment: .bottom) {
                 if karaokeTakeover {
                     MacPlayerBar()
-                        .environmentObject(appState)
+                        .environment(appState)
                         .modifier(KaraokeChrome(hidden: chromeHidden))
                 }
             }
@@ -155,15 +156,8 @@ struct MacRootView: View {
                 }
             }
             .mixAnimation(.easeOut(duration: 0.12), value: suggestions.isShowing)
-            // Scale the layout frame down so scaleEffect fills the window exactly.
-            .frame(
-                width:  geo.size.width  / appState.uiScale,
-                height: geo.size.height / appState.uiScale,
-                alignment: .topLeading
-            )
+            // ZoomFrame lays this out at window size / scale, so scaleEffect fills the window exactly.
             .scaleEffect(appState.uiScale, anchor: .topLeading)
-            // macOS workaround: pin hit-testing bounds to the window so clicks map correctly.
-            .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
             // Zoom snaps. Explicitly nil so no ambient transaction animates it.
             .mixAnimation(nil, value: appState.uiScale)
             // Zoom HUD
@@ -212,7 +206,7 @@ struct MacRootView: View {
                     SongEditor(track: track,
                                onOpenPost: { appState.showPost(code: $0) },
                                onClose: { appState.editTrack = nil })
-                        .environmentObject(deps)
+                        .environment(deps)
                         .id(track.id)
                 }
                 .ignoresSafeArea()
@@ -269,10 +263,10 @@ struct MacRootView: View {
                             .onTapGesture { appState.commandPaletteOpen = false }
 
                         MacCommandPalette()
-                            .environmentObject(deps)
-                            .environmentObject(appState)
-                            .environmentObject(library)
-                            .environmentObject(engine)
+                            .environment(deps)
+                            .environment(appState)
+                            .environment(library)
+                            .environment(engine)
                             .padding(.top, 90)
                     }
                 }
@@ -294,40 +288,40 @@ struct MacRootView: View {
             set: { _ in appState.dequeueReview() }
         )) { item in
             MacMetadataReviewSheet(item: item)
-                .environmentObject(deps)
-                .environmentObject(appState)
+                .environment(deps)
+                .environment(appState)
         }
         // Lyrics editor, presented from the main window. See `MacAppState.lyricsEditorTrack`.
         .sheet(item: $appState.lyricsEditorTrack) { track in
             LyricsEditorSheet(track: track)
-                .environmentObject(deps)
+                .environment(deps)
         }
         .sheet(item: $appState.lyricCard) { card in
             LyricCardSheet(track: card.track, lyrics: card.lyrics)
-                .environmentObject(deps)
+                .environment(deps)
         }
         // Get Info
         .sheet(item: $appState.infoTrack) { track in
             GetInfoSheet(track: track,
                          isOnline: deps.onlineCoordinator.hasActiveOnlineSession,
                          followsPlayback: false)
-                .environmentObject(engine)
-                .environmentObject(deps)
-                .environmentObject(deps.queueService)
+                .environment(engine)
+                .environment(deps)
+                .environment(deps.queueService)
         }
         .sheet(item: $appState.postTrack) { track in
             PostSheet(track: track, onOpen: { appState.showPost(code: $0) })
-                .environmentObject(deps)
+                .environment(deps)
         }
         // Library > Merge Duplicate Songs
         .sheet(item: $appState.dubRequest) { request in
             DubSheet(playlist: request.playlist,
                      tracks: request.playlist.trackIDs.compactMap { deps.libraryService.track(id: $0) },
                      recipient: request.recipient)
-                .environmentObject(deps)
+                .environment(deps)
         }
         .sheet(isPresented: $showMergeDuplicates) {
-            MergeDuplicatesSheet().environmentObject(deps)
+            MergeDuplicatesSheet().environment(deps)
         }
         .onReceive(NotificationCenter.default.publisher(for: .mixMergeDuplicates)) { _ in
             showMergeDuplicates = true
@@ -339,6 +333,7 @@ struct MacRootView: View {
         .onAppear {
             if let name = SpotlightIndex.takePendingArtist() { appState.openDiscoverArtist(named: name) }
             openTappedNotification()
+            Task { await PerfScenario.run(deps, appState) } // TEMP perf scenario
         }
         .onReceive(NotificationCenter.default.publisher(for: .mixNotificationTap)) { _ in openTappedNotification() }
         .onReceive(NotificationCenter.default.publisher(for: .mixToggleSidebar)) { _ in
@@ -346,7 +341,6 @@ struct MacRootView: View {
         }
         // View menu zoom + navigation commands, in a ViewModifier to keep the type-checker fast.
         .modifier(ViewMenuCommands(appState: appState, deps: deps))
-        .environmentObject(appState)
     }
 
     private func openTappedNotification() {
@@ -430,14 +424,14 @@ struct MacRootView: View {
                 // Fullscreen lyrics replace the content column but stay inside the chrome.
                 if appState.lyricsPresented && appState.lyricsFullscreen {
                     MacLyricsView()
-                        .environmentObject(engine)
-                        .environmentObject(appState)
-                        .environmentObject(deps)
+                        .environment(engine)
+                        .environment(appState)
+                        .environment(deps)
                         .transition(.opacity)
                 } else {
                     MacContentRouter()
-                        .environmentObject(appState)
-                        .environmentObject(deps)
+                        .environment(appState)
+                        .environment(deps)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -458,9 +452,9 @@ struct MacRootView: View {
             // ⌘⌫ and ⌘F still work without toolbar buttons. Back/forward live in HistoryTitlebarAccessory.
             .background {
                 MacDeleteCommand()
-                    .environmentObject(deps)
-                    .environmentObject(appState)
-                    .environmentObject(engine)
+                    .environment(deps)
+                    .environment(appState)
+                    .environment(engine)
             }
             .background {
                 Button("") { appState.focusSearch() }
@@ -531,7 +525,7 @@ struct MacRootView: View {
     private var sidebarColumn: some View {
         ZStack(alignment: .leading) {
             MacSidebarView()
-                .environmentObject(appState)
+                .environment(appState)
                 .frame(width: sidebarWidth)
                 .opacity(appState.sidebarCollapsed ? 0 : 1)
                 // Opacity 0 still takes clicks.
@@ -539,7 +533,7 @@ struct MacRootView: View {
                 .accessibilityHidden(appState.sidebarCollapsed)
 
             MacSidebarRail()
-                .environmentObject(appState)
+                .environment(appState)
                 .opacity(appState.sidebarCollapsed ? 1 : 0)
                 .allowsHitTesting(appState.sidebarCollapsed)
                 .accessibilityHidden(!appState.sidebarCollapsed)
@@ -629,9 +623,9 @@ struct MacRootView: View {
     /// One view for all three panels; see `MacRightPanelView`.
     private var rightPanelContent: some View {
         MacRightPanelView()
-            .environmentObject(engine)
-            .environmentObject(library)
-            .environmentObject(appState)
+            .environment(engine)
+            .environment(library)
+            .environment(appState)
     }
 
     // MARK: - Drop overlay
@@ -861,6 +855,8 @@ private struct ViewMenuCommands: ViewModifier {
                     appState.showPlaylist(playlist)
                 }
             }
+            // Injected here rather than in MacRootView's chain, which is at the type-checker's limit.
+            .environment(appState)
     }
 
     /// Blank playlist with `PlaylistEditorSheet`'s "My Playlist #N" name, then opens it.
@@ -877,13 +873,13 @@ private struct ViewMenuCommands: ViewModifier {
 
 private struct MacDeleteCommand: View {
 
-    @EnvironmentObject private var deps:     AppDependencies
-    @EnvironmentObject private var appState: MacAppState
-    @EnvironmentObject private var engine:   PlaybackEngine
+    @Environment(AppDependencies.self) private var deps
+    @Environment(MacAppState.self) private var appState
+    @Environment(PlaybackEngine.self) private var engine
 
-    @ObservedObject private var editing = MacTextEditingMonitor.shared
+    private var editing: MacTextEditingMonitor { .shared }
 
-    /// Dialog text, computed on press. The body re-runs on every `MacAppState` publish and the
+    /// Dialog text, computed on press. The body re-runs on every selection change and the
     /// orphan count walks the whole library.
     @State private var prompt: Prompt?
 
@@ -968,8 +964,8 @@ private struct MacDeleteCommand: View {
 /// Its own view so opening the panel redraws only this corner.
 private struct PreparingBarSlot: View {
 
-    @ObservedObject var coordinator: OnlinePlaybackCoordinator
-    @ObservedObject var savedIn: SavedInPanelCenter
+    var coordinator: OnlinePlaybackCoordinator
+    var savedIn: SavedInPanelCenter
 
     /// Where the card sits with nothing under it: clear of the player bar.
     let baseGap: CGFloat
@@ -1037,7 +1033,7 @@ private struct HistoryTitlebarAccessory: NSViewRepresentable {
             window.removeTitlebarAccessoryViewController(at: index)
         }
 
-        let host = NSHostingView(rootView: MacHistoryButtons(recap: recap).environmentObject(appState))
+        let host = NSHostingView(rootView: MacHistoryButtons(recap: recap).environment(appState))
         // Accessories don't self-size: two 28pt buttons plus spacing.
         host.frame = NSRect(x: 0, y: 0, width: 62, height: 28)
 
@@ -1108,6 +1104,23 @@ private struct WindowChromeTint: NSViewRepresentable {
             blue:  top.blueComponent  * a + base.blueComponent  * (1 - a),
             alpha: 1
         )
+    }
+}
+
+
+/// Lays its content out at its own size divided by `scale`, pinned top-leading, so a matching
+/// `scaleEffect` fills it exactly. A Layout rather than a GeometryReader: resizing the window
+/// re-runs no body.
+private struct ZoomFrame: Layout {
+    var scale: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        proposal.replacingUnspecifiedDimensions()
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let inner = ProposedViewSize(width: bounds.width / scale, height: bounds.height / scale)
+        for view in subviews { view.place(at: bounds.origin, anchor: .topLeading, proposal: inner) }
     }
 }
 

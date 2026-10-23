@@ -5,8 +5,8 @@ import SwiftUI
 
 public struct ListeningHistoryView: View {
 
-    @EnvironmentObject private var deps:   AppDependencies
-    @EnvironmentObject private var engine: PlaybackEngine
+    @Environment(AppDependencies.self) private var deps
+    @Environment(PlaybackEngine.self) private var engine
 
     /// A page is a `fetchLimit` on the log, so this is the only cost knob here.
     private let pageSize = 100

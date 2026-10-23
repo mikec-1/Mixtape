@@ -3,45 +3,47 @@ import SwiftUI
 import Combine
 import AuthenticationServices
 import OSLog
+import Observation
 
+@Observable
 @MainActor
-public final class AuthViewModel: ObservableObject {
+public final class AuthViewModel {
 
     // MARK: - Form State
 
-    @Published public var email: String = ""
-    @Published public var password: String = ""
-    @Published public var username: String = ""
+    public var email: String = ""
+    public var password: String = ""
+    public var username: String = ""
     /// Free-form, no format or availability check.
-    @Published public var displayName: String = ""
-    @Published public var isSignUpMode: Bool = false
+    public var displayName: String = ""
+    public var isSignUpMode: Bool = false
 
     // MARK: - Async State
 
-    @Published public private(set) var isLoading: Bool = false
-    @Published public var errorMessage: String?
-    @Published public var showError: Bool = false
+    public private(set) var isLoading: Bool = false
+    public var errorMessage: String?
+    public var showError: Bool = false
 
     /// Apple/Google sign-in in flight (separate spinner from `isLoading`).
-    @Published public private(set) var isSocialLoading: Bool = false
+    public private(set) var isSocialLoading: Bool = false
 
     // MARK: - Forgot Password State
 
-    @Published public var showForgotPassword: Bool = false
-    @Published public var resetEmail: String = ""
-    @Published public private(set) var isResettingPassword: Bool = false
-    @Published public var resetEmailSent: Bool = false
+    public var showForgotPassword: Bool = false
+    public var resetEmail: String = ""
+    public private(set) var isResettingPassword: Bool = false
+    public var resetEmailSent: Bool = false
 
     // MARK: - Email Confirmation State
 
     /// Set after signUp() when the user must confirm by email. Shows the "check your email" screen.
-    @Published public var showCheckEmail: Bool = false
+    public var showCheckEmail: Bool = false
 
     // MARK: - Set New Password State (for password-reset deep link)
 
-    @Published public var newPassword: String = ""
-    @Published public var confirmNewPassword: String = ""
-    @Published public private(set) var isUpdatingPassword: Bool = false
+    public var newPassword: String = ""
+    public var confirmNewPassword: String = ""
+    public private(set) var isUpdatingPassword: Bool = false
 
     public var newPasswordError: String? {
         guard !newPassword.isEmpty else { return nil }

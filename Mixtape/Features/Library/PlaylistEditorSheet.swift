@@ -8,7 +8,7 @@ public struct PlaylistEditorSheet: View {
 
     let editingPlaylist: Playlist?
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
     @Environment(\.dismiss) private var dismiss
 
     @State private var name        = ""
@@ -157,5 +157,5 @@ public struct PlaylistEditorSheet: View {
 
 #Preview {
     PlaylistEditorSheet()
-        .environmentObject(AppDependencies())
+        .environment(AppDependencies())
 }

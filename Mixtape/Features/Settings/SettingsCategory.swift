@@ -3,21 +3,25 @@
 
 import SwiftUI
 import Combine
+import Observation
 
 // MARK: - Deep links
 
 /// A request to open Settings somewhere specific, e.g. Connections with the Spotify
 /// library picker up. Shared by both platforms' Settings shells.
+@Observable
 @MainActor
-final class SettingsRoute: ObservableObject {
+final class SettingsRoute {
 
     static let shared = SettingsRoute()
 
     /// The pane macOS shows. Here so the window's back/forward history can restore it (MacAppState).
-    @Published var category: SettingsCategory = .general
+    var category: SettingsCategory = .general { didSet { categoryChanges.send(category) } }
+    /// Every set after launch, for Combine users.
+    @ObservationIgnored let categoryChanges = PassthroughSubject<SettingsCategory, Never>()
 
     /// Bumped on every request, so asking for the same page twice still moves.
-    @Published private(set) var request: Request?
+    private(set) var request: Request?
 
     struct Request: Equatable {
         let category: SettingsCategory

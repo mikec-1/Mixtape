@@ -5,10 +5,10 @@ import SwiftUI
 
 public struct MiniPlayerBar: View {
 
-    @EnvironmentObject private var engine: PlaybackEngine
-    @EnvironmentObject private var deps:   AppDependencies
+    @Environment(PlaybackEngine.self) private var engine
+    @Environment(AppDependencies.self) private var deps
     #if os(iOS)
-    @EnvironmentObject private var iosAppState: IOSAppState
+    @Environment(IOSAppState.self) private var iosAppState
     #endif
     /// Non-iOS only. On iOS the flag lives on IOSAppState, since this bar unmounts
     /// between songs and would take the sheet with it.
@@ -157,8 +157,8 @@ public struct MiniPlayerBar: View {
         #if !os(iOS)
         .sheet(isPresented: $showNowPlaying) {
             NowPlayingView()
-                .environmentObject(engine)
-                .environmentObject(deps)
+                .environment(engine)
+                .environment(deps)
         }
         #endif
     }
@@ -297,7 +297,7 @@ public struct MiniPlayerBar: View {
         MiniPlayerBar()
             .padding(.horizontal, 8)
             .padding(.bottom, 57)
-            .environmentObject(deps)
-            .environmentObject(deps.playbackEngine)
+            .environment(deps)
+            .environment(deps.playbackEngine)
     }
 }

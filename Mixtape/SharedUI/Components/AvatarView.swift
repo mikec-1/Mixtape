@@ -19,7 +19,7 @@ public struct AvatarView: View {
         Group {
             if let url {
                 // Cached and shared: AsyncImage gave up for good when a lazy row cancelled its load.
-                CachedRemoteImage(url: url) { $0.resizable().scaledToFill() } placeholder: { BlobAvatar(seed: seed) }
+                CachedRemoteImage(url: url, points: size) { $0.resizable().scaledToFill() } placeholder: { BlobAvatar(seed: seed) }
             } else {
                 BlobAvatar(seed: seed)
             }

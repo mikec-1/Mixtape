@@ -5,11 +5,11 @@ import SwiftData
 
 public struct SmartPlaylistsSection: View {
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
     #if os(macOS)
-    @EnvironmentObject private var appState: MacAppState
+    @Environment(MacAppState.self) private var appState
     #endif
-    @ObservedObject var service: SmartPlaylistService
+    var service: SmartPlaylistService
 
     /// Handled by the library so the create sheet is presented with the other create routes.
     let onCreate: () -> Void
@@ -41,7 +41,7 @@ public struct SmartPlaylistsSection: View {
                     PlaylistRowItem(playlist: smart.asPlaylist(trackIDs: deps.smartTrackIDs(smart)),
                                     kind: "Smart Playlist",
                                     onOpen: { appState.showSmartPlaylist(smart) })
-                        .environmentObject(deps.downloadManager)
+                        .environment(deps.downloadManager)
                         .contextMenu {
                             SmartPlaylistActionsMenu(playlist: smart, service: service)
                         }
@@ -59,11 +59,11 @@ public struct SmartPlaylistsSection: View {
             ForEach(deps.visibleSmartPlaylists) { smart in
                 NavigationLink {
                     SmartPlaylistDetailView(playlist: smart, service: service)
-                        .environmentObject(deps)
+                        .environment(deps)
                 } label: {
                     PlaylistRowView(playlist: smart.asPlaylist(trackIDs: deps.smartTrackIDs(smart)),
                                     kind: "Smart Playlist")
-                        .environmentObject(deps.downloadManager)
+                        .environment(deps.downloadManager)
                 }
                 .listRowBackground(MixRowBackground())
                 .listRowSeparatorTint(Color.mixSeparator)
@@ -120,14 +120,14 @@ public struct SmartPlaylistsSection: View {
 public struct SmartPlaylistDetailView: View {
 
     let playlist: SmartPlaylist
-    @ObservedObject var service: SmartPlaylistService
+    var service: SmartPlaylistService
 
     public init(playlist: SmartPlaylist, service: SmartPlaylistService) {
         self.playlist = playlist
         self.service  = service
     }
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
 
     public var body: some View {
         // The stored copy, so a rename in the editor reaches an open page.

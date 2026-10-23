@@ -6,9 +6,11 @@ import Foundation
 import Combine
 import CryptoKit
 import OSLog
+import Observation
 
+@Observable
 @MainActor
-public final class LastFmScrobbler: ObservableObject {
+public final class LastFmScrobbler {
 
     public static let shared = LastFmScrobbler()
 
@@ -30,25 +32,25 @@ public final class LastFmScrobbler: ObservableObject {
     // MARK: - State
 
     /// When off, nothing is sent even if connected.
-    @Published public var isEnabled: Bool {
+    public var isEnabled: Bool {
         didSet { UserDefaults.standard.set(isEnabled, forKey: Keys.isEnabled) }
     }
 
     /// Nil when not connected.
-    @Published public private(set) var username: String?
+    public private(set) var username: String?
 
     /// True while a getToken/getSession round-trip is in flight.
-    @Published public private(set) var isConnecting: Bool = false
+    public private(set) var isConnecting: Bool = false
 
     /// The most recent auth error, surfaced in the UI. Cleared on a new attempt.
-    @Published public private(set) var lastAuthError: String?
+    public private(set) var lastAuthError: String?
 
     /// Token from beginWebAuth(), used by completeWebAuth(). Memory only.
-    private var pendingToken: String?
+    @ObservationIgnored private var pendingToken: String?
 
     /// The Mixtape account the stored credentials belong to. They live in
     /// device-wide UserDefaults, so nothing is readable until accountDidChange claims them.
-    private var accountID: UUID?
+    @ObservationIgnored private var accountID: UUID?
 
     private init() {
         // Unclaimed until an account signs in.
@@ -62,7 +64,11 @@ public final class LastFmScrobbler: ObservableObject {
     private var apiSecret:  String? { claimed(Keys.apiSecret) }
     private var sessionKey: String? { claimed(Keys.sessionKey) }
 
+    /// The credentials live in UserDefaults, so writers bump this for views to redraw.
+    private var credentialsRevision = 0
+
     private func claimed(_ key: String) -> String? {
+        _ = credentialsRevision
         guard accountID != nil else { return nil }
         return nonEmpty(UserDefaults.standard.string(forKey: key))
     }
@@ -86,7 +92,7 @@ public final class LastFmScrobbler: ObservableObject {
         accountID = userID
         username = nonEmpty(defaults.string(forKey: Keys.username))
         isEnabled = defaults.bool(forKey: Keys.isEnabled)
-        objectWillChange.send()
+        credentialsRevision += 1
     }
 
     /// Hides the connection without ending it, so signing back in keeps the key.
@@ -95,7 +101,7 @@ public final class LastFmScrobbler: ObservableObject {
         username = nil
         pendingToken = nil
         lastAuthError = nil
-        objectWillChange.send()
+        credentialsRevision += 1
     }
 
     /// True once an API key + shared secret have been saved (auth can begin).
@@ -115,7 +121,7 @@ public final class LastFmScrobbler: ObservableObject {
         let defaults = UserDefaults.standard
         defaults.set(apiKey.trimmingCharacters(in: .whitespacesAndNewlines), forKey: Keys.apiKey)
         defaults.set(apiSecret.trimmingCharacters(in: .whitespacesAndNewlines), forKey: Keys.apiSecret)
-        objectWillChange.send()
+        credentialsRevision += 1
     }
 
     /// Clears the session and username, keeps the key and secret.
@@ -126,7 +132,7 @@ public final class LastFmScrobbler: ObservableObject {
         username = nil
         pendingToken = nil
         lastAuthError = nil
-        objectWillChange.send()
+        credentialsRevision += 1
     }
 
     /// Forget everything: API key, secret, session, username, and disable scrobbling.
@@ -138,7 +144,7 @@ public final class LastFmScrobbler: ObservableObject {
         pendingToken = nil
         lastAuthError = nil
         isEnabled = false
-        objectWillChange.send()
+        credentialsRevision += 1
     }
 
     // MARK: - Web auth flow (auth.getToken -> authorize -> auth.getSession)
@@ -197,7 +203,7 @@ public final class LastFmScrobbler: ObservableObject {
             username = name
             pendingToken = nil
             isEnabled = true
-            objectWillChange.send()
+            credentialsRevision += 1
         } catch let error as AuthError {
             lastAuthError = error.errorDescription
             throw error

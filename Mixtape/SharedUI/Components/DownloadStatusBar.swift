@@ -6,10 +6,10 @@ import SwiftUI
 /// The full row: label, count, bar. For the expanded sidebar.
 struct DownloadStatusBar: View {
 
-    @ObservedObject var downloads: DownloadManager
+    var downloads: DownloadManager
 
     /// Observed separately; it ticks many times a second. See `DownloadManager.progress`.
-    @ObservedObject private var progress: DownloadProgress
+    private let progress: DownloadProgress
 
     init(downloads: DownloadManager) {
         self.downloads = downloads
@@ -71,10 +71,10 @@ struct DownloadStatusBar: View {
 /// The 64pt version: a ring, no words. Same numbers in the tooltip.
 struct DownloadStatusRing: View {
 
-    @ObservedObject var downloads: DownloadManager
+    var downloads: DownloadManager
 
     /// See `DownloadStatusBar.progress`.
-    @ObservedObject private var progress: DownloadProgress
+    private let progress: DownloadProgress
 
     init(downloads: DownloadManager) {
         self.downloads = downloads

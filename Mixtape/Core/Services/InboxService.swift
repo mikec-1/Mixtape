@@ -6,9 +6,11 @@ import Combine
 import Foundation
 import os
 import Supabase
+import Observation
 
+@Observable
 @MainActor
-public final class InboxService: ObservableObject {
+public final class InboxService {
 
     public static let shared = InboxService()
 
@@ -100,24 +102,27 @@ public final class InboxService: ObservableObject {
 
     private static let pageSize = 50
 
-    @Published public private(set) var rows: [Notice] = []
-    @Published public private(set) var loaded = false
-    public private(set) var hasMore = false
+    public private(set) var rows: [Notice] = [] { didSet { rowsSubject.send(rows) } }
+    /// `$rows` for Combine users; sent after the set.
+    public var rowsPublisher: AnyPublisher<[Notice], Never> { rowsSubject.prepend(rows).eraseToAnyPublisher() }
+    @ObservationIgnored private let rowsSubject = PassthroughSubject<[Notice], Never>()
+    public private(set) var loaded = false
+    @ObservationIgnored public private(set) var hasMore = false
     /// Set while the inbox is on screen, so new rows are read as they arrive.
-    public var isOpen = false {
+    @ObservationIgnored public var isOpen = false {
         didSet { if !isOpen { dots = [] } }
     }
     /// Rows the open inbox marked read. Their dots stay until it closes.
-    @Published public private(set) var dots: Set<UUID> = []
+    public private(set) var dots: Set<UUID> = []
     /// Foreground arrivals toast instead of bannering. Wired by AppDependencies.
-    public var onToast: ((String) -> Void)?
+    @ObservationIgnored public var onToast: ((String) -> Void)?
 
     public var unreadCount: Int { rows.lazy.filter { $0.readAt == nil }.count }
 
-    private var owner: UUID?
-    private var loadingMore = false
-    private var listenTask: Task<Void, Never>?
-    private var pokeTask: Task<Void, Never>?
+    @ObservationIgnored private var owner: UUID?
+    @ObservationIgnored private var loadingMore = false
+    @ObservationIgnored private var listenTask: Task<Void, Never>?
+    @ObservationIgnored private var pokeTask: Task<Void, Never>?
 
     // MARK: Reading
 

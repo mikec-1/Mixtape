@@ -1,11 +1,13 @@
 import Foundation
 import Combine
+import Observation
 
 /// Tape decks: three named queues you switch between, each keeping its song and position.
 /// The live queue always belongs to the active deck; the others are parked snapshots. Per device,
 /// like the resume-on-launch queue.
+@Observable
 @MainActor
-public final class TapeDeckService: ObservableObject {
+public final class TapeDeckService {
 
     public struct Deck: Codable, Identifiable {
         public let id: Int
@@ -18,15 +20,15 @@ public final class TapeDeckService: ObservableObject {
         enum CodingKeys: String, CodingKey { case id, name, snapshot, position }
     }
 
-    @Published public private(set) var decks: [Deck]
-    @Published public private(set) var activeID: Int
+    public private(set) var decks: [Deck]
+    public private(set) var activeID: Int
 
     private let engine: PlaybackEngine
     private let coordinator: OnlinePlaybackCoordinator
     private let library: LibraryService
     private let toast: (Toast) -> Void
     private let addToPlaylist: ([UUID], UUID) -> Void
-    private var isSwitching = false
+    @ObservationIgnored private var isSwitching = false
 
     private static let key = "playback.tapeDecks"
     private struct Stored: Codable { var decks: [Deck]; var activeID: Int }

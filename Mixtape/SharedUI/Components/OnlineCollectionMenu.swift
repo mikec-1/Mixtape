@@ -25,13 +25,13 @@ struct OnlineCollectionMenu: View {
         self.showsShare = showsShare
     }
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
     #if os(macOS)
-    @EnvironmentObject private var appState: MacAppState
+    @Environment(MacAppState.self) private var appState
     #else
-    @EnvironmentObject private var iosAppState: IOSAppState
+    @Environment(IOSAppState.self) private var iosAppState
     #endif
-    @ObservedObject private var savedAlbums = SavedAlbumsService.shared
+    private var savedAlbums: SavedAlbumsService { .shared }
 
     var body: some View {
         if !isEmptyMix {

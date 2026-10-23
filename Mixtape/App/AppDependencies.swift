@@ -1,4 +1,4 @@
-// Dependency container, injected as an @EnvironmentObject from MixtapeApp.
+// Dependency container, injected with .environment from MixtapeApp.
 // Every service is built and wired here.
 
 import Foundation
@@ -6,15 +6,17 @@ import AppIntents
 import SwiftData
 import Supabase
 import Combine
+import Observation
 import OSLog
 
 @MainActor
-public final class AppDependencies: ObservableObject {
+@Observable
+public final class AppDependencies {
 
-    // MARK: - Published State
+    // MARK: - Observed State
 
-    @Published public private(set) var isAuthenticated: Bool = false
-    @Published public private(set) var isRestoringSession: Bool = true
+    public private(set) var isAuthenticated: Bool = false
+    public private(set) var isRestoringSession: Bool = true
 
     // MARK: - In-App Toast
 
@@ -24,7 +26,7 @@ public final class AppDependencies: ObservableObject {
     public func showToast(_ toast: Toast) { toasts.show(toast) }
     public func showToast(_ message: String) { toasts.show(Toast(message)) }
 
-    private var isResavingEdits = false
+    @ObservationIgnored private var isResavingEdits = false
 
     /// Re-save Edits: renders every edit again from its original at the current Song Edit Quality,
     /// since changing the setting can't touch files already written. One at a time; each keeps its song.
@@ -48,7 +50,7 @@ public final class AppDependencies: ObservableObject {
     }
 
     /// So a tap and a download of the same edit render it once.
-    private var editRebuilds: [UUID: Task<URL, Error>] = [:]
+    @ObservationIgnored private var editRebuilds: [UUID: Task<URL, Error>] = [:]
 
     /// An edit's file, rendered from its original when this device has none (made on another device, or
     /// in a shared tape). Playback and downloads call this.
@@ -125,7 +127,7 @@ public final class AppDependencies: ObservableObject {
         return (try await importService.saveEdit(rendered: copy, of: original, edit: recipe, title: post.title), true)
     }
 
-    private var refreshedPostWaveforms = false
+    @ObservationIgnored private var refreshedPostWaveforms = false
 
     /// Gives your posts the current shape: older ones have none, or a coarser one. Once per launch,
     /// one at a time, from your own copy of the edit when you have it.
@@ -175,7 +177,7 @@ public final class AppDependencies: ObservableObject {
     // MARK: - Saved-song Pill
 
     /// The "Added to..." card. Separate from `toasts` since both can show
-    /// at once. A plain `let` rather than @Published so a save doesn't redraw every
+    /// at once. A plain `let` rather than observed state so a save doesn't redraw every
     /// view observing deps; only SavedToastHost watches it.
     public let savedToasts = SavedToastCenter()
 
@@ -219,8 +221,8 @@ public final class AppDependencies: ObservableObject {
         return tracks
     }
 
-    private var smartMemo: [SmartPlaylist: [Track]] = [:]
-    private var smartMemoRevision: UInt64?
+    @ObservationIgnored private var smartMemo: [SmartPlaylist: [Track]] = [:]
+    @ObservationIgnored private var smartMemoRevision: UInt64?
 
     public func smartTrackIDs(_ smart: SmartPlaylist) -> [UUID] {
         smartTracks(smart).map(\.id)
@@ -319,30 +321,30 @@ public final class AppDependencies: ObservableObject {
     public let equalizer:      AudioEqualizer             // graphic EQ
     public let playbackEngine: PlaybackEngine
     /// Which of the account's open devices is playing, and control of it.
-    public lazy var continuity = ContinuityService(
+    @ObservationIgnored public lazy var continuity = ContinuityService(
         client: SupabaseConfig.client, engine: playbackEngine, library: libraryService,
         deviceID: Self.deviceID, name: SupabaseSyncService.deviceName,
         platform: SupabaseSyncService.platformName,
         toast: { [weak self] in self?.showToast($0) })
     /// Listening together with other accounts (Phase 6).
-    public lazy var jam = JamService(
+    @ObservationIgnored public lazy var jam = JamService(
         client: SupabaseConfig.client, engine: playbackEngine, continuity: continuity,
         deviceID: Self.deviceID, currentUser: { [weak self] in self?.authService.currentUser },
         toast: { [weak self] in self?.showToast($0) })
     /// Two-person shared playlists, rebuilt daily.
-    public lazy var blends = BlendService(
+    @ObservationIgnored public lazy var blends = BlendService(
         client: SupabaseConfig.client, catalog: itunesClient,
         toast: { [weak self] in self?.showToast($0) })
     public let downloadManager: DownloadManager
     /// Posted edits, likes and comments (song edits phase 4).
-    public lazy var community = CommunityService(client: SupabaseConfig.client)
+    @ObservationIgnored public lazy var community = CommunityService(client: SupabaseConfig.client)
     /// Last month's listening, once a month.
-    public lazy var recap = RecapService(
+    @ObservationIgnored public lazy var recap = RecapService(
         client: SupabaseConfig.client, history: PlayHistoryRepository(), library: libraryService,
         snapshots: PlayedTrackSnapshotRepository(),
         deviceNames: { [weak self] in await self?.syncService.deviceNames() ?? [:] })
     /// Named queues you switch between (7.6).
-    public lazy var tapeDecks = TapeDeckService(
+    @ObservationIgnored public lazy var tapeDecks = TapeDeckService(
         engine: playbackEngine, coordinator: onlineCoordinator, library: libraryService,
         toast: { [weak self] in self?.showToast($0) },
         addToPlaylist: { [weak self] in self?.addTracks(ids: $0, toPlaylist: $1) })
@@ -411,11 +413,11 @@ public final class AppDependencies: ObservableObject {
 
     // MARK: - Private
 
-    private var cancellables = Set<AnyCancellable>()
+    @ObservationIgnored private var cancellables = Set<AnyCancellable>()
     /// The Downloaded filter was turned on by losing the network, not by the user.
-    private var filterWentOnOffline = false
+    @ObservationIgnored private var filterWentOnOffline = false
     #if os(iOS)
-    private(set) var nowPlayingSurfaces: NowPlayingSurfaces?
+    @ObservationIgnored private(set) var nowPlayingSurfaces: NowPlayingSurfaces?
     #endif
 
     /// One-shot artwork shrink. Held so it can be cancelled and re-run.
@@ -726,12 +728,12 @@ LaunchTimeline.mark("deps/engine")
         LaunchTimeline.mark("deps/history-restored")
         wireResetObserver()
         // Siri only knows the playlist names it's been told.
-        libraryService.$playlists.map { $0.map(\.name) }.removeDuplicates()
+        libraryService.playlistsPublisher.map { $0.map(\.name) }.removeDuplicates()
             .debounce(for: .seconds(2), scheduler: DispatchQueue.main)
             .sink { _ in MixtapeShortcuts.updateAppShortcutParameters() }
             .store(in: &cancellables)
         // Skip the empty launch value, it would look like every song was deleted.
-        libraryService.$tracks.combineLatest(libraryService.$artists).dropFirst()
+        libraryService.tracksPublisher.combineLatest(libraryService.artistsPublisher).dropFirst()
             .debounce(for: .seconds(5), scheduler: DispatchQueue.main)
             .sink { [weak self] tracks, artists in
                 guard self?.libraryService.hasLoaded == true else { return }
@@ -761,29 +763,12 @@ LaunchTimeline.mark("deps/engine")
         libraryService.scheduleArtistImageBackfill()
 
         LaunchTimeline.mark("deps/backfills-scheduled")
-        libraryService.objectWillChange
-            .sink { [weak self] _ in self?.objectWillChange.send() }
-            .store(in: &cancellables)
-
         // DownloadManager isn't forwarded: it publishes on every status change and
         // would redraw every view holding deps. Views that show download state observe
         // it directly.
 
-        // Nested ObservableObjects don't republish through their parent.
-        localFiles.objectWillChange
-            .sink { [weak self] _ in self?.objectWillChange.send() }
-            .store(in: &cancellables)
-
-        watchedFolders.objectWillChange
-            .sink { [weak self] _ in self?.objectWillChange.send() }
-            .store(in: &cancellables)
-
         // First scan of watched folders. Cheap when there are none.
         mixMainActivity("launch/local-files-rescan") { localFiles.rescan() }
-
-        authService.objectWillChange
-            .sink { [weak self] _ in self?.objectWillChange.send() }
-            .store(in: &cancellables)
 
         // Build the Supabase client off the main actor.
         Task { await SupabaseConfig.warm(); LaunchTimeline.mark("deps/supabase-warmed") }
@@ -792,7 +777,7 @@ LaunchTimeline.mark("deps/engine")
         // Lets a handoff carry the upload the sending device already resolved.
         continuity.online = onlineCoordinator
         // The device picker shows each device's quality, so it goes with presence.
-        downloadManager.$downloadQuality
+        downloadManager.downloadQualityPublisher
             .sink { [weak self] q in self?.continuity.setQuality(q.title) }
             .store(in: &cancellables)
         // Eager too, so a guest's queue redirect is back before the first tap.
@@ -811,8 +796,8 @@ LaunchTimeline.mark("deps/engine")
         InboxService.shared.onToast = { [weak self] in self?.showToast(Toast($0, symbol: "bell.fill")) }
         MessagesService.shared.onToast = { [weak self] in self?.showToast(Toast($0, symbol: "bubble.left.fill")) }
         // Playback errors were a second banner at the top. Now they're the same card.
-        playbackEngine.$errorMessage
-            .merge(with: onlineCoordinator.$errorMessage)
+        playbackEngine.errorMessagePublisher
+            .merge(with: onlineCoordinator.errorMessagePublisher)
             .compactMap { $0 }
             .sink { [weak self] in self?.showToast(.failed($0)) }
             .store(in: &cancellables)
@@ -834,7 +819,7 @@ LaunchTimeline.mark("deps/engine")
     // MARK: - Private Wiring
 
     private func wireAuthObserver() {
-        authService.$authState
+        authService.authStatePublisher
             .receive(on: RunLoop.main)
             .sink { [weak self] state in
                 guard let self else { return }
@@ -869,8 +854,8 @@ LaunchTimeline.mark("deps/engine")
         }
         playbackEngine.editRebuilder = rebuildEdit
         downloadManager.editRebuilder = rebuildEdit
-        downloadManager.$isConnected
-            .combineLatest(authService.$isOffline)
+        downloadManager.isConnectedPublisher
+            .combineLatest(authService.isOfflinePublisher)
             .map { !$0 || $1 }
             .removeDuplicates()
             .receive(on: RunLoop.main)
@@ -889,7 +874,7 @@ LaunchTimeline.mark("deps/engine")
             .store(in: &cancellables)
 
         // Reconnecting retries a cached-session sign-in. No-op otherwise.
-        downloadManager.$isConnected
+        downloadManager.isConnectedPublisher
             .removeDuplicates()
             .filter { $0 }
             .sink { [weak self] _ in
@@ -898,7 +883,7 @@ LaunchTimeline.mark("deps/engine")
             .store(in: &cancellables)
 
         // Coming back online runs the sync that onSignIn skipped.
-        authService.$isOffline
+        authService.isOfflinePublisher
             .removeDuplicates()
             .dropFirst()
             .filter { !$0 }

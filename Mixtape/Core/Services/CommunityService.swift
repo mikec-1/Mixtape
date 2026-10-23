@@ -7,6 +7,7 @@
 import Foundation
 import Combine
 import Supabase
+import Observation
 
 /// A `post_cards` row: the post with its author, counts and your like and repost.
 public struct CommunityPost: Identifiable, Decodable, Hashable, Sendable {
@@ -134,11 +135,12 @@ public struct PostComment: Identifiable, Decodable, Hashable, Sendable {
 }
 
 /// The playing post's timed comments, for the dots on the player's scrubber.
+@Observable
 @MainActor
-public final class PlayingPostMarks: ObservableObject {
+public final class PlayingPostMarks {
     public static let shared = PlayingPostMarks()
-    @Published public fileprivate(set) var post: UUID?
-    @Published public fileprivate(set) var comments: [PostComment] = []
+    public fileprivate(set) var post: UUID?
+    public fileprivate(set) var comments: [PostComment] = []
 }
 
 @MainActor

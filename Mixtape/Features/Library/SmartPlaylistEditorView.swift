@@ -4,7 +4,7 @@ import SwiftUI
 
 public struct SmartPlaylistEditorView: View {
 
-    @ObservedObject var service: SmartPlaylistService
+    var service: SmartPlaylistService
     @Environment(\.dismiss) private var dismiss
 
     // MARK: - Editable state

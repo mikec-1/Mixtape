@@ -7,10 +7,10 @@ import Combine
 
 struct MacSongsView: View {
 
-    @EnvironmentObject private var library:  LibraryService
-    @EnvironmentObject private var engine:   PlaybackEngine
-    @EnvironmentObject private var appState: MacAppState
-    @EnvironmentObject private var deps:     AppDependencies
+    @Environment(LibraryService.self) private var library
+    @Environment(PlaybackEngine.self) private var engine
+    @Environment(MacAppState.self) private var appState
+    @Environment(AppDependencies.self) private var deps
 
     let searchText: String
 
@@ -329,8 +329,8 @@ private struct MoveToArtistSheet: View {
             HStack(spacing: 12) {
                 // Avatar
                 Group {
-                    if let data = artworkData, let img = NSImage(data: data) {
-                        Image(nsImage: img).resizable().scaledToFill()
+                    if let data = artworkData, let img = mixImage(from: data, displaySize: 32) {
+                        img.resizable().scaledToFill()
                     } else {
                         ZStack {
                             Circle()

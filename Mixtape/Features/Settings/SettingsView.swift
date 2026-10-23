@@ -9,11 +9,13 @@ import AppKit
 
 public struct SettingsView: View {
 
-    @StateObject private var vm: SettingsViewModel
+    @State private var vm: SettingsViewModel
+    #if os(iOS)
     @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject private var deps: AppDependencies
+    #endif
+    @Environment(AppDependencies.self) private var deps
 
-    @ObservedObject private var route = SettingsRoute.shared
+    private var route: SettingsRoute { .shared }
 
     @State private var query = ""
     /// The row search wants pointed at, cleared a few seconds after it lands.
@@ -36,7 +38,7 @@ public struct SettingsView: View {
         profileStats:   ProfileStatsService,
         downloadManager: DownloadManager
     ) {
-        _vm = StateObject(wrappedValue: SettingsViewModel(
+        _vm = State(initialValue: SettingsViewModel(
             authService:    authService,
             syncService:    syncService,
             libraryService: libraryService,

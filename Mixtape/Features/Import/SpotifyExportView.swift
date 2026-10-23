@@ -12,7 +12,7 @@ public struct SpotifyExportView: View {
     /// sync-link, so those options are hidden.
     private let sourcePlaylistID: UUID?
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
     @Environment(\.dismiss) private var dismiss
 
     public init(playlistName: String, tracks: [Track], playlistID: UUID? = nil) {
@@ -541,7 +541,7 @@ private struct SpotifyExportProgress: View {
 
     enum Stage { case planning, pushing }
 
-    @ObservedObject var service: SpotifyExportService
+    var service: SpotifyExportService
     let title: String
     let stage: Stage
 

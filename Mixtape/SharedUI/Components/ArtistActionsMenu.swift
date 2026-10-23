@@ -11,14 +11,14 @@ struct ArtistActionsMenu: View {
     /// Off in a page's "...", which sits beside that page's own Share button.
     var showsShare = true
 
-    @EnvironmentObject private var deps:   AppDependencies
-    @EnvironmentObject private var engine: PlaybackEngine
+    @Environment(AppDependencies.self) private var deps
+    @Environment(PlaybackEngine.self) private var engine
     #if os(macOS)
-    @EnvironmentObject private var appState: MacAppState
+    @Environment(MacAppState.self) private var appState
     #else
-    @EnvironmentObject private var iosAppState: IOSAppState
+    @Environment(IOSAppState.self) private var iosAppState
     #endif
-    @ObservedObject private var shufflePrefs = ShufflePreferences.shared
+    private var shufflePrefs: ShufflePreferences { .shared }
 
     var body: some View {
         // Songs are resolved in the closures, never in the body, to keep grids smooth.

@@ -44,8 +44,8 @@ enum MacEmptyContext {
 struct MacEmptyLibraryView: View {
     let context: MacEmptyContext
 
-    @EnvironmentObject private var deps:     AppDependencies
-    @EnvironmentObject private var appState: MacAppState
+    @Environment(AppDependencies.self) private var deps
+    @Environment(MacAppState.self) private var appState
     @State private var isImporting = false
 
     var body: some View {

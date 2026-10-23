@@ -6,9 +6,9 @@ import SwiftUI
 
 struct KaraokeView: View {
 
-    @EnvironmentObject private var engine: PlaybackEngine
+    @Environment(PlaybackEngine.self) private var engine
     /// Observed directly: `engine.queue` doesn't republish through the engine.
-    @EnvironmentObject private var queueService: QueueService
+    @Environment(QueueService.self) private var queueService
     @Environment(\.dismiss) private var dismiss
 
     let lines: [LyricLine]

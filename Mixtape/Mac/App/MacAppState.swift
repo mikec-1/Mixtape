@@ -115,9 +115,10 @@ enum RightPanelMode: Equatable, CaseIterable {
 // MARK: - MacAppState
 
 @MainActor
-final class MacAppState: ObservableObject {
+@Observable
+final class MacAppState {
 
-    public var currentUserID: String? = nil {
+    @ObservationIgnored public var currentUserID: String? = nil {
         didSet {
             loadSidebarLayout()
         }
@@ -127,7 +128,7 @@ final class MacAppState: ObservableObject {
     private static let sidebarCollapsedKey = "mixtape.sidebarCollapsed"
 
     /// Library page segment. Global, not per-account: it's a browsing preference.
-    @Published var libraryTab: LibraryTab = .all {
+    var libraryTab: LibraryTab {
         didSet {
             guard libraryTab != oldValue else { return }
             UserDefaults.standard.set(libraryTab.rawValue, forKey: Self.libraryTabKey)
@@ -138,7 +139,7 @@ final class MacAppState: ObservableObject {
     }
 
     /// Sidebar folded to an icon rail.
-    @Published var sidebarCollapsed: Bool = UserDefaults.standard.bool(forKey: MacAppState.sidebarCollapsedKey) {
+    var sidebarCollapsed: Bool = UserDefaults.standard.bool(forKey: MacAppState.sidebarCollapsedKey) {
         didSet {
             guard sidebarCollapsed != oldValue else { return }
             UserDefaults.standard.set(sidebarCollapsed, forKey: Self.sidebarCollapsedKey)
@@ -152,43 +153,37 @@ final class MacAppState: ObservableObject {
 
     /// Playlist order shared by the sidebar and the Playlists page. Mirrors
     /// `PlaylistSortSyncService.shared.sortOrder`, which owns and syncs it.
-    @Published var playlistSortOrder: LibrarySortOrder = .manual {
-        didSet {
-            guard playlistSortOrder != oldValue else { return }
-            PlaylistSortSyncService.shared.sortOrder = playlistSortOrder
-        }
+    var playlistSortOrder: LibrarySortOrder {
+        get { PlaylistSortSyncService.shared.sortOrder }
+        set { PlaylistSortSyncService.shared.sortOrder = newValue }
     }
 
-    private var sortOrderObserver: AnyCancellable?
-
     /// Sidebar drag-to-reorder mode. Not persisted.
-    @Published var isArrangingPlaylists = false
+    var isArrangingPlaylists = false
 
     // MARK: - Init (loads persisted UI scale)
 
     init() {
         let saved = UserDefaults.standard.double(forKey: Self.scaleKey)
-        _uiScale = Published(initialValue: saved > 0
+        uiScale = saved > 0
             ? max(Self.scaleSteps.first!, min(Self.scaleSteps.last!, CGFloat(saved)))
-            : 1.0)
+            : 1.0
+        // Set directly so `didSet` skips its UserDefaults write. @State builds this on every
+        // MacRootView init, and that write re-runs the @AppStorage views above it, forever.
+        libraryTab = Self.savedLibraryTab ?? .all
 
-        loadSidebarLayout()
         observeDiscoverPath()
-        settingsObserver = SettingsRoute.shared.$category.dropFirst().sink { [weak self] _ in
+        settingsObserver = SettingsRoute.shared.categoryChanges.sink { [weak self] _ in
             self?.scheduleHistoryCapture()
         }
-        // Follows the account; the `didSet` pushes the other way and the equality guard stops the loop.
-        playlistSortOrder = PlaylistSortSyncService.shared.sortOrder
-        sortOrderObserver = PlaylistSortSyncService.shared.$sortOrder
-            .receive(on: RunLoop.main)
-            .sink { [weak self] order in self?.playlistSortOrder = order }
+    }
+
+    private static var savedLibraryTab: LibraryTab? {
+        UserDefaults.standard.string(forKey: libraryTabKey).flatMap(LibraryTab.init(rawValue:))
     }
 
     func loadSidebarLayout() {
-        if let raw = UserDefaults.standard.string(forKey: Self.libraryTabKey),
-           let tab = LibraryTab(rawValue: raw) {
-            libraryTab = tab
-        }
+        if let tab = Self.savedLibraryTab { libraryTab = tab }
         // Sort order is restored by `PlaylistSortSyncService`, not here.
     }
 
@@ -197,7 +192,7 @@ final class MacAppState: ObservableObject {
     private static let scaleKey   = "mixtape.uiScale"
     static  let scaleSteps: [CGFloat] = [0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5]
 
-    @Published var uiScale: CGFloat = 1.0 {
+    var uiScale: CGFloat {
         didSet { UserDefaults.standard.set(Double(uiScale), forKey: Self.scaleKey) }
     }
 
@@ -210,7 +205,7 @@ final class MacAppState: ObservableObject {
     func resetZoom() { uiScale = 1.0 }
 
     // MARK: Navigation
-    @Published var selection:        MacSidebarItem?               = .home {
+    var selection:        MacSidebarItem?               = .home {
         // A new section swaps the content column, so dismiss fullscreen lyrics.
         didSet {
             if oldValue != selection, lyricsPresented && lyricsFullscreen {
@@ -240,7 +235,7 @@ final class MacAppState: ObservableObject {
     // One query over the catalogue, with library matches folded in above (`LocalMatchesSection`).
 
     /// Backing store, written via `searchText`. Drawing code reads `activeSearchText`.
-    @Published private var searchStorage: String = "" {
+    private var searchStorage: String = "" {
         // Only refreshes a search entry already on screen; an uncommitted query is ignored.
         didSet { scheduleHistoryCapture() }
     }
@@ -260,7 +255,7 @@ final class MacAppState: ObservableObject {
     /// Whether the query was asked for (Return or a suggestion pick) rather than just typed.
     /// Typing only feeds the suggestions panel, like iOS. Committing shows the results;
     /// navigating away un-commits (`leaveSearch`) but keeps the text.
-    @Published private(set) var searchCommitted: Bool = false {
+    private(set) var searchCommitted: Bool = false {
         didSet { scheduleHistoryCapture() }
     }
 
@@ -288,35 +283,35 @@ final class MacAppState: ObservableObject {
     private func leaveSearchOnSectionChange() { leaveSearch() }
 
     /// Bumped to focus the toolbar search field, which owns its own `@FocusState`.
-    @Published var searchFocusToken: Int                           = 0
+    var searchFocusToken: Int                           = 0
     func focusSearch() { searchFocusToken &+= 1 }
 
     /// ⌘K palette, drawn by MacRootView.
-    @Published var commandPaletteOpen: Bool = false
+    var commandPaletteOpen: Bool = false
 
     /// Bumped on ↓ in the search field to move keyboard focus into the results.
-    @Published var resultsFocusToken: Int = 0
+    var resultsFocusToken: Int = 0
     func focusResults() { resultsFocusToken &+= 1 }
 
     /// Shows the inline account page (Settings > Manage Account).
-    @Published var showingAccount:   Bool                          = false {
+    var showingAccount:   Bool                          = false {
         didSet { scheduleHistoryCapture() }
     }
 
     /// Profile opened from search or Find People; fills the content area.
-    @Published var profileTarget: UserProfile? = nil {
+    var profileTarget: UserProfile? = nil {
         didSet { scheduleHistoryCapture() }
     }
 
     /// Public playlist opened from a profile. Checked before `profileTarget`, so closing it returns to the profile.
-    @Published var publicPlaylistTarget: PublicPlaylistTarget? = nil {
+    var publicPlaylistTarget: PublicPlaylistTarget? = nil {
         didSet { scheduleHistoryCapture() }
     }
 
     enum MessagesPage: Equatable { case list, thread(UserProfile) }
 
     /// Messages, from the paper plane in the top bar or a profile's Message button.
-    @Published var messagesPage: MessagesPage? = nil {
+    var messagesPage: MessagesPage? = nil {
         didSet { scheduleHistoryCapture() }
     }
 
@@ -351,7 +346,7 @@ final class MacAppState: ObservableObject {
     }
 
     /// Album drill-down; nil returns to the active section.
-    @Published var selectedAlbum: Album? = nil {
+    var selectedAlbum: Album? = nil {
         didSet {
             if selectedAlbum != nil {
                 dismissContentOverlays()
@@ -362,13 +357,13 @@ final class MacAppState: ObservableObject {
     }
 
     /// Artist open on the Artists tab, nil shows the grid. Lives here so history can restore it.
-    @Published var libraryArtistID: Artist.ID? = nil {
+    var libraryArtistID: Artist.ID? = nil {
         didSet { scheduleHistoryCapture() }
     }
-    private var settingsObserver: AnyCancellable?
+    @ObservationIgnored private var settingsObserver: AnyCancellable?
 
     /// Smart playlist opened from Home's "Made by Mixtape" shelf. Navigating anywhere clears it.
-    @Published var selectedSmartPlaylist: SmartPlaylist? = nil {
+    var selectedSmartPlaylist: SmartPlaylist? = nil {
         didSet { scheduleHistoryCapture() }
     }
 
@@ -383,7 +378,7 @@ final class MacAppState: ObservableObject {
 
     /// Playlist drill-down; nil returns to the list.
     /// Crate page. A drill-down like a playlist; any sidebar section clears it.
-    @Published var selectedCrateID: UUID? = nil {
+    var selectedCrateID: UUID? = nil {
         didSet { scheduleHistoryCapture() }
     }
 
@@ -398,7 +393,7 @@ final class MacAppState: ObservableObject {
         selectedCrateID       = id
     }
 
-    @Published var selectedPlaylist: Playlist? = nil {
+    var selectedPlaylist: Playlist? = nil {
         didSet {
             selectedPlaylistID = (selectedPlaylist?.isSystem == false) ? selectedPlaylist?.id : nil
             if selectedPlaylist != nil {
@@ -452,9 +447,9 @@ final class MacAppState: ObservableObject {
         }
     }
 
-    /// Published so the toolbar arrows refresh; `canGoBack` is computed.
-    @Published private(set) var backStack:    [HistoryEntry] = []
-    @Published private(set) var forwardStack: [HistoryEntry] = []
+    /// Tracked so the toolbar arrows refresh; `canGoBack` is computed.
+    private(set) var backStack:    [HistoryEntry] = []
+    private(set) var forwardStack: [HistoryEntry] = []
 
     /// A page plus the Discover drill-downs open on it. Home and search share one path, so it's copied here.
     typealias HistoryEntry = (destination: MacDestination, discoverPath: [DiscoverDestination])
@@ -470,15 +465,15 @@ final class MacAppState: ObservableObject {
     // Discover's NavigationStack path is a second history layer: Back unwinds it before
     // the destination stack, like fullscreen lyrics.
 
-    /// Mirror of `DiscoverSessionStore.shared.path.count`, published so `canGoBack` refreshes the toolbar.
-    @Published private(set) var discoverDepth = 0
+    /// Mirror of `DiscoverSessionStore.shared.path.count`, tracked so `canGoBack` refreshes the toolbar.
+    private(set) var discoverDepth = 0
 
     /// Pages popped off the Discover path by the Back arrow, newest last.
     private var discoverForward: [DiscoverDestination] = []
 
     /// Set while we mutate the path, so the observer doesn't treat it as a new turn.
-    private var isRestoringDiscover = false
-    private var discoverObserver: AnyCancellable?
+    @ObservationIgnored private var isRestoringDiscover = false
+    @ObservationIgnored private var discoverObserver: AnyCancellable?
 
     /// Whether Discover fills the content column. The store's path outlives the view, so Back
     /// mustn't pop a drill-down nobody can see.
@@ -501,7 +496,7 @@ final class MacAppState: ObservableObject {
 
     private func observeDiscoverPath() {
         // `$path` publishes in `willSet`, so `discoverDepth` still holds the old count: that tells a push from a pop.
-        discoverObserver = DiscoverSessionStore.shared.$path.sink { [weak self] newPath in
+        discoverObserver = DiscoverSessionStore.shared.pathPublisher.sink { [weak self] newPath in
             guard let self else { return }
             let newDepth = newPath.count
             defer { self.discoverDepth = newDepth }
@@ -522,15 +517,15 @@ final class MacAppState: ObservableObject {
     private var lyricsCoverContent: Bool { lyricsPresented && lyricsFullscreen }
 
     /// Where the history thinks we are; lags `resolvedDestination` until a capture runs.
-    private var currentDestination: MacDestination = .section(.home)
-    private var currentDiscoverPath: [DiscoverDestination] = []
+    @ObservationIgnored private var currentDestination: MacDestination = .section(.home)
+    @ObservationIgnored private var currentDiscoverPath: [DiscoverDestination] = []
     private var liveDiscoverPath: [DiscoverDestination] {
         discoverOnScreen ? DiscoverSessionStore.shared.path : []
     }
 
     /// Set while `apply` writes, so going back isn't recorded as a navigation.
-    private var isRestoringHistory = false
-    private var historyCaptureScheduled = false
+    @ObservationIgnored private var isRestoringHistory = false
+    @ObservationIgnored private var historyCaptureScheduled = false
 
     private static let historyLimit = 60
 
@@ -678,11 +673,11 @@ final class MacAppState: ObservableObject {
 
     // MARK: Toolbar Delete Selection
     /// Selected track IDs; drives the toolbar trash button.
-    @Published var selectedTrackIDs:   Set<Track.ID> = []
+    var selectedTrackIDs:   Set<Track.ID> = []
     /// Where a shift-click range starts, like Finder. Only the SwiftUI lists use it; AppKit tables anchor their own.
-    @Published var selectionAnchorTrackID: Track.ID? = nil
+    var selectionAnchorTrackID: Track.ID? = nil
     /// Playlist ID selected in MacPlaylistsView (system playlists excluded).
-    @Published var selectedPlaylistID: UUID? = nil
+    var selectedPlaylistID: UUID? = nil
 
     /// True when the toolbar delete button should be enabled.
     var canDelete: Bool { !selectedTrackIDs.isEmpty || selectedPlaylistID != nil }
@@ -735,10 +730,10 @@ final class MacAppState: ObservableObject {
     // MARK: Playlist selection
 
     /// Playlists selected on the Playlists page, for bulk actions.
-    @Published var selectedPlaylistIDs: Set<UUID> = []
+    var selectedPlaylistIDs: Set<UUID> = []
 
     /// Where a shift-click measures its range from, same as the track list.
-    @Published var playlistSelectionAnchor: UUID? = nil
+    var playlistSelectionAnchor: UUID? = nil
 
     /// Same Finder rules as `selectTrack`, but independent so one list's Escape doesn't clear the other.
     func selectPlaylist(_ id: UUID, in ordered: [UUID], modifiers: NSEvent.ModifierFlags) {
@@ -786,43 +781,43 @@ final class MacAppState: ObservableObject {
     }
 
     // MARK: Right Panel stack
-    @Published private(set) var panelStack: [RightPanelMode] = []
+    private(set) var panelStack: [RightPanelMode] = []
 
     /// Which track is shown when the panel is in .nowPlaying mode.
-    @Published private(set) var inspectorTrack: Track? = nil
+    private(set) var inspectorTrack: Track? = nil
 
     // MARK: Lyrics
     private static let lyricsFullscreenKey = "lyricsFullscreen"
 
     /// Whether the lyrics UI is currently open (popover or fullscreen overlay).
-    @Published var lyricsPresented = false {
+    var lyricsPresented = false {
         didSet { if !lyricsPresented { karaokeActive = false } }
     }
 
     /// Persisted lyrics mode: popover or fullscreen.
-    @Published var lyricsFullscreen: Bool = UserDefaults.standard.bool(forKey: MacAppState.lyricsFullscreenKey) {
+    var lyricsFullscreen: Bool = UserDefaults.standard.bool(forKey: MacAppState.lyricsFullscreenKey) {
         didSet { UserDefaults.standard.set(lyricsFullscreen, forKey: Self.lyricsFullscreenKey) }
     }
 
     /// Song whose lyrics are being edited. Lives here because a sheet inside the lyrics
     /// popover dismisses into a dead window; MacRootView presents the editor instead.
-    @Published var lyricsEditorTrack: Track? = nil
+    var lyricsEditorTrack: Track? = nil
 
     /// The lyric card sheet, presented from the main window for the same reason.
-    @Published var lyricCard: LyricCardRequest? = nil
+    var lyricCard: LyricCardRequest? = nil
 
     /// Get Info's song. A sheet, since the Now Playing panel follows playback.
-    @Published var infoTrack: Track? = nil
+    var infoTrack: Track? = nil
 
     /// The song editor's song, presented from the main window like Get Info.
-    @Published var editTrack: Track? = nil
+    var editTrack: Track? = nil
 
     /// An edit being posted to the community. Same reason as `editTrack`.
-    @Published var postTrack: Track? = nil
+    var postTrack: Track? = nil
 
     /// Karaoke: fullscreen lyrics, no sidebar or right panel, fading chrome. Not persisted,
     /// and separate from `lyricsFullscreen` (a size, not a mode).
-    @Published var karaokeActive = false
+    var karaokeActive = false
 
     /// Open/close the lyrics UI (mode is whatever `lyricsFullscreen` remembers).
     func toggleLyrics() { lyricsPresented.toggle() }
@@ -841,7 +836,7 @@ final class MacAppState: ObservableObject {
 
     // MARK: Metadata Review Queue
     /// Enrichment candidates waiting for user review, shown one at a time via sheet.
-    @Published private(set) var reviewQueue: [MetadataReviewItem] = []
+    private(set) var reviewQueue: [MetadataReviewItem] = []
 
     /// The item currently shown in the review sheet (front of queue).
     var pendingReview: MetadataReviewItem? { reviewQueue.first }
@@ -1002,14 +997,14 @@ final class MacAppState: ObservableObject {
         /// Station seeded from an artist name (⌘K radio).
         case artistRadio(name: String)
     }
-    @Published var pendingDiscover: DiscoverDeepLink? = nil
+    var pendingDiscover: DiscoverDeepLink? = nil
 
     /// A Discover page opened from a link elsewhere (player bar, queue, lyrics header). Drawn
     /// over the current page without changing the sidebar section; closing it returns there.
-    @Published var discoverLinkActive = false
+    var discoverLinkActive = false
 
     /// Name a link is resolving, so Discover has something to draw during the network round trip.
-    @Published var resolvingDiscoverLink: String? = nil
+    var resolvingDiscoverLink: String? = nil
 
     /// Show Discover's stack without switching section. Already on Discover: the link lands on the existing stack.
     private func openLinkedDiscover() {
@@ -1057,7 +1052,7 @@ final class MacAppState: ObservableObject {
         let playlist: Playlist
         let recipient: String
     }
-    @Published var dubRequest: DubRequest? = nil
+    var dubRequest: DubRequest? = nil
 
     func showSongRadio(title: String, artistName: String) {
         guard !title.isEmpty, !artistName.isEmpty else { return }
@@ -1109,7 +1104,7 @@ final class MacAppState: ObservableObject {
     }
 
     /// True while dragging track rows, so the sidebar shows a drop highlight instead of the reorder line.
-    @Published var isDraggingTracks = false
+    var isDraggingTracks = false
 
     // MARK: - Song-row artist / album links
 

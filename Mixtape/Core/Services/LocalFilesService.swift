@@ -8,31 +8,32 @@ import Combine
 import SwiftUI
 
 @MainActor
-public final class LocalFilesService: ObservableObject {
+@Observable
+public final class LocalFilesService {
 
     /// The songs found in the watched folders, in the order they were scanned.
-    @Published public private(set) var tracks: [Track] = []
+    public private(set) var tracks: [Track] = []
     /// True while a scan is running, for the spinner in Settings.
-    @Published public private(set) var isScanning = false
+    public private(set) var isScanning = false
     /// When the last scan finished, for "Last checked" copy.
-    @Published public private(set) var lastScan: Date?
+    public private(set) var lastScan: Date?
 
     private let folders: WatchedFoldersStore
     private let parser: MetadataParser
     private let deviceID: String
     private let defaults: UserDefaults
 
-    private var scanTask: Task<Void, Never>?
+    @ObservationIgnored private var scanTask: Task<Void, Never>?
 
     #if os(macOS)
     /// macOS only. Triggers the same scan as a manual rescan.
-    private var monitor: WatchedFolderMonitor?
+    @ObservationIgnored private var monitor: WatchedFolderMonitor?
     #endif
-    private var folderObserver: AnyCancellable?
+    @ObservationIgnored private var folderObserver: AnyCancellable?
 
     /// Promoted files: path -> library row id, so they don't show twice.
     /// Entries whose row is gone are pruned on each scan, putting the file back.
-    private var promoted: [String: UUID] = [:]
+    @ObservationIgnored private var promoted: [String: UUID] = [:]
     private static let promotedKey = "localFiles.promoted.v2"
 
     /// Other files are ignored.
@@ -63,7 +64,7 @@ public final class LocalFilesService: ObservableObject {
         #endif
 
         // Folders changed, so re-arm and rescan.
-        folderObserver = folders.objectWillChange
+        folderObserver = folders.changes
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.foldersChanged() }
         armMonitor()

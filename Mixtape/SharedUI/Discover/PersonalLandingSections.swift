@@ -466,7 +466,7 @@ struct MixMosaicCard: View {
     }
 
     private func tile(_ url: URL?, side: CGFloat) -> some View {
-        CachedRemoteImage(url: url) { image in
+        CachedRemoteImage(url: url, points: side) { image in
             image.resizable().scaledToFill()
         } placeholder: {
             Color.mixSurface2
@@ -515,7 +515,7 @@ struct MixNewReleaseHero: View {
 
     private var artistLine: some View {
         HStack(spacing: 11) {
-            CachedRemoteImage(url: release.artist.imageURL) { image in
+            CachedRemoteImage(url: release.artist.imageURL, points: Self.avatarSide) { image in
                 image.resizable().scaledToFill()
             } placeholder: {
                 ZStack {
@@ -544,7 +544,7 @@ struct MixNewReleaseHero: View {
 
     private var releasePanel: some View {
         HStack(alignment: .center, spacing: 14) {
-            CachedRemoteImage(url: release.album.coverURL) { image in
+            CachedRemoteImage(url: release.album.coverURL, points: Self.coverSide) { image in
                 image.resizable().scaledToFill()
             } placeholder: {
                 ZStack {
@@ -665,7 +665,7 @@ struct MixSongRow: View {
             }
 
             ZStack {
-                CachedRemoteImage(url: song.artworkURL) { image in
+                CachedRemoteImage(url: song.artworkURL, points: 44) { image in
                     image.resizable().scaledToFill()
                 } placeholder: {
                     Color.mixSurface2
@@ -770,7 +770,7 @@ struct MixArtistBubble: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            CachedRemoteImage(url: artist.imageURL) { image in
+            CachedRemoteImage(url: artist.imageURL, points: side) { image in
                 image.resizable().scaledToFill()
             } placeholder: {
                 ZStack {
@@ -817,7 +817,7 @@ struct MixAlbumCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            CachedRemoteImage(url: album.coverURL) { image in
+            CachedRemoteImage(url: album.coverURL, points: side) { image in
                 image.resizable().scaledToFill()
             } placeholder: {
                 ZStack {

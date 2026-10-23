@@ -10,10 +10,10 @@ struct MacSearchResultsView: View {
 
     let query: String
 
-    @EnvironmentObject private var library:  LibraryService
-    @EnvironmentObject private var engine:   PlaybackEngine
-    @EnvironmentObject private var appState: MacAppState
-    @EnvironmentObject private var deps:     AppDependencies
+    @Environment(LibraryService.self) private var library
+    @Environment(PlaybackEngine.self) private var engine
+    @Environment(MacAppState.self) private var appState
+    @Environment(AppDependencies.self) private var deps
 
     /// Row index into `matchingTracks` that arrow keys are currently on.
     @State private var focusedIndex: Int? = nil
@@ -454,10 +454,7 @@ private struct LocalSongRow: View {
             Spacer()
 
             if isCurrent {
-                Image(systemName: "waveform")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color.mixPrimary)
-                    .mixVariableColor(isActive: isPlaying)
+                PlayingWave(size: 13, isPlaying: isPlaying)
             } else {
                 Text(track.formattedDuration)
                     .font(.system(size: 12).monospacedDigit())

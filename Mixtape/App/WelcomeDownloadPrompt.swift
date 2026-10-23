@@ -4,7 +4,7 @@ import SwiftUI
 
 struct WelcomeDownloadPrompt: View {
     @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject var exportManager: ExportManager
+    @Environment(ExportManager.self) var exportManager
 
     @State private var errorMessage: String? = nil
 

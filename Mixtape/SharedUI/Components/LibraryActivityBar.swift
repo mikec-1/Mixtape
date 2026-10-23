@@ -7,7 +7,7 @@ import Combine
 /// The full row: spinner, label, count. For the expanded sidebar.
 struct LibraryActivityBar: View {
 
-    @ObservedObject var library: LibraryService
+    var library: LibraryService
 
     /// Empty when idle, so the host can place it unconditionally.
     var body: some View {
@@ -50,7 +50,7 @@ struct LibraryActivityBar: View {
 private struct IndeterminateBar: View {
 
     @State private var sweeping = false
-    @ObservedObject private var visibility = AppVisibility.shared
+    private var visibility: AppVisibility { .shared }
 
     var body: some View {
         GeometryReader { geo in
@@ -78,7 +78,7 @@ private struct IndeterminateBar: View {
 /// The 64pt version: a spinner, no words. Same text in the tooltip.
 struct LibraryActivityRing: View {
 
-    @ObservedObject var library: LibraryService
+    var library: LibraryService
 
     var body: some View {
         if let label = library.activity.label {

@@ -14,10 +14,10 @@ struct MixtapeProfilePage: View {
     /// The mix whose first stream is being resolved, so its card can spin.
     var resolvingID: String? = nil
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
 
     /// Same store as the Discover landing, so this shows exactly what's on Home.
-    @ObservedObject private var store = DiscoverSessionStore.shared
+    private var store: DiscoverSessionStore { .shared }
 
     private var mixes: [PersonalMix] { store.personal.mixes }
 

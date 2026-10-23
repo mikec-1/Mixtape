@@ -18,14 +18,14 @@ struct MixtapeApp: App {
         #endif
         // Built eagerly so a windowless Siri launch can still play.
         let dependencies = AppDependencies()
-        _dependencies = StateObject(wrappedValue: dependencies)
+        _dependencies = State(initialValue: dependencies)
         MixtapeIntents.deps = dependencies
         // Set before launch finishes so a tap that launched the app still arrives.
         InviteNotifier.shared.install(dependencies)
     }
 
-    @StateObject private var dependencies: AppDependencies
-    @StateObject private var theme = MixtapeApp.makeTheme()
+    @State private var dependencies: AppDependencies
+    @State private var theme = MixtapeApp.makeTheme()
 
     /// Only here so the launch marks can see what the theme costs.
     private static func makeTheme() -> ThemeManager {
@@ -38,8 +38,7 @@ struct MixtapeApp: App {
     #if os(macOS)
     /// Only for the Dock tile menu, which SwiftUI can't declare.
     @NSApplicationDelegateAdaptor(MacDockMenu.self) private var dockMenu
-    @AppStorage(MacMenuBarPlayer.visibleKey) private var showsMenuBarPlayer = true
-    @StateObject private var updater = MixtapeApp.makeUpdater()
+    @State private var updater = MixtapeApp.makeUpdater()
 
     private static func makeUpdater() -> UpdaterController {
         let updater = UpdaterController()
@@ -52,7 +51,7 @@ struct MixtapeApp: App {
         mainWindow
         #if os(macOS)
         // One-way on purpose: a real binding feeds back into the setting and loops on macOS 26.
-        MenuBarExtra(isInserted: .constant(showsMenuBarPlayer)) {
+        MenuBarExtra(isInserted: .constant(MenuBarPlayerVisibility.shared.isVisible)) {
             MacMenuBarPlayer(engine: dependencies.playbackEngine, queue: dependencies.playbackEngine.queue,
                              library: dependencies.libraryService)
         } label: {
@@ -71,21 +70,21 @@ struct MixtapeApp: App {
                 #if os(macOS)
                 .task { MacDockMenu.engine = dependencies.playbackEngine }
                 #endif
-                .environmentObject(dependencies)
-                .environmentObject(dependencies.playbackEngine)
-                .environmentObject(dependencies.queueService)
-                .environmentObject(dependencies.libraryService)
-                .environmentObject(dependencies.smartPlaylistService)
-                .environmentObject(dependencies.syncService)
-                .environmentObject(dependencies.onlineCoordinator)
-                .environmentObject(dependencies.recap)
+                .environment(dependencies)
+                .environment(dependencies.playbackEngine)
+                .environment(dependencies.queueService)
+                .environment(dependencies.libraryService)
+                .environment(dependencies.smartPlaylistService)
+                .environment(dependencies.syncService)
+                .environment(dependencies.onlineCoordinator)
+                .environment(dependencies.recap)
                 #if os(iOS)
-                .environmentObject(dependencies.resolverStatus)
+                .environment(dependencies.resolverStatus)
                 #endif
-                .environmentObject(ExportManager.shared)
-                .environmentObject(theme)
+                .environment(ExportManager.shared)
+                .environment(theme)
                 #if os(macOS)
-                .environmentObject(updater)
+                .environment(updater)
                 #endif
                 // Density, motion and chrome go in the environment so only readers redraw.
                 .mixAppearance(density: theme.density,
@@ -190,9 +189,9 @@ struct MixtapeApp: App {
 /// Controls menu. Space stays in MacRootView's key monitor so it doesn't
 /// fire while typing in a text field.
 struct ControlsCommands: Commands {
-    @ObservedObject var engine: PlaybackEngine
-    @ObservedObject var queue: QueueService
-    @ObservedObject var library: LibraryService   // only so the like title follows the heart
+    var engine: PlaybackEngine
+    var queue: QueueService
+    var library: LibraryService   // only so the like title follows the heart
 
     var body: some Commands {
         CommandMenu("Controls") {

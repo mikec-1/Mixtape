@@ -9,13 +9,13 @@ struct MacPlayerBar: View {
     /// Bar height without the hairline, for overlays that have to clear it.
     static let height: CGFloat = 72
 
-    @EnvironmentObject private var engine:      PlaybackEngine
-    @EnvironmentObject private var appState:    MacAppState
-    @EnvironmentObject private var deps:        AppDependencies
-    @EnvironmentObject private var coordinator: OnlinePlaybackCoordinator
+    @Environment(PlaybackEngine.self) private var engine
+    @Environment(MacAppState.self) private var appState
+    @Environment(AppDependencies.self) private var deps
+    @Environment(OnlinePlaybackCoordinator.self) private var coordinator
     /// Observed directly: `engine.queue` is a plain `let`, so shuffle/repeat
     /// changes don't publish through the engine.
-    @EnvironmentObject private var queueService: QueueService
+    @Environment(QueueService.self) private var queueService
 
 
     var body: some View {
@@ -289,17 +289,10 @@ struct MacPlayerBar: View {
                 .font(.system(size: 12))
                 .foregroundStyle(Color.mixTextTertiary)
 
-            Slider(
-                value: Binding(
-                    get: { Double(engine.volume) },
-                    set: { engine.volume = Float($0) }
-                ),
-                in: 0...1
-            )
-            .frame(width: 70)
-            .tint(Color.mixPrimary)
-            .controlSize(.mini)
-            .accessibilityLabel("Volume")
+            BarSlider(value: Double(engine.volume)) { engine.volume = Float($0) }
+                .frame(width: 70)
+                .accessibilityLabel("Volume")
+                .accessibilityValue("\(Int((engine.volume * 100).rounded())) percent")
 
             Image(systemName: "speaker.wave.3.fill")
                 .accessibilityHidden(true)
@@ -384,9 +377,9 @@ struct MacPlayerBar: View {
                 set: { if !$0 && !appState.lyricsFullscreen { appState.lyricsPresented = false } }
             ), arrowEdge: .top) {
                 MacLyricsView()
-                    .environmentObject(engine)
-                    .environmentObject(appState)
-                    .environmentObject(deps)
+                    .environment(engine)
+                    .environment(appState)
+                    .environment(deps)
             }
 
             // Queue button
@@ -469,7 +462,7 @@ private struct TransportButton: View {
 // MARK: - PlayPauseButton
 
 private struct PlayPauseButton: View {
-    @EnvironmentObject private var engine: PlaybackEngine
+    @Environment(PlaybackEngine.self) private var engine
     @State private var isHovered = false
 
     var body: some View {
@@ -497,7 +490,6 @@ private struct PlayPauseButton: View {
                     .foregroundStyle(.white)
                     // Optical centring: nudge the play triangle right.
                     .offset(x: playPauseIcon == "play.fill" ? 1.5 : 0)
-                    .mixBounce(value: engine.state.isPlaying)
             }
         }
         .buttonStyle(.plain).mixHandCursor()
@@ -516,8 +508,8 @@ private struct PlayPauseButton: View {
 // MARK: - MacDevicesButton
 
 private struct MacDevicesButton: View {
-    @ObservedObject var continuity: ContinuityService
-    @ObservedObject var downloads: DownloadManager
+    var continuity: ContinuityService
+    var downloads: DownloadManager
     @State private var showPicker = false
 
     var body: some View {
@@ -577,9 +569,9 @@ private struct BarIconButton: View {
 struct MacProgressScrubber: View {
 
     /// Passed in so only this view redraws on each tick. See `PlaybackClock`.
-    @ObservedObject var clock: PlaybackClock
+    var clock: PlaybackClock
 
-    @EnvironmentObject private var engine: PlaybackEngine
+    @Environment(PlaybackEngine.self) private var engine
     @State private var isDragging = false
     @State private var dragValue: Double = 0
 
@@ -587,20 +579,16 @@ struct MacProgressScrubber: View {
         HStack(spacing: 8) {
             timeLabel(isDragging ? dragValue : clock.currentTime)
 
-            Slider(
-                value: Binding(
-                    get: { isDragging ? dragValue : clock.currentTime },
-                    set: { dragValue = $0 }
-                ),
-                in: 0...(max(engine.duration, 1)),
-                onEditingChanged: { editing in
-                    isDragging = editing
-                    if !editing { engine.seek(to: dragValue) }
-                }
-            )
-            .tint(Color.mixPrimary)
+            let span = max(engine.duration, 1)
+            BarSlider(value: (isDragging ? dragValue : clock.currentTime) / span, step: 10 / span) {
+                dragValue = $0 * span
+            } onEditingChanged: { editing in
+                if editing { dragValue = clock.currentTime }
+                isDragging = editing
+                if !editing { engine.seek(to: dragValue) }
+            }
             .disabled(engine.duration == 0)
-            .overlay { CommentDots(queue: engine.queue, duration: engine.duration, inset: 8, color: .mixTextPrimary) }
+            .overlay { CommentDots(queue: engine.queue, duration: engine.duration, color: .mixTextPrimary).allowsHitTesting(false) }
             .accessibilityLabel("Playback position")
             .accessibilityValue("\(formatTime(isDragging ? dragValue : clock.currentTime)) of \(formatTime(engine.duration))")
 
@@ -619,6 +607,66 @@ struct MacProgressScrubber: View {
         guard t.isFinite, t >= 0 else { return "0:00" }
         let total = Int(t)
         return String(format: "%d:%02d", total / 60, total % 60)
+    }
+}
+
+/// A slider drawn from plain shapes. The system knob is a glass layer on macOS 26 that waits on
+/// the window server every time it moves, and the scrubber moves it five times a second.
+struct BarSlider: View {
+
+    /// 0...1.
+    let value: Double
+    /// One accessibility increment.
+    var step: Double = 0.05
+    let onChange: (Double) -> Void
+    var onEditingChanged: (Bool) -> Void = { _ in }
+
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var hovering = false
+    @State private var dragging = false
+
+    var body: some View {
+        GeometryReader { geo in
+            let x = geo.size.width * min(max(value, 0), 1)
+            let knob: CGFloat = hovering || dragging ? 12 : 10
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.mixTextTertiary.opacity(0.35))
+                Capsule().fill(isEnabled ? Color.mixPrimary : Color.mixTextTertiary)
+                    .frame(width: x)
+            }
+            .frame(height: 4)
+            .overlay(alignment: .leading) {
+                if isEnabled {
+                    Circle()
+                        .fill(Color.white)
+                        .overlay(Circle().strokeBorder(Color.black.opacity(0.15), lineWidth: 0.5))
+                        .frame(width: knob, height: knob)
+                        .offset(x: x - knob / 2)
+                }
+            }
+            .frame(maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { g in
+                        if !dragging { dragging = true; onEditingChanged(true) }
+                        onChange(min(max(g.location.x / max(geo.size.width, 1), 0), 1))
+                    }
+                    .onEnded { _ in
+                        dragging = false
+                        onEditingChanged(false)
+                    }
+            )
+        }
+        .frame(height: 16)
+        .onHover { hovering = $0 }
+        .accessibilityElement(children: .ignore)
+        .accessibilityAdjustableAction { direction in
+            let to = direction == .increment ? min(value + step, 1) : max(value - step, 0)
+            onEditingChanged(true)
+            onChange(to)
+            onEditingChanged(false)
+        }
     }
 }
 

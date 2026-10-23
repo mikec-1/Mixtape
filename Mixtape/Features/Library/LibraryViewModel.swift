@@ -1,6 +1,6 @@
 import Foundation
 import SwiftUI
-import Combine
+import Observation
 
 public enum LibrarySection: String, CaseIterable, Identifiable {
     case playlists  = "Playlists"
@@ -121,45 +121,44 @@ public enum LibraryLayout: String {
     case list, grid
 }
 
+@Observable
 @MainActor
-public final class LibraryViewModel: ObservableObject {
+public final class LibraryViewModel {
 
     // MARK: - Published State
 
     /// Nil is the unfiltered library. A chip narrows it; tapping again clears it.
-    @Published public var selectedSection: LibrarySection? = nil
+    public var selectedSection: LibrarySection? = nil
 
     /// The Downloaded filter. Applies across sections, listing only what's fully on
-    /// this device. Mirrored onto the service for the song lists.
-    @Published public var downloadedOnly: Bool = false {
-        didSet {
-            guard downloadedOnly != oldValue else { return }
-            libraryService.downloadedOnly = downloadedOnly
-        }
+    /// this device. Lives on the service, which also turns it on offline.
+    public var downloadedOnly: Bool {
+        get { libraryService.downloadedOnly }
+        set { if newValue != libraryService.downloadedOnly { libraryService.downloadedOnly = newValue } }
     }
 
-    @Published public private(set) var tracks:    [Track]    = []
-    @Published public private(set) var albums:    [Album]    = []
-    @Published public private(set) var artists:   [Artist]  = []
-    @Published public private(set) var playlists: [Playlist] = []
+    // Read straight from the service, which is observable.
+    public var tracks:    [Track]    { libraryService.displayTracks }
+    public var albums:    [Album]    { libraryService.albums }
+    public var artists:   [Artist]   { libraryService.artists }
+    public var playlists: [Playlist] { libraryService.playlists }
 
-    @Published public var showImportSheet = false
+    public var showImportSheet = false
 
     // MARK: - Search, sort, layout
 
     /// Whether search is open, separate from `searchText` so it can be open and blank.
-    @Published public var isSearching = false
-    @Published public var searchText  = ""
+    public var isSearching = false
+    public var searchText  = ""
 
-    /// Mirrors `PlaylistSortSyncService.shared.sortOrder`, which owns and syncs it.
-    /// Kept `@Published` for the existing bindings.
-    @Published public var sortOrder: LibrarySortOrder = .manual {
-        didSet {
-            guard sortOrder != oldValue else { return }
-            PlaylistSortSyncService.shared.sortOrder = sortOrder
-        }
+    /// `PlaylistSortSyncService.shared.sortOrder`, which owns and syncs it.
+    public var sortOrder: LibrarySortOrder {
+        get { PlaylistSortSyncService.shared.sortOrder }
+        set { PlaylistSortSyncService.shared.sortOrder = newValue }
     }
-    @Published public var layout: LibraryLayout = .list {
+    // Read in the initializer: LibraryView rebuilds this on every parent body, so init must not write.
+    public var layout: LibraryLayout = UserDefaults.standard.string(forKey: LibraryViewModel.layoutKey)
+        .flatMap(LibraryLayout.init(rawValue:)) ?? .list {
         didSet { UserDefaults.standard.set(layout.rawValue, forKey: Self.layoutKey) }
     }
 
@@ -213,30 +212,11 @@ public final class LibraryViewModel: ObservableObject {
     // MARK: - Dependencies
 
     private let libraryService: LibraryService
-    private var cancellables   = Set<AnyCancellable>()
 
     // MARK: - Init
 
     public init(libraryService: LibraryService) {
         self.libraryService = libraryService
-        sortOrder = PlaylistSortSyncService.shared.sortOrder
-        PlaylistSortSyncService.shared.$sortOrder
-            .receive(on: RunLoop.main)
-            .sink { [weak self] order in self?.sortOrder = order }
-            .store(in: &cancellables)
-        if let raw = UserDefaults.standard.string(forKey: Self.layoutKey),
-           let saved = LibraryLayout(rawValue: raw) {
-            layout = saved
-        }
-        bindLibraryService()
-        SavedAlbumsService.shared.objectWillChange
-            .receive(on: RunLoop.main)
-            .sink { [weak self] in self?.objectWillChange.send() }
-            .store(in: &cancellables)
-        PlaylistMetadataService.shared.objectWillChange
-            .receive(on: RunLoop.main)
-            .sink { [weak self] in self?.objectWillChange.send() }
-            .store(in: &cancellables)
     }
 
     // MARK: - Actions
@@ -245,35 +225,5 @@ public final class LibraryViewModel: ObservableObject {
     /// time the tab appears. Playlists publish before the expensive pass.
     public func load() async {
         await libraryService.loadForDisplay()
-    }
-
-    // MARK: - Private
-
-    private func bindLibraryService() {
-        // Also republished on the offline flag, which hides songs not on the device.
-        libraryService.$tracks
-            .combineLatest(libraryService.$downloadedOnly)
-            .map { [weak libraryService] _, _ in libraryService?.displayTracks ?? [] }
-            .receive(on: RunLoop.main)
-            .assign(to: &$tracks)
-
-        // Keeps the chip in step when the service turns the filter on offline.
-        libraryService.$downloadedOnly
-            .removeDuplicates()
-            .receive(on: RunLoop.main)
-            .sink { [weak self] on in self?.downloadedOnly = on }
-            .store(in: &cancellables)
-
-        libraryService.$albums
-            .receive(on: RunLoop.main)
-            .assign(to: &$albums)
-
-        libraryService.$artists
-            .receive(on: RunLoop.main)
-            .assign(to: &$artists)
-
-        libraryService.$playlists
-            .receive(on: RunLoop.main)
-            .assign(to: &$playlists)
     }
 }

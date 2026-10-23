@@ -46,8 +46,8 @@ public extension View {
 #if os(iOS)
 private struct MiniPlayerSafeArea: ViewModifier {
 
-    @EnvironmentObject private var engine: PlaybackEngine
-    @ObservedObject private var keyboard = KeyboardVisibility.shared
+    @Environment(PlaybackEngine.self) private var engine
+    private var keyboard: KeyboardVisibility { .shared }
 
     /// Only while the pill shows; it hides for the keyboard.
     private var inset: CGFloat {
@@ -70,24 +70,27 @@ private struct MiniPlayerSafeArea: ViewModifier {
 #if os(iOS)
 import Combine
 import UIKit
+import Observation
 
 /// Keyboard visible. Floating views over the tab bar hide while typing.
+@Observable
 @MainActor
-final class KeyboardVisibility: ObservableObject {
+final class KeyboardVisibility {
 
     static let shared = KeyboardVisibility()
 
-    @Published private(set) var isVisible = false
+    private(set) var isVisible = false
+    @ObservationIgnored private var watch: AnyCancellable?
 
     private init() {
         let center = NotificationCenter.default
-        center.publisher(for: UIResponder.keyboardWillShowNotification)
+        watch = center.publisher(for: UIResponder.keyboardWillShowNotification)
             .map { _ in true }
             .merge(with: center.publisher(for: UIResponder.keyboardWillHideNotification)
                                 .map { _ in false })
             .removeDuplicates()
             .receive(on: RunLoop.main)
-            .assign(to: &$isVisible)
+            .sink { [weak self] in self?.isVisible = $0 }
     }
 }
 #endif

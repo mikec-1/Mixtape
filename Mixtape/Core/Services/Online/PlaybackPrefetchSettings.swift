@@ -5,6 +5,7 @@
 
 import Foundation
 import Combine
+import Observation
 
 /// How far ahead of the song playing the queue is fetched.
 public enum QueuePreloadDepth: Int, CaseIterable, Identifiable, Sendable {
@@ -30,8 +31,9 @@ public enum QueuePreloadDepth: Int, CaseIterable, Identifiable, Sendable {
     }
 }
 
+@Observable
 @MainActor
-public final class PlaybackPrefetchSettings: ObservableObject {
+public final class PlaybackPrefetchSettings {
 
     public static let shared = PlaybackPrefetchSettings()
 
@@ -40,13 +42,13 @@ public final class PlaybackPrefetchSettings: ObservableObject {
 
     /// How many songs past the current one to fetch. Defaults to `.next`, which
     /// matches the behaviour before the setting existed.
-    @Published public var queueDepth: QueuePreloadDepth {
+    public var queueDepth: QueuePreloadDepth {
         didSet { UserDefaults.standard.set(queueDepth.rawValue, forKey: Self.depthKey) }
     }
 
     /// Prefetch on hover or when a page opens. Makes Discover feel instant;
     /// worth turning off on metered data.
-    @Published public var prefetchWhileBrowsing: Bool {
+    public var prefetchWhileBrowsing: Bool {
         didSet { UserDefaults.standard.set(prefetchWhileBrowsing, forKey: Self.browseKey) }
     }
 

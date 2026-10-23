@@ -6,9 +6,9 @@ import SwiftUI
 struct SmartPlaylistActionsMenu: View {
 
     let playlist: SmartPlaylist
-    @ObservedObject var service: SmartPlaylistService
+    var service: SmartPlaylistService
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
 
     var body: some View {
         // Songs are resolved in the closures, never in the body; the rule matches

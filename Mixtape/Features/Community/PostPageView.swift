@@ -9,9 +9,9 @@ struct PostPageView: View {
     /// Leaves the page after a delete. Nil pops the NavigationStack.
     var onClose: (() -> Void)? = nil
 
-    @EnvironmentObject private var deps: AppDependencies
-    @EnvironmentObject private var engine: PlaybackEngine
-    @EnvironmentObject private var queueService: QueueService
+    @Environment(AppDependencies.self) private var deps
+    @Environment(PlaybackEngine.self) private var engine
+    @Environment(QueueService.self) private var queueService
     @Environment(\.dismiss) private var dismiss
 
     @State private var post: CommunityPost?
@@ -541,7 +541,7 @@ struct PostPageView: View {
 
 /// "At 1:23", ticking with the player. Its own view so the page doesn't redraw every tick.
 private struct TimedToggle: View {
-    @ObservedObject var clock: PlaybackClock
+    var clock: PlaybackClock
     @Binding var on: Bool
 
     var body: some View {

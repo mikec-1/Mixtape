@@ -8,11 +8,11 @@ struct SongRadioMenuItem: View {
     let title: String
     let artistName: String
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
     #if os(macOS)
-    @EnvironmentObject private var appState: MacAppState
+    @Environment(MacAppState.self) private var appState
     #else
-    @EnvironmentObject private var iosAppState: IOSAppState
+    @Environment(IOSAppState.self) private var iosAppState
     #endif
 
     /// Printed title, without the feature credit.

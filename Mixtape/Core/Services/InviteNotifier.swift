@@ -14,15 +14,17 @@ import BackgroundTasks
 import UIKit
 #else
 import AppKit
+import Observation
 #endif
 
+@Observable
 @MainActor
-public final class InviteNotifier: NSObject, ObservableObject {
+public final class InviteNotifier: NSObject {
 
     public static let shared = InviteNotifier()
 
     /// Set at launch, for the release check and recap taps.
-    weak var deps: AppDependencies?
+    @ObservationIgnored weak var deps: AppDependencies?
 
     private override init() {}
 
@@ -89,14 +91,14 @@ public final class InviteNotifier: NSObject, ObservableObject {
 
     // MARK: App icon badge
 
-    private var badgeWatch: AnyCancellable?
+    @ObservationIgnored private var badgeWatch: AnyCancellable?
     /// Also badges the Library tab on iOS, where the inbox lives.
-    @Published private(set) var unread = 0
+    private(set) var unread = 0
 
     /// Unread inbox rows plus unread messages, the same counts as the tray and plane buttons.
     private func watchBadge() {
-        badgeWatch = InboxService.shared.$rows
-            .combineLatest(MessagesService.shared.$threads)
+        badgeWatch = InboxService.shared.rowsPublisher
+            .combineLatest(MessagesService.shared.threadsPublisher)
             .map { rows, threads in rows.count { $0.readAt == nil } + threads.reduce(0) { $0 + $1.unread } }
             .removeDuplicates()
             .sink { [weak self] in
@@ -290,7 +292,7 @@ public final class InviteNotifier: NSObject, ObservableObject {
         case album(title: String, artist: String)
     }
 
-    private var pendingTap: Tap?
+    @ObservationIgnored private var pendingTap: Tap?
 
     public func takePendingTap() -> Tap? {
         defer { pendingTap = nil }

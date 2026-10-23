@@ -37,11 +37,11 @@ public struct LinkImportView: View {
         }
     }
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
     #if os(macOS)
-    @EnvironmentObject private var appState: MacAppState
+    @Environment(MacAppState.self) private var appState
     #else
-    @EnvironmentObject private var appState: IOSAppState
+    @Environment(IOSAppState.self) private var appState
     #endif
     @Environment(\.dismiss) private var dismiss
 

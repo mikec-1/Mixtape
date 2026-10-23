@@ -17,8 +17,8 @@ private struct ProfileLoadKey: Equatable {
 /// The Spotify block in Connections. `openLibrary` asks the pane to swap in `SpotifyLibraryPage`.
 struct SpotifyConnectionGroup: View {
 
-    @EnvironmentObject private var deps: AppDependencies
-    @ObservedObject var auth: SpotifyAuth
+    @Environment(AppDependencies.self) private var deps
+    var auth: SpotifyAuth
     let openLibrary: () -> Void
     let openLikesPush: () -> Void
 
@@ -28,7 +28,7 @@ struct SpotifyConnectionGroup: View {
     @State private var confirmDisconnect = false
     @State private var historyBusy = false
     @State private var historyError: String?
-    @ObservedObject private var throttle = SpotifyThrottle.shared
+    private var throttle: SpotifyThrottle { .shared }
 
     var body: some View {
         SettingsGroup(title: "Spotify",
@@ -122,7 +122,7 @@ struct SpotifyConnectionGroup: View {
                               auth: deps.spotifyAuth,
                               followService: deps.spotifyFollowService,
                               ledger: deps.spotifyImportLedger)
-                .environmentObject(deps)
+                .environment(deps)
         }
         .alert("Disconnect Spotify?", isPresented: $confirmDisconnect) {
             Button("Cancel", role: .cancel) { }
@@ -266,7 +266,7 @@ private struct SpotifyAccountRow: View {
 struct SpotifyLibraryPage: View {
 
     @StateObject private var model: SpotifyLibraryPickerModel
-    @ObservedObject private var auth: SpotifyAuth
+    private var auth: SpotifyAuth
     let onBack: () -> Void
 
     @State private var confirmLeaveDuringImport = false

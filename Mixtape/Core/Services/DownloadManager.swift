@@ -117,43 +117,52 @@ public enum DownloadBlock: Equatable {
 
 /// The download values that change many times a second, split off `DownloadManager` so a percent tick
 /// only redraws the progress views. See `DownloadManager.progress`.
-@MainActor
-public final class DownloadProgress: ObservableObject {
-    /// Per-track fraction, already coalesced to whole percent by the manager.
-    @Published public internal(set) var fractions: [UUID: Double] = [:]
+@MainActor @Observable
+public final class DownloadProgress {
+    /// Per-track fraction, already coalesced to whole percent by the manager. Not observed: rows pick it
+    /// up on the manager's throttled tick, so a percent tick doesn't redraw a whole page.
+    @ObservationIgnored public internal(set) var fractions: [UUID: Double] = [:]
 
     /// Songs finished and songs requested in the current run ("8 of 10"). Reset once nothing is in flight.
-    @Published public internal(set) var completed = 0
-    @Published public internal(set) var total = 0
+    public internal(set) var completed = 0
+    public internal(set) var total = 0
 }
 
-@MainActor
-public final class DownloadManager: ObservableObject {
+@MainActor @Observable
+public final class DownloadManager {
 
-    /// Throttled "downloads changed" signal (4 Hz) for views that redraw on it; `objectWillChange` fires
+    /// Throttled "downloads changed" signal (4 Hz) for views that redraw on it; the state changes
     /// dozens of times a second during a download. `latest: true` still delivers the final state.
     /// `lazy` for a stable identity: `.onReceive` re-subscribes when handed a new publisher.
-    public private(set) lazy var didChangeThrottled: AnyPublisher<Void, Never> =
-        objectWillChange
+    @ObservationIgnored public private(set) lazy var didChangeThrottled: AnyPublisher<Void, Never> =
+        changes
             .throttle(for: .milliseconds(250), scheduler: DispatchQueue.main, latest: true)
             .eraseToAnyPublisher()
+
+    @ObservationIgnored private let changes = PassthroughSubject<Void, Never>()
+
+    /// Any download state change: drops the summary memo and feeds `didChangeThrottled`.
+    private func noteChange() {
+        summaryRevision &+= 1
+        changes.send()
+    }
 
     // MARK: - Published State
 
     /// In the offline store. Deliberate downloads only.
-    @Published public private(set) var offlineTrackIDs = Set<UUID>() {
-        didSet { downloadedTrackIDs = offlineTrackIDs.union(localTrackIDs) }
+    public private(set) var offlineTrackIDs = Set<UUID>() {
+        didSet { downloadedTrackIDs = offlineTrackIDs.union(localTrackIDs); noteChange() }
     }
     /// Imported from disk and the file is still there.
-    @Published public private(set) var localTrackIDs = Set<UUID>() {
-        didSet { downloadedTrackIDs = offlineTrackIDs.union(localTrackIDs) }
+    public private(set) var localTrackIDs = Set<UUID>() {
+        didSet { downloadedTrackIDs = offlineTrackIDs.union(localTrackIDs); noteChange() }
     }
     /// Everything playable offline: downloads plus local imports. Stored, since rows and discs read it per item.
     public private(set) var downloadedTrackIDs = Set<UUID>()
     /// A file copy exists in the export folder. Independent of the above.
-    @Published public private(set) var exportedTrackIDs = Set<UUID>()
+    public private(set) var exportedTrackIDs = Set<UUID>() { didSet { noteChange() } }
 
-    @Published public private(set) var downloadingTrackIDs = Set<UUID>()
+    public private(set) var downloadingTrackIDs = Set<UUID>() { didSet { noteChange() } }
     /// Per-track fractions and batch counters live on their own object so a percent tick doesn't republish
     /// the whole manager (and every view reading its settings). Only the leaf views that draw them observe it.
     public let progress = DownloadProgress()
@@ -161,21 +170,27 @@ public final class DownloadManager: ObservableObject {
     /// Write-through access, so the rest of this file reads as it always did.
     public internal(set) var downloadProgress: [UUID: Double] {
         get { progress.fractions }
-        set { progress.fractions = newValue }
+        set { progress.fractions = newValue; summaryRevision &+= 1 }
     }
     /// Exhausted the retry budget. Stays set until the user asks again.
-    @Published public private(set) var failedTrackIDs = Set<UUID>()
+    public private(set) var failedTrackIDs = Set<UUID>() { didSet { noteChange() } }
     /// Starts true: the path monitor reports within moments, and a false default read as "went offline".
-    @Published public private(set) var isConnected: Bool = true
-    @Published public private(set) var isWifi: Bool = false
+    public private(set) var isConnected: Bool = true {
+        didSet { isConnectedSubject.send(isConnected); noteChange() }
+    }
+    public private(set) var isWifi: Bool = false { didSet { noteChange() } }
     /// Ethernet, tracked apart from Wi-Fi because one screen names Wi-Fi specifically.
-    @Published public private(set) var isWired: Bool = false
+    public private(set) var isWired: Bool = false { didSet { noteChange() } }
+
+    /// `$isConnected` for Combine users; `@Observable` has no projections.
+    public var isConnectedPublisher: AnyPublisher<Bool, Never> { isConnectedSubject.eraseToAnyPublisher() }
+    @ObservationIgnored private let isConnectedSubject = CurrentValueSubject<Bool, Never>(true)
 
     /// Not billed by the byte. What "Wi-Fi only" means; a Mac on Ethernet isn't Wi-Fi.
     public var isUnmetered: Bool { isWifi || isWired }
 
     /// What went wrong, per track, for the tooltip on a failed row.
-    @Published public private(set) var failureReasons = [UUID: String]()
+    public private(set) var failureReasons = [UUID: String]() { didSet { noteChange() } }
 
     /// See `DownloadProgress.completed`.
     public internal(set) var batchCompleted: Int {
@@ -294,41 +309,50 @@ public final class DownloadManager: ObservableObject {
     /// The playlists the user asked to keep on the device. Stored, not derived from the songs: a playlist
     /// made of already-downloaded songs isn't "kept" unless the user says so, and this set also makes songs
     /// added later download themselves. Only `togglePlaylistOffline` writes it.
-    @Published public private(set) var keepOfflineIDs: Set<UUID> = [] {
+    public private(set) var keepOfflineIDs: Set<UUID> = [] {
         didSet {
+            noteChange()
             guard keepOfflineIDs != oldValue else { return }
             UserDefaults.standard.set(keepOfflineIDs.map(\.uuidString), forKey: keepOfflineKey)
         }
     }
 
     /// Last-seen track lists for kept playlists, to tell "a song was added" apart from other changes.
-    private var keptTrackIDs: [UUID: [UUID]] = [:]
+    @ObservationIgnored private var keptTrackIDs: [UUID: [UUID]] = [:]
 
     /// Songs the user downloaded individually (row button, menu, selection), not via a kept playlist.
     /// Switching a playlist off keeps these. Cleared by "Remove Download".
-    @Published public private(set) var manualOfflineIDs: Set<UUID> = [] {
+    public private(set) var manualOfflineIDs: Set<UUID> = [] {
         didSet {
+            noteChange()
             guard manualOfflineIDs != oldValue else { return }
             UserDefaults.standard.set(manualOfflineIDs.map(\.uuidString), forKey: manualOfflineKey)
         }
     }
 
     /// Disk budget per download. Normal by default; a big library at source bitrate runs to tens of GB.
-    @Published public var downloadQuality: DownloadQuality {
+    public var downloadQuality: DownloadQuality {
         didSet {
             UserDefaults.standard.set(downloadQuality.rawValue, forKey: downloadQualityKey)
+            downloadQualitySubject.send(downloadQuality)
         }
     }
 
+    /// `$downloadQuality` for Combine users.
+    public var downloadQualityPublisher: AnyPublisher<DownloadQuality, Never> {
+        downloadQualitySubject.eraseToAnyPublisher()
+    }
+    @ObservationIgnored private let downloadQualitySubject = CurrentValueSubject<DownloadQuality, Never>(.normal)
+
     /// What a saved song edit is rendered at. Normal by default.
-    @Published var editQuality: EditQuality {
+    var editQuality: EditQuality {
         didSet {
             UserDefaults.standard.set(editQuality.rawValue, forKey: editQualityKey)
         }
     }
 
     /// When ON, downloads over a metered connection drop one quality step.
-    @Published public var autoAdjustQuality: Bool {
+    public var autoAdjustQuality: Bool {
         didSet {
             UserDefaults.standard.set(autoAdjustQuality, forKey: autoAdjustQualityKey)
         }
@@ -342,19 +366,19 @@ public final class DownloadManager: ObservableObject {
 
     /// When on, every download also writes a file copy to the export folder. Off by default; only
     /// applies to downloads, never to adding a song to the library.
-    @Published public var keepFileCopyOnDownload: Bool {
+    public var keepFileCopyOnDownload: Bool {
         didSet {
             UserDefaults.standard.set(keepFileCopyOnDownload, forKey: keepFileCopyKey)
         }
     }
 
-    @Published public var syncMetadataToDisk: Bool {
+    public var syncMetadataToDisk: Bool {
         didSet {
             UserDefaults.standard.set(syncMetadataToDisk, forKey: syncMetadataToDiskKey)
         }
     }
 
-    @Published public var downloadOnWifiOnly: Bool {
+    public var downloadOnWifiOnly: Bool {
         didSet {
             UserDefaults.standard.set(downloadOnWifiOnly, forKey: downloadOnWifiOnlyKey)
             processDownloadQueue()
@@ -364,7 +388,7 @@ public final class DownloadManager: ObservableObject {
     /// When on, a playlist from elsewhere (Spotify import, saved mix, someone else's playlist) is kept on
     /// the device as it lands. Off by default; each playlist it opts in shows its own button switched on.
     /// Playlists made here aren't included.
-    @Published public var autoDownloadImportedPlaylists: Bool {
+    public var autoDownloadImportedPlaylists: Bool {
         didSet {
             UserDefaults.standard.set(autoDownloadImportedPlaylists, forKey: autoDownloadImportedKey)
         }
@@ -379,32 +403,32 @@ public final class DownloadManager: ObservableObject {
     private let trackResolver:  any TrackResolver
     /// "Wrong version" picks and refusals, so a download skips the upload the user rejected.
     /// Set by AppDependencies; weak because it's created after.
-    weak var onlineCoordinator: OnlinePlaybackCoordinator?
+    @ObservationIgnored weak var onlineCoordinator: OnlinePlaybackCoordinator?
     /// Renders an edit this device has no file for, from its original. Set by AppDependencies.
-    var editRebuilder: ((Track) async throws -> URL)?
+    @ObservationIgnored var editRebuilder: ((Track) async throws -> URL)?
 
     // MARK: - Private State
 
     private var downloadQueue:      [UUID] = []
     private var activeDownloads:    Set<UUID> = []
-    private let pathMonitor =       NWPathMonitor()
-    private let monitorQueue =      DispatchQueue(label: "mix.download.network")
-    private var cancellables =      Set<AnyCancellable>()
+    @ObservationIgnored private let pathMonitor =       NWPathMonitor()
+    @ObservationIgnored private let monitorQueue =      DispatchQueue(label: "mix.download.network")
+    @ObservationIgnored private var cancellables =      Set<AnyCancellable>()
 
     /// How many times each track has been tried this session.
-    private var attempts: [UUID: Int] = [:]
+    @ObservationIgnored private var attempts: [UUID: Int] = [:]
     /// The running download task per track, so a download can be cancelled rather than finishing and
     /// writing into the offline store after the user switched it off.
-    private var downloadTasks: [UUID: Task<Void, Never>] = [:]
+    @ObservationIgnored private var downloadTasks: [UUID: Task<Void, Never>] = [:]
 
     /// Sleeping retries, cancellable when the user changes their mind or signs out.
     private var retryTasks: [UUID: Task<Void, Never>] = [:]
     /// Already-offline tracks being refetched at a new quality: skip the "already downloaded" check and
     /// ignore the existing copy as a source.
-    private var requalifying: Set<UUID> = []
+    @ObservationIgnored private var requalifying: Set<UUID> = []
 
     /// Don't drain the queue until the library loads, or every restored id looks deleted.
-    private var hasSeenLibrary = false
+    @ObservationIgnored private var hasSeenLibrary = false
 
     private static let maxAttempts = 3
 
@@ -448,6 +472,7 @@ public final class DownloadManager: ObservableObject {
 
         self.offlineTrackIDs = OfflineStore.shared.trackIDs
         self.downloadedTrackIDs = offlineTrackIDs
+        downloadQualitySubject.value = downloadQuality
         self.downloadQueue   = Self.restoreQueue(key: "mix.downloadQueue")
 
         // Signed-out defaults; `loadSettings` re-reads them per account.
@@ -481,9 +506,9 @@ public final class DownloadManager: ObservableObject {
 
             Task { @MainActor in
                 let couldDownload = self.isConnectedForDownload
-                self.isConnected = connected
-                self.isWifi      = wifi
-                self.isWired     = wired
+                if self.isConnected != connected { self.isConnected = connected }
+                if self.isWifi != wifi           { self.isWifi = wifi }
+                if self.isWired != wired         { self.isWired = wired }
                 // Coming back online, retry the songs that failed; lost connectivity is the usual cause.
                 if !couldDownload, self.isConnectedForDownload {
                     self.retryFailedDownloads()
@@ -497,7 +522,7 @@ public final class DownloadManager: ObservableObject {
     // MARK: - Library Observation
 
     private func setupLibraryObservation() {
-        libraryService.$tracks
+        libraryService.tracksPublisher
             .receive(on: RunLoop.main)
             .sink { [weak self] tracks in
                 guard let self else { return }
@@ -505,7 +530,7 @@ public final class DownloadManager: ObservableObject {
             }
             .store(in: &cancellables)
 
-        libraryService.$playlists
+        libraryService.playlistsPublisher
             .receive(on: RunLoop.main)
             .sink { [weak self] playlists in
                 self?.syncKeptPlaylists(playlists)
@@ -823,7 +848,27 @@ public final class DownloadManager: ObservableObject {
         }
     }
 
+    /// The playlist page asks on every redraw, and a skip redraws it; walking 2,000 rows each time added up.
+    @ObservationIgnored private var summaryRevision = 0
+    @ObservationIgnored private var summaryMemo: (tracks: [Track], revision: Int, value: ListDownloadSummary)?
+
+    /// Same array storage means the same list: `TrackListMemo` hands back one array until it rebuilds.
+    /// Comparing the songs themselves cost more than the walk. The memo holds the array, so its
+    /// buffer can't be reused by another list.
     public func downloadSummary(tracks: [Track]) -> ListDownloadSummary {
+        if let memo = summaryMemo, memo.revision == summaryRevision, Self.sameStorage(memo.tracks, tracks) {
+            return memo.value
+        }
+        let value = walkSummary(tracks: tracks)
+        summaryMemo = (tracks, summaryRevision, value)
+        return value
+    }
+
+    private static func sameStorage(_ a: [Track], _ b: [Track]) -> Bool {
+        a.count == b.count && a.withUnsafeBufferPointer { pa in b.withUnsafeBufferPointer { pb in pa.baseAddress == pb.baseAddress } }
+    }
+
+    private func walkSummary(tracks: [Track]) -> ListDownloadSummary {
         var downloadable = 0
         var offline      = 0
         var progress     = 0.0
@@ -1027,7 +1072,7 @@ public final class DownloadManager: ObservableObject {
             keptTrackIDs.removeAll()
             manualOfflineIDs.removeAll()
         }
-        objectWillChange.send()
+        noteChange()
     }
 
     // MARK: - Scanning
@@ -1152,7 +1197,7 @@ public final class DownloadManager: ObservableObject {
         // Slots just freed up, and the rest of the queue may still be wanted.
         processDownloadQueue()
         resetBatchIfIdle()
-        objectWillChange.send()
+        noteChange()
     }
 
     /// Stop every download in progress, whatever it belongs to.
@@ -1167,7 +1212,7 @@ public final class DownloadManager: ObservableObject {
         requalifying.removeAll()
         batchCompleted = 0
         batchTotal = 0
-        objectWillChange.send()
+        noteChange()
     }
 
     /// Whether there's a run worth drawing a bar for.
@@ -1484,7 +1529,7 @@ public final class DownloadManager: ObservableObject {
         if retryTasks[trackID] == nil { noteBatchFinished() }
         processDownloadQueue()
         resetBatchIfIdle()
-        objectWillChange.send()
+        noteChange()
     }
 
     // MARK: - Removal
@@ -1500,7 +1545,7 @@ public final class DownloadManager: ObservableObject {
         var queueChanged = false
         for id in trackIDs where removeDownloadBody(id) { queueChanged = true }
         if queueChanged { persistQueue() }
-        objectWillChange.send()
+        noteChange()
     }
 
     /// Returns whether the stored queue needs rewriting.
@@ -1554,7 +1599,7 @@ public final class DownloadManager: ObservableObject {
         guard let track = libraryService.track(id: trackID) else { return }
         ExportManager.shared.deleteExportedFile(for: track)
         exportedTrackIDs.remove(trackID)
-        objectWillChange.send()
+        noteChange()
     }
 
     /// Clears the whole offline store. Exported file copies are untouched.
@@ -1575,7 +1620,7 @@ public final class DownloadManager: ObservableObject {
         OfflineStore.shared.removeAll()
         offlineTrackIDs.removeAll()
         manualOfflineIDs.removeAll()
-        objectWillChange.send()
+        noteChange()
     }
 
     /// Cancels running downloads and pending retries. One function because every caller needs both.

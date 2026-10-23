@@ -6,10 +6,9 @@ import SwiftUI
 
 public struct ProfileMenuButton: View {
 
-    @EnvironmentObject private var deps: AppDependencies
-    @Environment(\.openURL) private var openURL
+    @Environment(AppDependencies.self) private var deps
     #if os(macOS)
-    @EnvironmentObject private var appState: MacAppState
+    @Environment(MacAppState.self) private var appState
     #endif
 
     /// Avatar diameter; the hit target is padded out around it.
@@ -74,7 +73,7 @@ public struct ProfileMenuButton: View {
                     NavigationStack {
                         if let me {
                             ProfilePageView(profile: me)
-                                .environmentObject(deps)
+                                .environment(deps)
                                 .toolbar {
                                     ToolbarItem(placement: .topBarTrailing) {
                                         Button("Done") { showMyProfile = false }
@@ -87,7 +86,7 @@ public struct ProfileMenuButton: View {
                 .sheet(isPresented: $showAccount) {
                     NavigationStack {
                         AccountSettingsView()
-                            .environmentObject(deps)
+                            .environment(deps)
                             .background(Color.mixBackground.ignoresSafeArea())
                             .navigationTitle("Account")
                             .navigationBarTitleDisplayMode(.inline)
@@ -141,9 +140,8 @@ public struct ProfileMenuButton: View {
                     Label("Manage Account", systemImage: "person.text.rectangle")
                 }
 
-                Button {
-                    openURL(MixtapeLink.web("account"))
-                } label: {
+                // A Link, not \.openURL here: that read re-ran this body on every window resize frame.
+                Link(destination: MixtapeLink.web("account")) {
                     Label("Account on the Web", systemImage: "arrow.up.forward.square")
                 }
 

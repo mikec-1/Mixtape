@@ -11,7 +11,7 @@ struct SongEditor: View {
     /// Closes the Mac studio. Nil dismisses the sheet.
     var onClose: (() -> Void)?
 
-    @EnvironmentObject var deps: AppDependencies
+    @Environment(AppDependencies.self) var deps
     @Environment(\.dismiss) private var dismiss
     @StateObject var preview = EditPreview()
 
@@ -112,7 +112,7 @@ struct SongEditor: View {
         content
         .sheet(item: $posting) { track in
             PostSheet(track: track, onOpen: { code in close(); onOpenPost?(code) })
-                .environmentObject(deps)
+                .environment(deps)
         }
         .task { await load() }
         .onChange(of: speed) { changed() }

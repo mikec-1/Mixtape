@@ -14,14 +14,14 @@ private enum MacAuthScreen: Equatable {
 
 struct MacAuthFlowView: View {
 
-    @StateObject  private var vm:          AuthViewModel
-    @ObservedObject private var authService: SupabaseAuthService
+    @State  private var vm:          AuthViewModel
+    private var authService: SupabaseAuthService
     @State private var screen:      MacAuthScreen = .card
     @State private var pushForward: Bool          = true
 
     init(authService: SupabaseAuthService) {
-        _vm          = StateObject(wrappedValue: AuthViewModel(authService: authService))
-        _authService = ObservedObject(wrappedValue: authService)
+        _vm          = State(initialValue: AuthViewModel(authService: authService))
+        self.authService = authService
     }
 
     var body: some View {
@@ -93,7 +93,7 @@ struct MacAuthFlowView: View {
 
 private struct MacCheckEmailView: View {
 
-    @ObservedObject var vm: AuthViewModel
+    @Bindable var vm: AuthViewModel
     let onBack: () -> Void
 
     @State private var didResend = false
@@ -190,7 +190,7 @@ private struct MacCheckEmailView: View {
 
 private struct MacSetNewPasswordView: View {
 
-    @ObservedObject var vm: AuthViewModel
+    @Bindable var vm: AuthViewModel
 
     var body: some View {
         VStack(spacing: 30) {

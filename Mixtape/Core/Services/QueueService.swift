@@ -10,6 +10,7 @@
 
 import Foundation
 import Combine
+import Observation
 
 // MARK: - Repeat Mode
 
@@ -91,31 +92,41 @@ public enum QueueSource: Equatable, Sendable {
 
 // MARK: - Queue Service
 
-@MainActor
-public final class QueueService: ObservableObject {
+@MainActor @Observable
+public final class QueueService {
 
-    // MARK: - Published State
+    // MARK: - Observed State
 
-    @Published public private(set) var queue:            [Track]     = []
+    public private(set) var queue:            [Track]     = [] { didSet { queueSubject.send(queue) } }
     /// One id per row of `queue`. `Track.id` is a content hash, so a song queued
     /// twice needs row ids to tell the copies apart. `alignEntryIDs()` is the backstop.
-    @Published public private(set) var entryIDs:         [UUID]      = []
+    public private(set) var entryIDs:         [UUID]      = []
     /// Lane per row id. Missing means context (restored or mirrored rows).
-    @Published public private(set) var origins:          [UUID: QueueOrigin] = [:]
-    @Published public private(set) var currentIndex:     Int         = -1
-    @Published public private(set) var shuffleEnabled:   Bool        = false
-    @Published public private(set) var repeatMode:       RepeatMode  = .off
+    public private(set) var origins:          [UUID: QueueOrigin] = [:]
+    public private(set) var currentIndex:     Int         = -1 { didSet { currentIndexSubject.send(currentIndex) } }
+    public private(set) var shuffleEnabled:   Bool        = false { didSet { shuffleEnabledSubject.send(shuffleEnabled) } }
+    public private(set) var repeatMode:       RepeatMode  = .off { didSet { repeatModeSubject.send(repeatMode) } }
     /// Last row of the "Repeat queue" group. Songs queued after repeat was turned
     /// on play after the loop. Held by row id so drags work. Nil unless `.all`.
-    @Published public private(set) var repeatBoundaryID: UUID?       = nil
+    public private(set) var repeatBoundaryID: UUID?       = nil
     /// The list this session came from.
-    @Published public private(set) var source:           QueueSource = .none
+    public private(set) var source:           QueueSource = .none
+
+    /// `$queue` and friends for Combine users; `@Observable` has no projections. Sent after the set.
+    public var queuePublisher: AnyPublisher<[Track], Never> { queueSubject.eraseToAnyPublisher() }
+    public var currentIndexPublisher: AnyPublisher<Int, Never> { currentIndexSubject.eraseToAnyPublisher() }
+    public var shuffleEnabledPublisher: AnyPublisher<Bool, Never> { shuffleEnabledSubject.eraseToAnyPublisher() }
+    public var repeatModePublisher: AnyPublisher<RepeatMode, Never> { repeatModeSubject.eraseToAnyPublisher() }
+    @ObservationIgnored private let queueSubject = CurrentValueSubject<[Track], Never>([])
+    @ObservationIgnored private let currentIndexSubject = CurrentValueSubject<Int, Never>(-1)
+    @ObservationIgnored private let shuffleEnabledSubject = CurrentValueSubject<Bool, Never>(false)
+    @ObservationIgnored private let repeatModeSubject = CurrentValueSubject<RepeatMode, Never>(.off)
 
     /// The playlist playback started from, or nil.
     public var sourcePlaylistID: UUID? { source.playlistID }
 
     /// Whether a playlist has sides. Set by AppDependencies.
-    public var playlistLookup: (UUID) -> Playlist? = { _ in nil }
+    @ObservationIgnored public var playlistLookup: (UUID) -> Playlist? = { _ in nil }
 
     /// Repeat all on a playlist with sides: the tape flips from side to side.
     public var isAutoReverse: Bool {
@@ -174,7 +185,7 @@ public final class QueueService: ObservableObject {
     // MARK: - Private
 
     /// The context lane's unshuffled order as row ids. Stale ids are pruned lazily.
-    private var contextOrderIDs: [UUID] = []
+    @ObservationIgnored private var contextOrderIDs: [UUID] = []
 
     // MARK: - Derived
 
@@ -264,14 +275,10 @@ public final class QueueService: ObservableObject {
     }
 
     /// Context rows still ahead. Suggestions only top up when this hits zero.
-    public var remainingContextCount: Int {
-        upcomingRows.reduce(0) { $0 + ($1.origin == .context ? 1 : 0) }
-    }
+    public var remainingContextCount: Int { upcomingSlots(in: .context).count }
 
     /// Recommendation rows ahead, the depth the suggestion service maintains.
-    public var remainingRecommendationCount: Int {
-        upcomingRows.reduce(0) { $0 + ($1.origin == .recommendation ? 1 : 0) }
-    }
+    public var remainingRecommendationCount: Int { upcomingSlots(in: .recommendation).count }
 
     // MARK: - Queue Loading
 
@@ -329,10 +336,11 @@ public final class QueueService: ObservableObject {
     /// "Clear added songs": drops only the manual lane. Counterpart to `clearUpcoming`.
     public func clearManualQueue() {
         alignEntryIDs()
-        for slot in upcomingSlots(in: .manual).reversed() {
-            queue.remove(at: slot)
-            entryIDs.remove(at: slot)
-        }
+        let drop = Set(upcomingSlots(in: .manual))
+        guard !drop.isEmpty else { return }
+        // Assigned once, for the same reason as `reorderUpcoming`.
+        queue = queue.indices.filter { !drop.contains($0) }.map { queue[$0] }
+        entryIDs = entryIDs.indices.filter { !drop.contains($0) }.map { entryIDs[$0] }
         pruneToLiveRows()
     }
 
@@ -512,7 +520,7 @@ public final class QueueService: ObservableObject {
 
     /// Set while this device is a Jam guest: "Add to Queue" and "Play Next" go to
     /// the host's queue instead (returns true when it took them).
-    public var manualRedirect: (([Track]) -> Bool)?
+    @ObservationIgnored public var manualRedirect: (([Track]) -> Bool)?
 
     /// Where a new row of `lane` goes to keep lanes in order, e.g. "Add to Queue"
     /// lands after the other manual rows, not behind the whole playlist.
@@ -560,7 +568,7 @@ public final class QueueService: ObservableObject {
         let ids = tracks.map { _ in UUID() }
         queue.insert(contentsOf: tracks, at: at)
         entryIDs.insert(contentsOf: ids, at: at)
-        for id in ids { origins[id] = lane }
+        origins.merge(ids.map { ($0, lane) }) { $1 }
         // Context rows join the canonical order in place, so unshuffling keeps them there.
         if lane == .context {
             let before = entryIDs[..<at].filter { (origins[$0] ?? .context) == .context }
@@ -579,7 +587,7 @@ public final class QueueService: ObservableObject {
 
     /// The song playing when the queue was last cleared. Autoplay stays paused for
     /// it so the cleared queue isn't refilled; a new song resumes it.
-    @Published public private(set) var autoQueuePausedForID: UUID? = nil
+    public private(set) var autoQueuePausedForID: UUID? = nil
 
     /// Stop the auto-queue topping the list up again until something else plays.
     public func pauseAutoQueue() { autoQueuePausedForID = currentTrack?.id }
@@ -695,7 +703,7 @@ public final class QueueService: ObservableObject {
 
     /// Rows smart shuffle mixed in. Tagged `.context` so they sit between the
     /// list's songs; tracked so turning it off removes exactly these.
-    @Published public private(set) var smartRowIDs: Set<UUID> = []
+    public private(set) var smartRowIDs: Set<UUID> = []
 
     /// Mix `tracks` in, one after every `every` of the list's own upcoming rows.
     public func interleaveSmart(_ tracks: [Track], every: Int = 4) {
@@ -740,10 +748,15 @@ public final class QueueService: ObservableObject {
 
         let byID    = Dictionary(uniqueKeysWithValues: slots.map { (entryIDs[$0], queue[$0]) })
         let ordered = transform(slots.map { entryIDs[$0] })
+        // Copied and assigned once: each element write publishes, and every subscriber rebuilt
+        // the whole queue per write. Shuffling 2,000 songs froze the app for 9 s.
+        var ids = entryIDs, rows = queue
         for (slot, id) in zip(slots, ordered) {
-            entryIDs[slot] = id
-            if let track = byID[id] { queue[slot] = track }
+            ids[slot] = id
+            if let track = byID[id] { rows[slot] = track }
         }
+        entryIDs = ids
+        queue = rows
     }
 
     // MARK: - Repeat

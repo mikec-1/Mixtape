@@ -7,7 +7,7 @@ struct LyricCardSheet: View {
     let track: Track
     let lyrics: TrackLyrics
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
     @Environment(\.dismiss) private var dismiss
 
     @State private var picked: Set<Int> = []

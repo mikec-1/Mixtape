@@ -100,7 +100,7 @@ struct MixTrackTitleLink: View {
     var font:  Font  = .system(size: 13)
     var color: Color = Color.mixTextPrimary
 
-    @EnvironmentObject private var appState: MacAppState
+    @Environment(MacAppState.self) private var appState
 
     var body: some View {
         MixLinkText(text:   track.displayTitle,
@@ -116,7 +116,7 @@ struct MixTrackArtistLink: View {
     var font:  Font  = .system(size: 11)
     var color: Color = Color.mixTextSecondary
 
-    @EnvironmentObject private var appState: MacAppState
+    @Environment(MacAppState.self) private var appState
 
     var body: some View {
         MixArtistLine(targets: TrackLinks.artists(for: track, appState: appState),

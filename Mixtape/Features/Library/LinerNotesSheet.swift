@@ -6,7 +6,7 @@ struct LinerNotesSheet: View {
     let playlist: Playlist
     let tracks: [Track]
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
     @Environment(\.dismiss) private var dismiss
 
     @State private var notes = PlaylistNotes()

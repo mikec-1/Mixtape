@@ -8,11 +8,11 @@ struct MessagesButton: View {
 
     var hitSize: CGFloat? = nil
 
-    @ObservedObject private var messages = MessagesService.shared
+    private var messages: MessagesService { .shared }
     #if os(macOS)
-    @EnvironmentObject private var appState: MacAppState
+    @Environment(MacAppState.self) private var appState
     #else
-    @EnvironmentObject private var iosAppState: IOSAppState
+    @Environment(IOSAppState.self) private var iosAppState
     #endif
 
     var body: some View {
@@ -35,7 +35,7 @@ struct MessagesButton: View {
 
 struct MessagesView: View {
 
-    @ObservedObject private var messages = MessagesService.shared
+    private var messages: MessagesService { .shared }
 
     #if os(macOS)
     /// The open conversation, highlighted.
@@ -43,7 +43,7 @@ struct MessagesView: View {
     let open: (UserProfile) -> Void
     let compose: () -> Void
     #else
-    @EnvironmentObject private var iosAppState: IOSAppState
+    @Environment(IOSAppState.self) private var iosAppState
     @State private var path: [Route] = []
 
     private enum Route: Hashable {

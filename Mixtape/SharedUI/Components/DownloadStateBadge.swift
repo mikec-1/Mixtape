@@ -6,7 +6,7 @@ struct DownloadStateBadge: View {
 
     /// The songs this badge speaks for: a playlist, an album, one track.
     let ids: [UUID]
-    @ObservedObject var downloads: DownloadManager
+    var downloads: DownloadManager
     var size: CGFloat = 11
     /// False for a playlist nobody asked to keep: a shared song downloading elsewhere isn't its download.
     var showsProgress = true

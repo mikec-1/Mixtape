@@ -5,6 +5,7 @@
 
 import Combine
 import SwiftUI
+import Observation
 
 extension View {
     /// Marks this view as holding the keyboard. No-op on iOS.
@@ -17,15 +18,16 @@ extension View {
 
 /// Fields being typed into, app-wide. A singleton because the fields are spread
 /// across sheets, popovers and the command palette.
+@Observable
 @MainActor
-final class MacTextEditingMonitor: ObservableObject {
+final class MacTextEditingMonitor {
 
     static let shared = MacTextEditingMonitor()
 
     /// True while any registered field holds the keyboard.
-    @Published private(set) var isEditing = false
+    private(set) var isEditing = false
 
-    private var fields: Set<UUID> = []
+    @ObservationIgnored private var fields: Set<UUID> = []
 
     private init() {}
 

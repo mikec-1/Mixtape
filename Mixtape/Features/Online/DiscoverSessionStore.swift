@@ -8,10 +8,12 @@ import Combine
 import Supabase
 #if os(iOS)
 import UIKit
+import Observation
 #endif
 
+@Observable
 @MainActor
-final class DiscoverSessionStore: ObservableObject {
+final class DiscoverSessionStore {
 
     /// A singleton, like `ArtworkWashTint.shared`, so Discover keystrokes don't republish through `deps`.
     static let shared = DiscoverSessionStore()
@@ -74,32 +76,37 @@ final class DiscoverSessionStore: ObservableObject {
     // MARK: - Search results
 
     /// What the results list is showing. Mutated in place when the lyric leg lands.
-    @Published var results = DiscoverResults()
+    var results = DiscoverResults()
 
     /// Drives the spinner from query accepted until the lyric leg finishes.
-    @Published var isSearching = false
+    var isSearching = false
 
     /// The trimmed query `results` answer, "" when none. Matched against the restored search field.
-    @Published private(set) var resultsQuery = ""
+    private(set) var resultsQuery = ""
 
     /// iOS only: its own `.searchable` text, kept across tab switches.
-    @Published var iosQuery = ""
+    var iosQuery = ""
 
     /// The query a running search is for, so a rebuilt view doesn't fire a duplicate.
-    private var inFlightQuery: String?
-    private var searchTask: Task<Void, Never>?
+    @ObservationIgnored private var inFlightQuery: String?
+    @ObservationIgnored private var searchTask: Task<Void, Never>?
 
     // MARK: - Drill-down
 
     /// Drill-down stack; empty is results/landing. `DiscoverDestination` is declared
     /// once per platform (OnlineDiscoverView / IOSDiscoverComponents) with the same cases.
-    @Published var path: [DiscoverDestination] = [] {
+    var path: [DiscoverDestination] = [] {
+        willSet { pathSubject.send(newValue) }
         didSet { if path.count > oldValue.count { noteSearchPick() } }
     }
 
+    /// `$path` for Combine users: the current stack, then each new one before it's set.
+    var pathPublisher: AnyPublisher<[DiscoverDestination], Never> { pathSubject.prepend(path).eraseToAnyPublisher() }
+    @ObservationIgnored private let pathSubject = PassthroughSubject<[DiscoverDestination], Never>()
+
     /// Bumped when a query is committed with Return, which unwinds the stack.
     /// A counter so two Returns on the same text both register.
-    @Published private(set) var searchCommitToken = 0
+    private(set) var searchCommitToken = 0
 
     /// Call on Return. Unwinds here too, since committing from outside Discover
     /// mounts a fresh view that never sees the token change.
@@ -111,14 +118,14 @@ final class DiscoverSessionStore: ObservableObject {
     // MARK: - Scroll anchors
 
     /// Top visible section, for restoring scroll position.
-    @Published var resultsAnchor: String?
-    @Published var browseAnchor: String?
+    var resultsAnchor: String?
+    var browseAnchor: String?
 
     // MARK: - Browse landing
 
-    @Published private(set) var browse = BrowseLanding()
-    @Published private(set) var browseLoading = false
-    private var browseLoadedAt: Date?
+    private(set) var browse = BrowseLanding()
+    private(set) var browseLoading = false
+    @ObservationIgnored private var browseLoadedAt: Date?
 
     /// Charts and new releases change over hours, so refetch every half hour.
     private static let browseTTL: TimeInterval = 30 * 60
@@ -126,20 +133,20 @@ final class DiscoverSessionStore: ObservableObject {
     // MARK: - Personalized landing
 
     /// What Discover shows: the stored shelves minus "Don't suggest" songs and artists.
-    @Published private(set) var personal = PersonalLanding.empty
+    private(set) var personal = PersonalLanding.empty
     /// The stored shelves as built. Kept unfiltered so un-hiding brings rows back.
-    private var raw = PersonalLanding.empty { didSet { personal = raw.filtered() } }
-    @Published private(set) var personalLoading = false
+    @ObservationIgnored private var raw = PersonalLanding.empty { didSet { personal = raw.filtered() } }
+    private(set) var personalLoading = false
 
     /// Release Radar, genre and radio shelves still loading. Drives their placeholder cards.
-    @Published private(set) var shelvesLoading = false
-    private var shelvesTask: Task<Void, Never>?
-    private var personalLoadedAt: Date?
+    private(set) var shelvesLoading = false
+    @ObservationIgnored private var shelvesTask: Task<Void, Never>?
+    @ObservationIgnored private var personalLoadedAt: Date?
     /// This device's seeds at the last load. The stored landing carries the building device's.
-    private var personalPrint: String?
+    @ObservationIgnored private var personalPrint: String?
 
     /// Which slice of `personal.recommendedPool` is showing. Refresh bumps it, no network.
-    @Published private(set) var recommendedRoll = 0
+    private(set) var recommendedRoll = 0
 
     /// Longer than the browse TTL: listening changes and the week turning over
     /// invalidate by fingerprint. Mixes are pinned to the week, so a rebuild redraws the same ones.
@@ -152,9 +159,9 @@ final class DiscoverSessionStore: ObservableObject {
     /// Same half-hour rule as the landing, for the same reason.
     private static let pageTTL: TimeInterval = 30 * 60
 
-    private var artistPages = TimedCache<Int, ArtistCatalogue>(ttl: pageTTL, limit: 24)
-    private var albumPages  = TimedCache<Int, [OnlineTrack]>(ttl: pageTTL, limit: 24)
-    private var genrePages  = TimedCache<Int, [OnlineArtist]>(ttl: pageTTL, limit: 24)
+    @ObservationIgnored private var artistPages = TimedCache<Int, ArtistCatalogue>(ttl: pageTTL, limit: 24)
+    @ObservationIgnored private var albumPages  = TimedCache<Int, [OnlineTrack]>(ttl: pageTTL, limit: 24)
+    @ObservationIgnored private var genrePages  = TimedCache<Int, [OnlineArtist]>(ttl: pageTTL, limit: 24)
 
     // MARK: - Search
 
@@ -216,7 +223,7 @@ final class DiscoverSessionStore: ObservableObject {
     // MARK: - Search analytics
 
     /// The last query that got results and nothing has been played or opened from yet.
-    private var pendingSearch: String?
+    @ObservationIgnored private var pendingSearch: String?
 
     /// A result was played or opened, so the pending search worked.
     func noteSearchPick() {

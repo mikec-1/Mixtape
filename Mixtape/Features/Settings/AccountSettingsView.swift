@@ -11,7 +11,7 @@ import AppKit
 
 public struct AccountSettingsView: View {
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
 
     // MARK: Profile Picture
     @State private var avatarBusy: Bool = false

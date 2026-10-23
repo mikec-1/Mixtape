@@ -4,20 +4,22 @@
 
 import Foundation
 import Combine
+import Observation
 
+@Observable
 @MainActor
-final class PlaylistTrackSortService: ObservableObject {
+final class PlaylistTrackSortService {
 
     static let shared = PlaylistTrackSortService()
 
     /// Playlist id -> sort. Absent means the playlist's own order.
-    @Published private(set) var sorts: [UUID: TrackSort] = [:]
+    private(set) var sorts: [UUID: TrackSort] = [:]
 
     /// Writes the encoded map to `user_metadata`.
-    var pushWriter: ((String) -> Void)?
+    @ObservationIgnored var pushWriter: ((String) -> Void)?
 
-    private var isApplyingRemote = false
-    private var pushTask: Task<Void, Never>?
+    @ObservationIgnored private var isApplyingRemote = false
+    @ObservationIgnored private var pushTask: Task<Void, Never>?
     private static let key = "playlist.trackSorts"
 
     private init() {

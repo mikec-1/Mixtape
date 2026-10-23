@@ -2,21 +2,21 @@ import SwiftUI
 
 public struct MainTabView: View {
 
-    @EnvironmentObject private var deps:   AppDependencies
-    @EnvironmentObject private var engine: PlaybackEngine
+    @Environment(AppDependencies.self) private var deps
+    @Environment(PlaybackEngine.self) private var engine
 
     @State private var selectedTab: AppTab = .home
     @State private var showSettings = false
     #if os(iOS)
     /// Lets anything request a Settings page. See SettingsRoute.
-    @ObservedObject private var settingsRoute = SettingsRoute.shared
-    @ObservedObject private var notifier = InviteNotifier.shared
+    private var settingsRoute: SettingsRoute { .shared }
+    private var notifier: InviteNotifier { .shared }
     #endif
 
     #if os(iOS)
     // iOS import review queue; ImportView enqueues, this presents
     // IOSMetadataReviewSheet one item at a time.
-    @StateObject private var iosAppState = IOSAppState()
+    @State private var iosAppState = IOSAppState()
     @Environment(\.scenePhase) private var scenePhase
     #endif
 
@@ -49,7 +49,7 @@ public struct MainTabView: View {
     public var body: some View {
         tabContent
         #if os(iOS)
-        .environmentObject(iosAppState)
+        .environment(iosAppState)
         .onReceive(NotificationCenter.default.publisher(for: .mixSpotlightArtist)) { _ in
             if let name = SpotlightIndex.takePendingArtist() { iosAppState.openOnlineArtist(name: name) }
         }
@@ -86,17 +86,17 @@ public struct MainTabView: View {
         // Presented here so it survives the mini player unmounting mid-skip.
         .fullScreenCover(isPresented: $iosAppState.showNowPlaying) {
             NowPlayingView()
-                .environmentObject(engine)
-                .environmentObject(deps)
-                .environmentObject(iosAppState)
+                .environment(engine)
+                .environment(deps)
+                .environment(iosAppState)
                 // Clear, so pulling the player down shows the app under it.
                 .presentationBackground(.clear)
         }
         .fullScreenCover(isPresented: $iosAppState.showMessages) {
             MessagesView()
-                .environmentObject(engine)
-                .environmentObject(deps)
-                .environmentObject(iosAppState)
+                .environment(engine)
+                .environment(deps)
+                .environment(iosAppState)
         }
         // Hosted here since the menu that opened it is gone by then.
         // Not while the player is up; its queue sheet hosts its own.
@@ -105,21 +105,21 @@ public struct MainTabView: View {
             GetInfoSheet(track: track,
                          isOnline: deps.onlineCoordinator.hasActiveOnlineSession,
                          followsPlayback: false)
-                .environmentObject(engine)
-                .environmentObject(deps)
-                .environmentObject(deps.queueService)
-                .environmentObject(iosAppState)
+                .environment(engine)
+                .environment(deps)
+                .environment(deps.queueService)
+                .environment(iosAppState)
         }
         // Not while the player is up; it presents its own.
         .sheet(item: Binding(get: { iosAppState.showNowPlaying ? nil : iosAppState.editTrack },
                              set: { iosAppState.editTrack = $0 })) { track in
             SongEditor(track: track, onOpenPost: { iosAppState.openPost(code: $0) })
-                .environmentObject(deps)
+                .environment(deps)
         }
         .sheet(item: Binding(get: { iosAppState.showNowPlaying ? nil : iosAppState.postTrack },
                              set: { iosAppState.postTrack = $0 })) { track in
             PostSheet(track: track, onOpen: { iosAppState.openPost(code: $0) })
-                .environmentObject(deps)
+                .environment(deps)
         }
         // Present metadata review sheet whenever the queue is non-empty.
         .sheet(item: Binding(
@@ -127,8 +127,8 @@ public struct MainTabView: View {
             set: { _ in iosAppState.dequeueReview() }
         )) { item in
             IOSMetadataReviewSheet(item: item)
-                .environmentObject(deps)
-                .environmentObject(iosAppState)
+                .environment(deps)
+                .environment(iosAppState)
         }
         #endif
     }
@@ -294,7 +294,7 @@ private struct CommunityTab: View {
 /// player and toasts, not the whole TabView.
 private struct KeyboardAware<Content: View>: View {
     #if os(iOS)
-    @ObservedObject private var keyboard = KeyboardVisibility.shared
+    private var keyboard: KeyboardVisibility { .shared }
     #endif
     @ViewBuilder let content: (Bool) -> Content
 
@@ -317,5 +317,5 @@ public enum AppTab: Hashable {
 
 #Preview {
     MainTabView()
-        .environmentObject(AppDependencies())
+        .environment(AppDependencies())
 }

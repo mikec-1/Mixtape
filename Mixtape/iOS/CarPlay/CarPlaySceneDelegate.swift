@@ -19,11 +19,11 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         interfaceController.setRootTemplate(CPTabBarTemplate(templates: [playlists, recents]),
                                             animated: false, completion: nil)
         guard let deps = MixtapeIntents.deps else { return }
-        deps.libraryService.$playlists
+        deps.libraryService.playlistsPublisher
             .debounce(for: .milliseconds(500), scheduler: DispatchQueue.main)
             .sink { [weak self] in self?.showPlaylists($0) }
             .store(in: &cancellables)
-        deps.playbackEngine.$recentlyPlayed
+        deps.playbackEngine.recentlyPlayedPublisher
             .debounce(for: .milliseconds(500), scheduler: DispatchQueue.main)
             .sink { [weak self] in self?.showRecents($0) }
             .store(in: &cancellables)

@@ -11,7 +11,7 @@ struct InboxButton: View {
     /// The tap target. Nil keeps the glyph's own size.
     var hitSize: CGFloat? = nil
 
-    @ObservedObject private var inbox = InboxService.shared
+    private var inbox: InboxService { .shared }
     @State private var open = false
 
     var body: some View {
@@ -60,14 +60,14 @@ struct InboxView: View {
 
     let close: () -> Void
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
     #if os(macOS)
-    @EnvironmentObject private var appState: MacAppState
+    @Environment(MacAppState.self) private var appState
     #else
-    @EnvironmentObject private var iosAppState: IOSAppState
+    @Environment(IOSAppState.self) private var iosAppState
     #endif
     @Environment(\.openURL) private var openURL
-    @ObservedObject private var inbox = InboxService.shared
+    private var inbox: InboxService { .shared }
 
     @State private var busy: Set<UUID> = []
     #if os(iOS)
@@ -85,7 +85,7 @@ struct InboxView: View {
         .toolbar(.hidden, for: .navigationBar)
         .navigationDestination(item: $dub) { target in
             PublicPlaylistPage(summary: target.summary, ownerName: target.ownerName)
-                .environmentObject(deps)
+                .environment(deps)
         }
         #endif
     }

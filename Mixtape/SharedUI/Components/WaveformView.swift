@@ -159,7 +159,7 @@ private struct SeekCursor: ViewModifier {
 
 /// Redraws `content` with the player's position as 0...1, so only it ticks.
 struct PlaybackProgress<Content: View>: View {
-    @ObservedObject var clock: PlaybackClock
+    var clock: PlaybackClock
     let duration: Double
     @ViewBuilder let content: (Double) -> Content
 

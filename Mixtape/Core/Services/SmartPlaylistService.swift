@@ -6,12 +6,14 @@ import Foundation
 import SwiftData
 import Combine
 import OSLog
+import Observation
 
+@Observable
 @MainActor
-public final class SmartPlaylistService: ObservableObject {
+public final class SmartPlaylistService {
 
     /// Published list of the user's smart playlists, sorted by creation date.
-    @Published public private(set) var playlists: [SmartPlaylist] = []
+    public private(set) var playlists: [SmartPlaylist] = []
 
     /// The open account's context. Never stored.
     private var context: ModelContext { ModelStore.shared.context }
@@ -21,7 +23,7 @@ public final class SmartPlaylistService: ObservableObject {
     nonisolated(unsafe) public static weak var current: SmartPlaylistService?
 
     /// Rules belong to one account. Set by `AppDependencies` on sign-in/out.
-    public var currentUserID: String? {
+    @ObservationIgnored public var currentUserID: String? {
         didSet {
             guard oldValue != currentUserID else { return }
             claimUnownedRows()

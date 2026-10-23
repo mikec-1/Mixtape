@@ -9,8 +9,8 @@ struct TapeArchiveView: View {
     /// Called with the tape the user picked. The host opens it after the sheet is gone.
     let onOpen: (SmartPlaylist) -> Void
 
-    @EnvironmentObject private var engine: PlaybackEngine
-    @EnvironmentObject private var library: LibraryService
+    @Environment(PlaybackEngine.self) private var engine
+    @Environment(LibraryService.self) private var library
     @Environment(\.dismiss) private var dismiss
 
     typealias Tape = (playlist: SmartPlaylist, tracks: [Track])

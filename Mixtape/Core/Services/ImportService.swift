@@ -113,6 +113,18 @@ public final class ImportService {
     /// `indivisibleActs` overrides all of it.
     /// "Yungpalo, c4rl, YT" -> ["Yungpalo", "c4rl", "YT"]; "Earth, Wind & Fire" -> ["Earth, Wind & Fire"]
     public nonisolated static func creditedArtists(from artistName: String) -> [String] {
+        let key = artistName as NSString
+        if let hit = creditedMemo.object(forKey: key) as? [String] { return hit }
+        let parsed = parseCredits(artistName)
+        creditedMemo.setObject(parsed as NSArray, forKey: key)
+        return parsed
+    }
+
+    /// Album keys, artist buckets and printed credits all split the same few thousand names, often per row.
+    /// `NSCache` is thread-safe, hence the `unsafe`.
+    nonisolated(unsafe) private static let creditedMemo = NSCache<NSString, NSArray>()
+
+    private nonisolated static func parseCredits(_ artistName: String) -> [String] {
         let trimmed = artistName.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return [] }
         if indivisibleActs.contains(trimmed.lowercased()) { return [trimmed] }
@@ -173,6 +185,18 @@ public final class ImportService {
     /// Identity is hashed from the bare title, so any key rebuilt from `track.title` needs this spelling.
     /// An unbracketed credit is left alone: `displayTitle` never adds one, so it came from the source.
     public nonisolated static func bareTitle(_ title: String) -> String {
+        let key = title as NSString
+        if let hit = bareMemo.object(forKey: key) { return hit as String }
+        let bare = stripCredit(title)
+        bareMemo.setObject(bare as NSString, forKey: key)
+        return bare
+    }
+
+    /// Every play maps the whole context through `identityTitle`, so a skip in a 2,000 song playlist
+    /// re-parsed every title.
+    nonisolated(unsafe) private static let bareMemo = NSCache<NSString, NSString>()
+
+    private nonisolated static func stripCredit(_ title: String) -> String {
         var text = title
         for (open, close) in [("(", ")"), ("[", "]")] {
             var search = text.startIndex
@@ -901,6 +925,7 @@ public final class ImportService {
         track.albumTitle = albumTitle
         track.year       = year
         track.genre      = genre
+        let oldCover = track.artworkData
         if case .remove = artwork {
             track.artworkData = nil
         } else if let data = artworkData {
@@ -908,6 +933,7 @@ public final class ImportService {
         }
         track.sync.markModified()
         try? trackRepo.save(track)
+        if track.artworkData != oldCover { libraryService.noteArtworkChanged(.track(trackID)) }
 
         if ExportManager.shared.syncMetadataToDisk {
             ExportManager.shared.updateMetadataOnDisk(for: track, oldArtist: oldArtist, oldTitle: oldTitle)
@@ -924,8 +950,8 @@ public final class ImportService {
             year:          year
         )
 
-        // 5. Refresh and sync; a re-filed track may need a photo for a new artist.
-        libraryService.refresh()
+        // 5. Publish and sync; a re-filed track may need a photo for a new artist.
+        libraryService.publishEdited([track])
         scheduleSync()
         libraryService.scheduleArtistImageBackfill()
     }
@@ -964,7 +990,7 @@ public final class ImportService {
             artwork:       track.artworkData,
             year:          track.year
         )
-        libraryService.refresh()
+        libraryService.publishEdited([track])
         scheduleSync()
         // The destination folder may not have existed a moment ago.
         libraryService.scheduleArtistImageBackfill()

@@ -4,10 +4,10 @@ import SwiftUI
 
 struct SpotifyLikesPushRow: View {
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
     /// Observed for the connection. The liked count below comes through `deps`, which doesn't
     /// republish, so it can lag until something else redraws.
-    @ObservedObject var auth: SpotifyAuth
+    var auth: SpotifyAuth
     let onOpen: () -> Void
 
     private var favouriteCount: Int {

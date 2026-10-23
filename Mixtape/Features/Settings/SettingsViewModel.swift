@@ -2,48 +2,50 @@ import Foundation
 import SwiftUI
 import Combine
 import OSLog
+import Observation
 
+@Observable
 @MainActor
-public final class SettingsViewModel: ObservableObject {
+public final class SettingsViewModel {
 
-    @Published public private(set) var currentUser:           AppUser?
-    @Published public private(set) var syncState:             SyncState = .idle
+    public private(set) var currentUser:           AppUser?
+    public private(set) var syncState:             SyncState = .idle
 
     /// True when the signed-in user has the "developer" role in their Supabase user_metadata.
     public var isDeveloper: Bool { currentUser?.isDeveloper == true }
 
     // Clear all tracks
-    @Published public private(set) var isDeletingTracks:      Bool = false
-    @Published public private(set) var deleteTracksError:     String? = nil
+    public private(set) var isDeletingTracks:      Bool = false
+    public private(set) var deleteTracksError:     String? = nil
     // Clear user playlists
-    @Published public private(set) var isDeletingPlaylists:   Bool = false
-    @Published public private(set) var deletePlaylistsError:  String? = nil
+    public private(set) var isDeletingPlaylists:   Bool = false
+    public private(set) var deletePlaylistsError:  String? = nil
     // Clear entire database
-    @Published public private(set) var isClearing:            Bool = false
-    @Published public private(set) var clearError:            String? = nil
+    public private(set) var isClearing:            Bool = false
+    public private(set) var clearError:            String? = nil
     // Reset listening history
-    @Published public private(set) var isResettingStats:      Bool = false
-    @Published public private(set) var resetStatsError:       String? = nil
+    public private(set) var isResettingStats:      Bool = false
+    public private(set) var resetStatsError:       String? = nil
     // Rebuild groupings
-    @Published public private(set) var isRebuilding:          Bool = false
+    public private(set) var isRebuilding:          Bool = false
     // Find missing covers
-    @Published public private(set) var isFindingCovers:       Bool = false
-    @Published public private(set) var findCoversResult:      String? = nil
-    @Published public private(set) var isUpgradingCovers:     Bool = false
-    @Published public private(set) var upgradeCoversResult:   String? = nil
+    public private(set) var isFindingCovers:       Bool = false
+    public private(set) var findCoversResult:      String? = nil
+    public private(set) var isUpgradingCovers:     Bool = false
+    public private(set) var upgradeCoversResult:   String? = nil
     // Restore missing songs
-    @Published public private(set) var isRestoringSongs:      Bool = false
-    @Published public private(set) var restoreSongsResult:    String? = nil
+    public private(set) var isRestoringSongs:      Bool = false
+    public private(set) var restoreSongsResult:    String? = nil
     // Songs left behind by playlists deleted before deletes took their orphans with them.
-    @Published public private(set) var isCleaningOrphans:     Bool = false
-    @Published public private(set) var orphanCount:           Int  = 0
+    public private(set) var isCleaningOrphans:     Bool = false
+    public private(set) var orphanCount:           Int  = 0
 
-    @Published public var showSignOutConfirm:                  Bool = false
-    @Published public var showDeleteTracksConfirm:             Bool = false
-    @Published public var showDeletePlaylistsConfirm:          Bool = false
-    @Published public var showClearLibraryConfirm:             Bool = false
-    @Published public var showResetStatsConfirm:               Bool = false
-    @Published public var showCleanOrphansConfirm:             Bool = false
+    public var showSignOutConfirm:                  Bool = false
+    public var showDeleteTracksConfirm:             Bool = false
+    public var showDeletePlaylistsConfirm:          Bool = false
+    public var showClearLibraryConfirm:             Bool = false
+    public var showResetStatsConfirm:               Bool = false
+    public var showCleanOrphansConfirm:             Bool = false
 
     private let authService:    SupabaseAuthService
     private let syncService:    SupabaseSyncService
@@ -52,7 +54,7 @@ public final class SettingsViewModel: ObservableObject {
     private let statsService:   ListeningStatsService
     private let profileStats:   ProfileStatsService
     private let downloadManager: DownloadManager
-    private var cancellables = Set<AnyCancellable>()
+    @ObservationIgnored private var cancellables = Set<AnyCancellable>()
 
     public init(
         authService:    SupabaseAuthService,
@@ -71,7 +73,7 @@ public final class SettingsViewModel: ObservableObject {
         self.profileStats   = profileStats
         self.downloadManager = downloadManager
 
-        authService.$authState
+        authService.authStatePublisher
             .receive(on: RunLoop.main)
             .sink { [weak self] state in
                 if case .authenticated(let user) = state {
@@ -82,9 +84,10 @@ public final class SettingsViewModel: ObservableObject {
             }
             .store(in: &cancellables)
 
-        syncService.$syncState
+        syncService.syncStatePublisher
             .receive(on: RunLoop.main)
-            .assign(to: &$syncState)
+            .sink { [weak self] in self?.syncState = $0 }
+            .store(in: &cancellables)
     }
 
     // MARK: - Actions

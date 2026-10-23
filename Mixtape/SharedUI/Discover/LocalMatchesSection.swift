@@ -19,7 +19,7 @@ struct LocalMatchesSection: View {
 
     static let limit = 6
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
 
     /// Multi-select: click, ⌘/⇧-click on the Mac; Select on iOS.
     @State private var selected: Set<Track.ID> = []
@@ -74,7 +74,7 @@ struct LocalMatchesSection: View {
         .sheet(isPresented: Binding(get: { !tracksForPlaylist.isEmpty },
                                     set: { if !$0 { tracksForPlaylist = [] } })) {
             AddToPlaylistSheet(tracks: tracksForPlaylist)
-                .environmentObject(deps)
+                .environment(deps)
         }
         #endif
     }
@@ -258,8 +258,8 @@ struct LibraryMatchesPage: View {
     /// Pop, for a host that draws no chrome of its own (macOS).
     var onBack: (() -> Void)? = nil
 
-    @EnvironmentObject private var deps:   AppDependencies
-    @EnvironmentObject private var engine: PlaybackEngine
+    @Environment(AppDependencies.self) private var deps
+    @Environment(PlaybackEngine.self) private var engine
 
     var body: some View {
         ScrollView {

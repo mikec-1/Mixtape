@@ -24,7 +24,7 @@ struct DiscoverArtistBanner: View {
 
     @State private var portrait: URL?
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
     @State private var likedCount = 0
 
     var body: some View {
@@ -52,7 +52,7 @@ struct DiscoverArtistBanner: View {
     }
 
     private func portrait(side: CGFloat) -> some View {
-        CachedRemoteImage(url: portrait ?? artist.imageURL) { image in
+        CachedRemoteImage(url: portrait ?? artist.imageURL, points: side) { image in
             image.resizable().scaledToFill()
         } placeholder: {
             Color.mixSurface2.overlay {
@@ -127,7 +127,7 @@ struct DiscoverArtistAbout: View {
                 .foregroundStyle(Color.mixTextPrimary)
 
             HStack(alignment: .top, spacing: 16) {
-                CachedRemoteImage(url: artist.imageURL) { image in
+                CachedRemoteImage(url: artist.imageURL, points: 96) { image in
                     image.resizable().scaledToFill()
                 } placeholder: {
                     Color.mixSurface2

@@ -66,7 +66,7 @@ public final class SpotifyImportService {
         // imported from a file or saved under a slightly different title.
         var owned = libraryService.ownedRecordingIndex
         let created = await addPlaylist(playlist, owned: &owned, onProgress: onProgress)
-        finaliseImport()
+        await finaliseImport()
         return created
     }
 
@@ -383,7 +383,7 @@ public final class SpotifyImportService {
             result.sourceTrackIDs   = [:]
         }
 
-        finaliseImport()
+        await finaliseImport()
         return result
     }
 
@@ -403,9 +403,10 @@ public final class SpotifyImportService {
         }
     }
 
-    /// Library-wide work done once per run, since `refresh()` re-reads the whole library.
-    func finaliseImport() {
-        libraryService.refresh()
+    /// Library-wide work done once per run, since a refresh re-reads the whole library. Off the main
+    /// actor: a big import ends with thousands of rows to read, and the reader saves first.
+    func finaliseImport() async {
+        await libraryService.refreshOffMain()
         // These tracks skip ImportService, so fetch real artist photos.
         libraryService.scheduleArtistImageBackfill()
     }

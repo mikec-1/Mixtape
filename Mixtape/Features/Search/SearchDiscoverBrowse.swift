@@ -9,8 +9,8 @@ struct SearchDiscoverBrowse: View {
 
     let onOpen: (DiscoverDestination) -> Void
 
-    @EnvironmentObject private var deps: AppDependencies
-    @ObservedObject private var store = DiscoverSessionStore.shared
+    @Environment(AppDependencies.self) private var deps
+    private var store: DiscoverSessionStore { .shared }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {

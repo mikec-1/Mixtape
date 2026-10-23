@@ -4,17 +4,17 @@ import SwiftUI
 
 public struct NowPlayingView: View {
 
-    @EnvironmentObject private var engine: PlaybackEngine
-    @EnvironmentObject private var deps:   AppDependencies
+    @Environment(PlaybackEngine.self) private var engine
+    @Environment(AppDependencies.self) private var deps
     /// Observed directly: `engine.queue` doesn't republish through the engine.
-    @EnvironmentObject private var queueService: QueueService
+    @Environment(QueueService.self) private var queueService
     #if os(iOS)
-    @EnvironmentObject private var iosAppState: IOSAppState
+    @Environment(IOSAppState.self) private var iosAppState
     #endif
     @Environment(\.dismiss)  private var dismiss
 
     /// Lyrics resolution + caching.
-    @StateObject private var lyricsService = LyricsService.shared
+    private var lyricsService: LyricsService { .shared }
 
     /// Ambient background colours derived from current artwork.
     @State private var ambientColors: [Color] = ArtworkColors.brandGradient
@@ -57,7 +57,7 @@ public struct NowPlayingView: View {
     @State private var dismissOffset: CGFloat = 0
 
     /// The song being fetched, if any. Mirrored into state since nothing here observes the coordinator.
-    @State private var preparing: OnlinePlaybackCoordinator.PreparingTrack?
+    private var preparing: OnlinePlaybackCoordinator.PreparingTrack? { deps.onlineCoordinator.preparing }
 
     public var body: some View {
         ZStack {
@@ -79,20 +79,19 @@ public struct NowPlayingView: View {
             refreshForCurrentTrack()
         }
         .onAppear { refreshForCurrentTrack() }
-        .onReceive(deps.onlineCoordinator.$preparing) { preparing = $0 }
         #if os(iOS)
         // Karaoke has its own timing control; pick up what it left.
         .fullScreenCover(isPresented: $showKaraoke, onDismiss: refreshForCurrentTrack) {
             if let lyrics, lyrics.hasSynced {
                 KaraokeView(lines: lyrics.synced)
-                    .environmentObject(engine)
-                    .environmentObject(queueService)
+                    .environment(engine)
+                    .environment(queueService)
             }
         }
         #endif
         .sheet(isPresented: $showUpNext) {
             UpNextSheet()
-                .environmentObject(engine)
+                .environment(engine)
         }
         .sheet(isPresented: $showLyricsEditor, onDismiss: refreshForCurrentTrack) {
             if let track = queueService.currentTrack {
@@ -102,7 +101,7 @@ public struct NowPlayingView: View {
         .sheet(isPresented: $showLyricCard) {
             if let track = queueService.currentTrack, let lyrics, lyrics.hasAny {
                 LyricCardSheet(track: track, lyrics: lyrics)
-                    .environmentObject(deps)
+                    .environment(deps)
             }
         }
         .sheet(isPresented: $showGetInfo) {
@@ -119,7 +118,7 @@ public struct NowPlayingView: View {
                 iosAppState.openPost(code: code)
                 #endif
             })
-            .environmentObject(deps)
+            .environment(deps)
         }
         .sheet(item: $postTrack) { track in
             PostSheet(track: track, onOpen: { code in
@@ -127,7 +126,7 @@ public struct NowPlayingView: View {
                 iosAppState.openPost(code: code)
                 #endif
             })
-            .environmentObject(deps)
+            .environment(deps)
         }
     }
 
@@ -809,8 +808,8 @@ public struct NowPlayingView: View {
 /// See `PlaybackClock`. `seek(to:)` writes through, so drag state stays local.
 struct NowPlayingSeekBar: View {
 
-    @ObservedObject var clock: PlaybackClock
-    @EnvironmentObject private var engine: PlaybackEngine
+    var clock: PlaybackClock
+    @Environment(PlaybackEngine.self) private var engine
     let duration: TimeInterval
     let onSeek: (TimeInterval) -> Void
 
@@ -898,7 +897,7 @@ struct NowPlayingSeekBar: View {
 struct SyncedLyricsView: View {
     let lines: [LyricLine]
     /// Observed directly so clock ticks redraw only this. See `PlaybackClock`.
-    @ObservedObject var clock: PlaybackClock
+    var clock: PlaybackClock
     /// Stops the per-frame sweep redrawing a line that isn't moving.
     let isPlaying: Bool
     let onTapLine: (TimeInterval) -> Void
@@ -942,7 +941,9 @@ struct SyncedLyricsView: View {
     }
 
     var body: some View {
-        ScrollViewReader { proxy in
+        // Once per tick, not per line: each read scans every line.
+        let active = activeIndex
+        return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: lineSpacing) {
                     ForEach(Array(lines.enumerated()), id: \.element.id) { i, line in
@@ -959,7 +960,7 @@ struct SyncedLyricsView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .id("gap-\(i)")
                         }
-                        let isActive = (i == activeIndex)
+                        let isActive = (i == active)
                         Group {
                             if isActive, !byLine, i < words.count, !words[i].isEmpty {
                                 // Only the active line sweeps word by word.
@@ -1023,13 +1024,13 @@ enum LyricsOffsets {
 /// The queue: now playing, each lane under a heading, then shuffle/repeat/timer
 /// tiles. Reorder is always on; delete needs Edit. Online taps route through the coordinator.
 private struct UpNextSheet: View {
-    @EnvironmentObject private var engine: PlaybackEngine
-    @EnvironmentObject private var library: LibraryService
-    @EnvironmentObject private var deps:   AppDependencies
+    @Environment(PlaybackEngine.self) private var engine
+    @Environment(LibraryService.self) private var library
+    @Environment(AppDependencies.self) private var deps
     /// Observed directly: `engine.queue` doesn't republish through the engine.
-    @EnvironmentObject private var queueService: QueueService
+    @Environment(QueueService.self) private var queueService
     #if os(iOS)
-    @EnvironmentObject private var iosAppState: IOSAppState
+    @Environment(IOSAppState.self) private var iosAppState
     #endif
 
     @State private var isEditing = false
@@ -1092,7 +1093,7 @@ private struct UpNextSheet: View {
         }
         #if os(iOS)
         // Get Info from a row's menu. The app can't present it over this sheet's player.
-        .sheet(item: $iosAppState.infoTrack) { track in
+        .sheet(item: Bindable(iosAppState).infoTrack) { track in
             GetInfoSheet(track: track,
                          isOnline: deps.onlineCoordinator.hasActiveOnlineSession,
                          followsPlayback: false)
@@ -1517,12 +1518,12 @@ struct GetInfoSheet: View {
     let isOnline: Bool
     /// Whether the sheet follows playback. True from the player, false from a row.
     var followsPlayback: Bool = true
-    @EnvironmentObject private var engine: PlaybackEngine
-    @EnvironmentObject private var deps:   AppDependencies
+    @Environment(PlaybackEngine.self) private var engine
+    @Environment(AppDependencies.self) private var deps
     /// Observed directly: `engine.queue` doesn't republish through the engine.
-    @EnvironmentObject private var queueService: QueueService
+    @Environment(QueueService.self) private var queueService
     #if os(iOS)
-    @EnvironmentObject private var iosAppState: IOSAppState
+    @Environment(IOSAppState.self) private var iosAppState
     #endif
     @Environment(\.dismiss) private var dismiss
 
@@ -1699,6 +1700,6 @@ struct GetInfoSheet: View {
 #Preview {
     let deps = AppDependencies()
     NowPlayingView()
-        .environmentObject(deps)
-        .environmentObject(deps.playbackEngine)
+        .environment(deps)
+        .environment(deps.playbackEngine)
 }

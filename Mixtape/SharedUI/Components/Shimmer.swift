@@ -8,7 +8,7 @@ import SwiftUI
 private struct Shimmer: ViewModifier {
     @State private var phase: CGFloat = -1
     @Environment(\.mixMotion) private var motion
-    @ObservedObject private var visibility = AppVisibility.shared
+    private var visibility: AppVisibility { .shared }
 
     /// Reduce motion drops the overlay; a frozen band looks like a smear. Masked to the content,
     /// so one shimmer on a whole skeleton only lights its shapes.

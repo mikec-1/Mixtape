@@ -8,6 +8,7 @@
 import Foundation
 import Combine
 import OSLog
+import Observation
 
 // MARK: - Paths
 
@@ -100,24 +101,61 @@ public nonisolated enum OfflineStorePaths {
 
     /// The downloaded file for this track, or nil. Matches on the filename stem so any container works.
     public static func fileURL(for trackID: UUID) -> URL? {
-        let stem = trackID.uuidString
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
-        guard let match = names.first(where: {
-            URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent == stem
-        }) else { return nil }
+        guard let match = listing.files(in: directory)[trackID.uuidString] else { return nil }
         return directory.appendingPathComponent(match)
+    }
+
+    private static let listing = StemListing()
+}
+
+/// A folder's filenames by stem, re-read only when the folder's modification date moves. Playback asks
+/// once per queued song, and listing or probing the folder each time stalled the main thread on big queues.
+nonisolated final class StemListing: @unchecked Sendable {
+    /// Only these extensions count, earlier ones winning a shared stem. Nil takes any file.
+    private let extensions: [String]?
+    private let lock = NSLock()
+    private var stamp: (Int, Int)?
+    private var files: [String: String] = [:]
+
+    init(extensions: [String]? = nil) { self.extensions = extensions }
+
+    func files(in dir: URL) -> [String: String] {
+        // Plain stat: attributesOfItem also reads xattrs, which showed up per row while skipping.
+        // A missing folder has no files.
+        var info = stat()
+        guard stat(dir.path, &info) == 0 else { return [:] }
+        let now = (info.st_mtimespec.tv_sec, info.st_mtimespec.tv_nsec)
+        lock.lock()
+        defer { lock.unlock() }
+        if let stamp, stamp == now { return files }
+        var found: [String: (rank: Int, name: String)] = [:]
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [] {
+            let url = URL(fileURLWithPath: name)
+            let ext = url.pathExtension.lowercased()
+            let rank = extensions.map { $0.firstIndex(of: ext) ?? -1 } ?? 0
+            guard rank >= 0 else { continue }
+            let stem = url.deletingPathExtension().lastPathComponent
+            if let kept = found[stem], kept.rank <= rank { continue }
+            found[stem] = (rank, name)
+        }
+        files = found.mapValues(\.name)
+        stamp = now
+        return files
     }
 }
 
 // MARK: - Store
 
+@Observable
 @MainActor
-public final class OfflineStore: ObservableObject {
+public final class OfflineStore {
 
     public static let shared = OfflineStore()
 
     /// Cached directory listing. Nil means not read yet; every mutation drops it.
-    private var cachedMap: [UUID: URL]?
+    @ObservationIgnored private var cachedMap: [UUID: URL]?
+    /// Bumped on every mutation so views reading the listing redraw.
+    private var revision = 0
 
     private init() {}
 
@@ -175,6 +213,7 @@ public final class OfflineStore: ObservableObject {
     // MARK: - Directory listing
 
     private func map() -> [UUID: URL] {
+        _ = revision
         if let cachedMap { return cachedMap }
 
         let contents = (try? FileManager.default.contentsOfDirectory(
@@ -196,6 +235,6 @@ public final class OfflineStore: ObservableObject {
 
     private func invalidate() {
         cachedMap = nil
-        objectWillChange.send()
+        revision += 1
     }
 }

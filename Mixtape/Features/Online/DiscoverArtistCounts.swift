@@ -13,7 +13,7 @@ struct DiscoverArtistCounts: View {
     /// Opens the liked-songs page. Nil leaves the line as plain text.
     var onOpenLiked: (() -> Void)? = nil
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
 
     /// Cached since the summary is O(library). Recomputed only when favourites change.
     @State private var liked: String?

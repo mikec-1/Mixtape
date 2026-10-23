@@ -12,8 +12,8 @@ struct DiscoverLikedSongsPage: View {
     /// Pop, for hosts that don't draw their own back button (the Mac).
     var onBack: (() -> Void)? = nil
 
-    @EnvironmentObject private var deps:   AppDependencies
-    @EnvironmentObject private var engine: PlaybackEngine
+    @Environment(AppDependencies.self) private var deps
+    @Environment(PlaybackEngine.self) private var engine
 
     /// Recomputed on every library publish so un-liking removes a row immediately.
     private var tracks: [Track] {

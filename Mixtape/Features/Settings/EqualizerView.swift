@@ -6,7 +6,7 @@ import SwiftUI
 
 public struct EqualizerView: View {
 
-    @ObservedObject private var equalizer: AudioEqualizer
+    @Bindable private var equalizer: AudioEqualizer
 
     /// True inside `MixSheet` on iOS, which supplies the title and margins.
     /// Inline in macOS Settings it's a card with its own heading and background.

@@ -23,7 +23,7 @@ extension ContinuityService.Device {
 
 /// Hands its content the device playing right now, or nil when it's this one.
 struct WithActiveRemote<Content: View>: View {
-    @ObservedObject var continuity: ContinuityService
+    var continuity: ContinuityService
     @ViewBuilder let content: (ContinuityService.Device?) -> Content
 
     var body: some View { content(continuity.activeRemote) }
@@ -77,9 +77,9 @@ struct RemoteDeviceStrip: View {
 /// Every open device, current one first; picking one moves playback there.
 /// Spotify Connect layout: current device card, other devices, output, quality.
 struct DevicePickerList: View {
-    @ObservedObject var continuity: ContinuityService
+    var continuity: ContinuityService
     /// Observed directly: `deps` doesn't republish the download manager.
-    @ObservedObject var downloads: DownloadManager
+    var downloads: DownloadManager
     var onPick: () -> Void = {}
 
     var body: some View {
@@ -249,13 +249,13 @@ private struct DeviceRow: View {
 /// Start or open the Jam, the system output picker on iOS, and Jams nearby.
 /// Reads `deps` so the picker's call sites stay as they are.
 private struct JamTiles: View {
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
     let onPick: () -> Void
 
     var body: some View { Content(jam: deps.jam, onPick: onPick) }
 
     private struct Content: View {
-        @ObservedObject var jam: JamService
+        var jam: JamService
         let onPick: () -> Void
 
         var body: some View {
@@ -284,7 +284,7 @@ private struct JamTiles: View {
 
 /// Editable quality. A real `Picker`, not a `Menu`, which macOS flattens.
 private struct QualityRow: View {
-    @ObservedObject var downloads: DownloadManager
+    var downloads: DownloadManager
 
     var body: some View {
         PickerTile(icon: "waveform",
@@ -402,8 +402,8 @@ struct RoutePicker: UIViewRepresentable {
 /// Devices button. Just the glyph on the built-in speaker, otherwise the active
 /// output's name in accent. Tap opens the picker.
 struct DevicesButton: View {
-    @ObservedObject var continuity: ContinuityService
-    @ObservedObject var downloads: DownloadManager
+    var continuity: ContinuityService
+    var downloads: DownloadManager
     var size: CGFloat = 18
     /// Off in the mini player, where the strip already names the device.
     var showsName: Bool = false

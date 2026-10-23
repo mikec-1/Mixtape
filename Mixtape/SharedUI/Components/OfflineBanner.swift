@@ -6,8 +6,8 @@ import SwiftUI
 
 struct OfflineBanner: View {
 
-    @ObservedObject var downloads: DownloadManager
-    @ObservedObject var auth: SupabaseAuthService
+    var downloads: DownloadManager
+    var auth: SupabaseAuthService
 
     /// Empty when connected, so the host can place it unconditionally.
     var body: some View {
@@ -45,8 +45,8 @@ struct OfflineBanner: View {
 /// Reports the network to a view that doesn't observe the download manager
 /// (observing it would redraw the page on every progress tick). Fires on appear too.
 struct OfflineWatcher: View {
-    @ObservedObject var downloads: DownloadManager
-    @ObservedObject var auth: SupabaseAuthService
+    var downloads: DownloadManager
+    var auth: SupabaseAuthService
     let onChange: (Bool) -> Void
 
     private var offline: Bool { !downloads.isConnected || auth.isOffline }
@@ -65,8 +65,8 @@ struct OfflineWatcher: View {
 /// turns it blue for a couple of seconds, then it goes.
 struct OfflineStrip: View {
 
-    @ObservedObject var downloads: DownloadManager
-    @ObservedObject var auth: SupabaseAuthService
+    var downloads: DownloadManager
+    var auth: SupabaseAuthService
 
     /// Nil while there is nothing to say. `false` = offline, `true` = just back.
     @State private var back: Bool? = nil

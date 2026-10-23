@@ -10,12 +10,12 @@ extension Notification.Name {
 
 /// Presents the Jam sheet from the root, so links and the picker share it.
 struct JamSheetPresenter: View {
-    @ObservedObject var jam: JamService
-    @EnvironmentObject private var deps: AppDependencies
+    @Bindable var jam: JamService
+    @Environment(AppDependencies.self) private var deps
 
     var body: some View {
         Color.clear
-            .sheet(isPresented: $jam.isSheetPresented) { JamSheet(jam: jam).environmentObject(deps) }
+            .sheet(isPresented: $jam.isSheetPresented) { JamSheet(jam: jam).environment(deps) }
     }
 }
 
@@ -34,7 +34,7 @@ private var jamGradient: LinearGradient {
 
 /// Floats over the player bars while in a Jam. Tapping opens the Jam sheet.
 struct JamStrip: View {
-    @ObservedObject var jam: JamService
+    @Bindable var jam: JamService
     var alignment: Alignment = .center
     var hPadding: CGFloat = 14
 
@@ -78,7 +78,7 @@ struct JamStrip: View {
 struct JamBanner: View {
     let name: String
     let code: String
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
 
     var body: some View {
         HStack(spacing: 14) {
@@ -146,7 +146,7 @@ struct JamAvatarStack: View {
 // MARK: - Sheet
 
 struct JamSheet: View {
-    @ObservedObject var jam: JamService
+    @Bindable var jam: JamService
 
     var body: some View {
         if let session = jam.session {
@@ -168,7 +168,7 @@ struct JamSheet: View {
 // MARK: Not in a Jam
 
 private struct JamStartView: View {
-    @ObservedObject var jam: JamService
+    @Bindable var jam: JamService
     @State private var code = ""
 
     var body: some View {
@@ -289,10 +289,10 @@ struct JamCodeField: View {
 
 /// Jams on the same network. The parent browses while it's on screen.
 struct NearbyJams: View {
-    @ObservedObject var jam: JamService
+    @Bindable var jam: JamService
     /// Closes whatever this sits in before joining opens the Jam sheet.
     var onPick: (() -> Void)? = nil
-    @ObservedObject private var nearby: JamNearby
+    private var nearby: JamNearby
 
     init(jam: JamService, onPick: (() -> Void)? = nil) {
         self.jam = jam
@@ -340,9 +340,9 @@ struct NearbyJams: View {
 // MARK: In a Jam
 
 private struct JamLiveView: View {
-    @ObservedObject var jam: JamService
+    @Bindable var jam: JamService
     let session: JamService.Session
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
     @Environment(\.dismiss) private var dismiss
     @State private var editing = false
     @State private var showInvite = false
@@ -355,7 +355,7 @@ private struct JamLiveView: View {
             upNext
             members
         }
-        .sheet(isPresented: $showInvite) { JamInviteSheet(session: session).environmentObject(deps) }
+        .sheet(isPresented: $showInvite) { JamInviteSheet(session: session).environment(deps) }
         .sheet(isPresented: $showSettings) { JamSettingsSheet(jam: jam) }
     }
 
@@ -610,7 +610,7 @@ private struct JamLiveView: View {
 // MARK: - Settings (host)
 
 private struct JamSettingsSheet: View {
-    @ObservedObject var jam: JamService
+    @Bindable var jam: JamService
 
     var body: some View {
         MixSheet(title: "Jam settings", size: .compact, cancelTitle: "Done") {
@@ -647,7 +647,7 @@ private struct JamSettingsSheet: View {
 
 private struct JamInviteSheet: View {
     let session: JamService.Session
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
     @State private var copied = false
 
     var body: some View {

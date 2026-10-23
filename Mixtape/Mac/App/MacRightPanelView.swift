@@ -5,8 +5,8 @@ import SwiftUI
 
 struct MacRightPanelView: View {
 
-    @EnvironmentObject private var appState: MacAppState
-    @EnvironmentObject private var engine:   PlaybackEngine
+    @Environment(MacAppState.self) private var appState
+    @Environment(PlaybackEngine.self) private var engine
 
     var body: some View {
         VStack(spacing: 0) {
@@ -40,8 +40,8 @@ struct MacRightPanelView: View {
 /// Underlined text tabs plus close, drawn straight on the column so the window wash shows through.
 private struct MacPanelTabBar: View {
 
-    @EnvironmentObject private var appState: MacAppState
-    @EnvironmentObject private var engine:   PlaybackEngine
+    @Environment(MacAppState.self) private var appState
+    @Environment(PlaybackEngine.self) private var engine
 
     @Namespace private var underline
 

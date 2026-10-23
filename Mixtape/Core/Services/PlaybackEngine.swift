@@ -68,11 +68,14 @@ public enum PrivateSession {
 }
 
 @MainActor
-public final class PlaybackEngine: NSObject, ObservableObject {
+@Observable
+public final class PlaybackEngine: NSObject {
 
     // MARK: - Published State (UI observes these)
 
-    @Published public private(set) var state:           PlaybackState = .stopped
+    public private(set) var state:           PlaybackState = .stopped {
+        willSet { stateSubject.send(newValue) }
+    }
     /// The position, on its own object (see `PlaybackClock`). Not `@Published`: it ticks five times a second
     /// and would redraw every view holding the engine. Views that show the position observe `clock`.
     public let clock = PlaybackClock()
@@ -82,52 +85,68 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         get { clock.currentTime }
         set { clock.currentTime = newValue }
     }
-    @Published public private(set) var duration:        TimeInterval  = 0
+    public private(set) var duration:        TimeInterval  = 0 {
+        willSet { durationSubject.send(newValue) }
+    }
     /// Tracks played this session, most recent first. Capped at 50.
-    @Published public private(set) var recentlyPlayed:  [Track]       = []
+    public private(set) var recentlyPlayed:  [Track]       = [] {
+        willSet { recentlyPlayedSubject.send(newValue) }
+    }
     /// Non-nil when a playback error just occurred. Auto-clears after 4 seconds.
-    @Published public private(set) var errorMessage:    String?       = nil
+    public private(set) var errorMessage:    String?       = nil {
+        willSet { errorMessageSubject.send(newValue) }
+    }
+
+    // Combine views of the above for services. They fire in willSet like `@Published` did.
+    @ObservationIgnored private let stateSubject          = CurrentValueSubject<PlaybackState, Never>(.stopped)
+    @ObservationIgnored private let durationSubject       = CurrentValueSubject<TimeInterval, Never>(0)
+    @ObservationIgnored private let recentlyPlayedSubject = CurrentValueSubject<[Track], Never>([])
+    @ObservationIgnored private let errorMessageSubject   = CurrentValueSubject<String?, Never>(nil)
+    public var statePublisher:          AnyPublisher<PlaybackState, Never> { stateSubject.eraseToAnyPublisher() }
+    public var durationPublisher:       AnyPublisher<TimeInterval, Never>  { durationSubject.eraseToAnyPublisher() }
+    public var recentlyPlayedPublisher: AnyPublisher<[Track], Never>       { recentlyPlayedSubject.eraseToAnyPublisher() }
+    public var errorMessagePublisher:   AnyPublisher<String?, Never>       { errorMessageSubject.eraseToAnyPublisher() }
     /// Output volume 0.0-1.0. Observable and mutatable from any view.
-    @Published public var volume: Float = 1.0 {
+    public var volume: Float = 1.0 {
         didSet { applyVolume() }
     }
 
     /// Called when a track enters `recentlyPlayed`, with the listen time that crossed the threshold.
     /// AppDependencies persists it via PlayHistoryRepository.
-    public var onTrackAddedToHistory: ((Track, TimeInterval, QueueSource) -> Void)?
+    @ObservationIgnored public var onTrackAddedToHistory: ((Track, TimeInterval, QueueSource) -> Void)?
 
     /// Final listen time for a logged play once the user leaves the track. AppDependencies corrects the row.
-    public var onPlaySecondsFinalised: ((UUID, TimeInterval) -> Void)?
+    @ObservationIgnored public var onPlaySecondsFinalised: ((UUID, TimeInterval) -> Void)?
 
     /// The lock screen / CarPlay / Watch heart; AppDependencies answers since the engine doesn't know the library.
-    public var isLiked:      ((Track) -> Bool)?
-    public var onRemoteLike: ((Track) async -> Void)?
+    @ObservationIgnored public var isLiked:      ((Track) -> Bool)?
+    @ObservationIgnored public var onRemoteLike: ((Track) async -> Void)?
 
     // MARK: - Online context routing (Discover)
     // Online streams can't skip through the local queue: only the playing track has a file. The coordinator
     // installs these so next/previous/end-of-track go back to it. Cleared when a library track plays.
 
     /// Set by OnlinePlaybackCoordinator while an online context is active; non-nil means the current track streams.
-    public var onlineNextHandler: (() async -> Void)?
+    @ObservationIgnored public var onlineNextHandler: (() async -> Void)?
     /// Companion to `onlineNextHandler` for backward skips.
-    public var onlinePreviousHandler: (() async -> Void)?
+    @ObservationIgnored public var onlinePreviousHandler: (() async -> Void)?
     /// A crossfade moved to this queue row during an online context. The coordinator mirrors the context into
     /// the queue, so it catches up from the row.
-    public var onlineCrossfaded: ((Int) -> Void)?
+    @ObservationIgnored public var onlineCrossfaded: ((Int) -> Void)?
 
     /// Routes a track with no playable local file (Spotify import, history replay, metadata-only sync) to the
     /// coordinator to resolve and stream. Set by AppDependencies; returns once routing takes over. When nil the
     /// track falls through to the local path and its "not uploaded yet" error.
-    public var onlineRouter: ((Track, [Track]) async -> Void)?
+    @ObservationIgnored public var onlineRouter: ((Track, [Track]) async -> Void)?
 
     /// Renders an edit this device has no file for (made on another device) from its original, and returns
     /// the file. Set by AppDependencies.
-    public var editRebuilder: ((Track) async throws -> URL)?
+    @ObservationIgnored public var editRebuilder: ((Track) async throws -> URL)?
 
     /// Ids whose audio is being fetched (via `onlineRouter` or from the library's store). Stops a track the
     /// resolver couldn't give a file for from bouncing between the two. Published so clicked rows can show a
     /// spinner during the fetch.
-    @Published public private(set) var routingTrackIDs: Set<UUID> = []
+    public private(set) var routingTrackIDs: Set<UUID> = []
 
     /// True when `track` can only play by resolving online: nothing on disk and no `remoteKey`. Covers
     /// Discover/Spotify imports and rows whose source device never uploaded the audio.
@@ -183,11 +202,11 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     /// Installed by `ContinuityService` while mirroring another device. All transport paths (buttons, scrubber,
     /// media keys, lock screen) go through the methods below, so this redirects all of them. Cleared by any
     /// local play.
-    public var remoteTransport: ((RemoteTransportAction) -> Void)?
+    @ObservationIgnored public var remoteTransport: ((RemoteTransportAction) -> Void)?
 
     /// Also installed while mirroring: sends a song picked here to the playing device and returns true.
     /// Picking a song doesn't move playback; only the device picker (or the other device stopping) does.
-    public var remotePlayRedirect: ((Track, [Track]) -> Bool)?
+    @ObservationIgnored public var remotePlayRedirect: ((Track, [Track]) -> Bool)?
 
     /// Shows another device's song, position and state on every player surface without playing it. Stops
     /// local audio the first time, then only updates what changed, since each publish redraws.
@@ -206,7 +225,6 @@ public final class PlaybackEngine: NSObject, ObservableObject {
                   queue.currentTrack?.displayArtwork == nil {
             // Same song, but its cover just arrived (online rows have no store copy).
             queue.fillArtwork(art, forTrackID: track.id)
-            objectWillChange.send()  // nothing @Published changed; the bar reads through us
             updateNowPlayingInfo(track: track)
         }
         if self.duration != duration { self.duration = duration }
@@ -228,16 +246,17 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     }
 
     /// Current playback speed multiplier (0.5-2.0). 1.0 = normal. Persisted.
-    @Published public private(set) var playbackRate: Float = 1.0
+    public private(set) var playbackRate: Float = 1.0
     /// Track transition style, persisted. `.off` is the single-player path; `.gapless`/`.crossfade` use both players.
-    @Published public private(set) var crossfadeMode: CrossfadeMode = .off
+    public private(set) var crossfadeMode: CrossfadeMode = .off
     /// Crossfade overlap length in seconds (used when mode == .crossfade). 2-12.
-    @Published public private(set) var crossfadeDuration: TimeInterval = 6
+    public private(set) var crossfadeDuration: TimeInterval = 6
     /// Seconds left on the active sleep timer, or nil if none is running.
-    @Published public private(set) var sleepTimerRemaining: TimeInterval? = nil
+    public private(set) var sleepTimerRemaining: TimeInterval? = nil
 
     // MARK: - Sub-services (observable by views)
 
+    /// Observable itself, so views track the queue properties they read.
     public let queue: QueueService
 
     /// The graphic equaliser whose AVAudioUnitEQ node sits in the audio graph.
@@ -249,35 +268,35 @@ public final class PlaybackEngine: NSObject, ObservableObject {
 
     // Audio graph
     // All lazy: nodes are only built on first playback (see `configureGraphIfNeeded`), not at launch.
-    private lazy var audioEngine = AVAudioEngine()
+    @ObservationIgnored private lazy var audioEngine = AVAudioEngine()
     /// Two players on separate preMixer buses so tracks can overlap. `playerNode` is the active one; `idlePlayer`
     /// is silent until a transition. With crossfade off `usingA` never flips.
-    private lazy var playerA = AVAudioPlayerNode()
-    private lazy var playerB = AVAudioPlayerNode()
-    private var usingA  = true
+    @ObservationIgnored private lazy var playerA = AVAudioPlayerNode()
+    @ObservationIgnored private lazy var playerB = AVAudioPlayerNode()
+    @ObservationIgnored private var usingA  = true
     private var playerNode: AVAudioPlayerNode { usingA ? playerA : playerB }
     private var idlePlayer: AVAudioPlayerNode { usingA ? playerB : playerA }
     private var activeBus: AVAudioNodeBus { usingA ? 0 : 1 }
     private var idleBus:   AVAudioNodeBus { usingA ? 1 : 0 }
 
     // Crossfade transition state
-    private var crossfadeTask: Task<Void, Never>?
+    @ObservationIgnored private var crossfadeTask: Task<Void, Never>?
     /// The next file already sent for measuring, so the progress timer asks once.
-    private var measuredAhead: URL?
-    private var outgoingPlayer: AVAudioPlayerNode?
-    private var isTransitioning = false
+    @ObservationIgnored private var measuredAhead: URL?
+    @ObservationIgnored private var outgoingPlayer: AVAudioPlayerNode?
+    @ObservationIgnored private var isTransitioning = false
 
     // MARK: - Play/pause fade state
     // Pause fade rides the main mixer output, not the per-player volumes crossfade owns, so pausing
     // mid-crossfade fades the whole blend and the two ramps never fight over one value.
     private enum FadePhase { case idle, fadingOut, fadingIn }
-    private var fadePhase: FadePhase = .idle
-    private var fadeTask: Task<Void, Never>?
+    @ObservationIgnored private var fadePhase: FadePhase = .idle
+    @ObservationIgnored private var fadeTask: Task<Void, Never>?
     /// Bumped on every fade start/cancel so a stale ramp step can't write after a newer one took over.
-    private var fadeGeneration = 0
+    @ObservationIgnored private var fadeGeneration = 0
     /// 0...1 multiplier on top of the user's `volume`. Separate so a volume change mid-ramp doesn't break the
     /// fade and the fade can't exceed the user's volume.
-    private var fadeGain: Float = 1
+    @ObservationIgnored private var fadeGain: Float = 1
 
     /// Fade-out is longer than fade-in: a slow release sounds settled, a slow attack sounds laggy.
     private static let pauseFadeDuration:  TimeInterval = 0.35
@@ -289,38 +308,38 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     private static let rapidToggleWindow:  Duration     = .milliseconds(500)
     /// Ramp used while spamming: short enough that every press is heard, long enough not to click.
     private static let rapidFadeDuration:  TimeInterval = 0.10
-    private var lastToggleAt: ContinuousClock.Instant?
+    @ObservationIgnored private var lastToggleAt: ContinuousClock.Instant?
     /// How long the engine keeps running after a pause, so a quick resume doesn't wait on the output
     /// device restarting (slow, blocks the main actor, and Bluetooth drops the first moments).
     private static let engineIdleGrace:    Duration     = .seconds(2)
-    private var engineIdleTask: Task<Void, Never>?
+    @ObservationIgnored private var engineIdleTask: Task<Void, Never>?
     /// Mixer right after the players that converts every file to one canonical format, so the EQ and
     /// TimePitch units never see a format change (TimePitch rejects it with -10868 and crashes on `connect`).
-    private lazy var preMixerNode = AVAudioMixerNode()
+    @ObservationIgnored private lazy var preMixerNode = AVAudioMixerNode()
     /// The EQ node, owned by `equalizer`.
     private var eqNode: AVAudioUnitEQ { equalizer.node }
     /// Varispeed/pitch node for playback-speed control. Sits eq -> timePitch -> mixer.
-    private lazy var timePitchNode = AVAudioUnitTimePitch()
-    private var graphConfigured = false
+    @ObservationIgnored private lazy var timePitchNode = AVAudioUnitTimePitch()
+    @ObservationIgnored private var graphConfigured = false
 
     /// The fixed format the effect chain runs at; the preMixer converts into it.
     private let canonicalFormat = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2)!
 
     // Sleep timer
-    private var sleepTimerTask: Task<Void, Never>?
+    @ObservationIgnored private var sleepTimerTask: Task<Void, Never>?
 
     // Last.fm: when the track started and whether it crossed the scrobble threshold.
-    private var scrobbleStartedAt: Date?
-    private var didScrobbleCurrent = false
+    @ObservationIgnored private var scrobbleStartedAt: Date?
+    @ObservationIgnored private var didScrobbleCurrent = false
     /// True once the current track crossed the minimum listen and was recorded. Reset per track.
-    private var didRecordHistoryCurrent = false
+    @ObservationIgnored private var didRecordHistoryCurrent = false
     /// The logged play and how far the user got. Tracked on the tick because `currentTime` is already 0 when
     /// the next track starts.
-    private var loggedPlayTrackID: UUID?
-    private var loggedPlaySeconds: TimeInterval = 0
+    @ObservationIgnored private var loggedPlayTrackID: UUID?
+    @ObservationIgnored private var loggedPlaySeconds: TimeInterval = 0
 
     // Last track a lyrics prefetch ran for, so it isn't repeated.
-    private var lastLyricsPrefetchID: Track.ID?
+    @ObservationIgnored private var lastLyricsPrefetchID: Track.ID?
 
     // UserDefaults keys for persisted playback state.
     private enum DefaultsKey {
@@ -336,27 +355,27 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     }
 
     /// The file currently scheduled on the player node.
-    private var audioFile: AVAudioFile?
+    @ObservationIgnored private var audioFile: AVAudioFile?
     /// Sample rate of the currently loaded file (for time/sample conversion).
-    private var fileSampleRate: Double = 44_100
+    @ObservationIgnored private var fileSampleRate: Double = 44_100
     /// Total frames in the currently loaded file.
-    private var fileLengthFrames: AVAudioFramePosition = 0
+    @ObservationIgnored private var fileLengthFrames: AVAudioFramePosition = 0
     /// Sample offset of the segment currently scheduled (seek base).
-    private var seekFrameOffset: AVAudioFramePosition = 0
+    @ObservationIgnored private var seekFrameOffset: AVAudioFramePosition = 0
     /// Whether the player node is logically playing (engine running + node playing).
-    private var isNodePlaying = false
+    @ObservationIgnored private var isNodePlaying = false
 
-    private var progressTimer: AnyCancellable?
+    @ObservationIgnored private var progressTimer: AnyCancellable?
     /// Position last written to defaults, for the throttle.
-    private var lastPersistedPosition: TimeInterval = 0
-    private var terminationObservers: Set<AnyCancellable> = []
+    @ObservationIgnored private var lastPersistedPosition: TimeInterval = 0
+    @ObservationIgnored private var terminationObservers: Set<AnyCancellable> = []
     /// Bumped on every load. A stale `loadAndPlay` checks it before anything irreversible. Exposed as
     /// `playbackGeneration` for long resolves (see OnlinePlaybackCoordinator.playFromContext).
-    private var loadGeneration = 0
+    @ObservationIgnored private var loadGeneration = 0
 
     /// Set when the user pauses while a requested song is still fetching, so the fetch finishing doesn't
     /// start it anyway. Cleared by the next play or resume.
-    private var pausedWhileLoading = false
+    @ObservationIgnored private var pausedWhileLoading = false
 
     /// Bumped by every load. Copy it before a long await; a different value after means something else took over.
     public var playbackGeneration: Int { loadGeneration }
@@ -366,9 +385,9 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     // catalogue length by more than slack, play to the catalogue length and treat that as the end.
 
     /// The catalogue's length for whatever is loaded, 0 when unknown.
-    private var canonicalDuration: TimeInterval = 0
+    @ObservationIgnored private var canonicalDuration: TimeInterval = 0
     /// Set once the capped end has been acted on, so a stream can't advance twice.
-    private var didReachCappedEnd = false
+    @ObservationIgnored private var didReachCappedEnd = false
 
     /// Slack for normal differences (count-in, fade, other master); the bad case is minutes, not seconds.
     private static let paddingSlack: TimeInterval = 20
@@ -398,10 +417,10 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     /// What drives playback: `.engine` (AVAudioEngine, local files) or `.remote` (AVPlayer streaming a
     /// URL). Public controls branch on this so the player bar works the same for both.
     private enum PlaybackSource { case engine, remote }
-    private var playbackSource: PlaybackSource = .engine
-    private var remotePlayer: AVPlayer?
-    private var remoteTimeObserver: Any?
-    private var remoteEndObserver: NSObjectProtocol?
+    @ObservationIgnored private var playbackSource: PlaybackSource = .engine
+    @ObservationIgnored private var remotePlayer: AVPlayer?
+    @ObservationIgnored private var remoteTimeObserver: Any?
+    @ObservationIgnored private var remoteEndObserver: NSObjectProtocol?
 
     // MARK: - Init
 
@@ -505,7 +524,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     // MARK: - Volume normalization
 
     /// Per-song level correction, linear, never above 1. Combined in `applyVolume`.
-    private var normalizationGain: Float = 1
+    @ObservationIgnored private var normalizationGain: Float = 1
 
     private static var normalizesVolume: Bool {
         UserDefaults.standard.object(forKey: DefaultsKey.normalizeVolume) as? Bool ?? true
@@ -921,7 +940,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     // 3. Configuration change tore down the graph's connections; remake them before restarting.
 
     /// True when the system stopped playback, so the interruption's end knows whether to resume.
-    private var wasPlayingBeforeInterruption = false
+    @ObservationIgnored private var wasPlayingBeforeInterruption = false
 
     private func observeAudioSessionEvents() {
         let center = NotificationCenter.default
@@ -1292,9 +1311,15 @@ public final class PlaybackEngine: NSObject, ObservableObject {
             currentTime      = 0
 
             // TimePitch rejects a format change while running (-10868 on skip), so stop the engine before
-            // reconnecting; startEngineIfNeeded() restarts it.
-            if audioEngine.isRunning { audioEngine.stop() }
-            connectGraph(for: processingFormat)
+            // reconnecting; startEngineIfNeeded() restarts it. Same format on the same bus skips both, since the
+            // restart blocks main on coreaudiod for every skip.
+            configureGraphIfNeeded()
+            let connected = audioEngine.outputConnectionPoints(for: playerNode, outputBus: 0)
+                .contains { $0.node === preMixerNode && $0.bus == activeBus }
+            if !connected || playerNode.outputFormat(forBus: 0) != processingFormat {
+                if audioEngine.isRunning { audioEngine.stop() }
+                connectGraph(for: processingFormat)
+            }
 
             scheduleSegment(of: file, startingAtFrame: 0, generation: generation)
             normalize(to: url)
@@ -1728,7 +1753,7 @@ public final class PlaybackEngine: NSObject, ObservableObject {
     }
 
     /// Incremented per setError so a stale auto-clear task can't wipe a newer message.
-    private var errorGeneration = 0
+    @ObservationIgnored private var errorGeneration = 0
 
     /// Clears the current error now. Bumps the generation so `setError`'s pending auto-clear can't wipe a
     /// newer message. Leaves `state` alone; callers set it.
@@ -1840,8 +1865,8 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         }
     }
 
-    private var artworkRetries = 0
-    private var artworkRetryID: UUID?
+    @ObservationIgnored private var artworkRetries = 0
+    @ObservationIgnored private var artworkRetryID: UUID?
 
     private func updateNowPlayingInfo(track: Track) {
         mixMainActivity("now-playing/info") { updateNowPlayingInfoBody(track: track) }
@@ -2141,20 +2166,19 @@ public final class PlaybackEngine: NSObject, ObservableObject {
         guard !remoteCommandsConfigured else { return }
         remoteCommandsConfigured = true
         Task { await Self.registerRemoteCommands(for: self) }
-        // Shuffle and repeat changed in-app: CarPlay and the Watch read them from the commands. Deferred a turn
-        // because @Published fires in willSet.
-        remoteStateObserver = queue.$shuffleEnabled.map { _ in () }
-            .merge(with: queue.$repeatMode.map { _ in () })
+        // Shuffle and repeat changed in-app: CarPlay and the Watch read them from the commands.
+        remoteStateObserver = queue.shuffleEnabledPublisher.map { _ in () }
+            .merge(with: queue.repeatModePublisher.map { _ in () })
             .receive(on: DispatchQueue.main)
             .sink { [weak self] in self?.syncRemoteCommandState() }
     }
 
-    private var remoteCommandsConfigured = false
-    private var remoteStateObserver: AnyCancellable?
+    @ObservationIgnored private var remoteCommandsConfigured = false
+    @ObservationIgnored private var remoteStateObserver: AnyCancellable?
 
     /// Takes the play/pause keys while something else owns the audio, like the recap story.
     /// True means play, false pause, nil toggle.
-    var remotePlayPause: ((Bool?) -> Void)?
+    @ObservationIgnored var remotePlayPause: ((Bool?) -> Void)?
 
     private func remote(_ play: Bool?) {
         if let remotePlayPause { return remotePlayPause(play) }

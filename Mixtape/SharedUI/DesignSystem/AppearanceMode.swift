@@ -263,19 +263,9 @@ public extension View {
         modifier(MixSymbolPulse(isActive: isActive))
     }
 
-    /// The now-playing indicator on a row. See `mixPulse` for why it's gated.
-    func mixVariableColor(isActive: Bool) -> some View {
-        modifier(MixSymbolVariableColor(isActive: isActive))
-    }
-
     /// Cross-fade between symbols, e.g. play -> pause.
     func mixSymbolReplace() -> some View {
         modifier(MixSymbolReplace())
-    }
-
-    /// A one-shot bounce when `value` changes.
-    func mixBounce<V: Equatable>(value: V) -> some View {
-        modifier(MixSymbolBounce(value: value))
     }
 
     /// A decorative shadow that flat chrome drops (covers, cards, artwork).
@@ -328,26 +318,9 @@ private struct MixSymbolPulse: ViewModifier {
     }
 }
 
-private struct MixSymbolVariableColor: ViewModifier {
-    @Environment(\.mixMotion) private var motion
-    let isActive: Bool
-    func body(content: Content) -> some View {
-        content.symbolEffect(.variableColor.iterative, isActive: isActive && !motion.isReduced)
-    }
-}
-
 private struct MixSymbolReplace: ViewModifier {
     @Environment(\.mixMotion) private var motion
     func body(content: Content) -> some View {
         content.contentTransition(motion.isReduced ? .identity : .symbolEffect(.replace))
-    }
-}
-
-/// Constant trigger when motion is reduced, so it never fires, without changing identity.
-private struct MixSymbolBounce<V: Equatable>: ViewModifier {
-    @Environment(\.mixMotion) private var motion
-    let value: V
-    func body(content: Content) -> some View {
-        content.symbolEffect(.bounce, value: motion.isReduced ? nil : Optional(value))
     }
 }

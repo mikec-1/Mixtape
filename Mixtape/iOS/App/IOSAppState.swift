@@ -4,13 +4,14 @@
 import SwiftUI
 import Combine
 
-final class IOSAppState: ObservableObject {
+@Observable
+final class IOSAppState {
 
     // MARK: - Tab Selection
 
     /// Selected tab. Held here so things outside a tab (mini player, now playing) can switch tabs.
     /// Every switch closes the full player so the new page isn't hidden under it.
-    @Published var selectedTab: AppTab = .home {
+    var selectedTab: AppTab = .home {
         didSet {
             showNowPlaying = false; showMessages = false
             if oldValue != selectedTab { Analytics.screen("\(selectedTab)") }
@@ -25,15 +26,15 @@ final class IOSAppState: ObservableObject {
 
     /// Set when the Search tab is tapped while already showing, to raise the field and keyboard. SearchView
     /// clears it, so a second tap that lands before Search has appeared still counts.
-    @Published var searchFocusRequested = false
+    var searchFocusRequested = false
 
     func goToSearch() {
-        // Writing the same tab still publishes, and every page observing this redraws.
+        // Writing the same tab changes nothing on screen, so raise the field instead.
         if selectedTab == .search { searchFocusRequested = true } else { selectedTab = .search }
     }
 
     /// Bumped to reset Home: no search, no results, nothing pushed.
-    @Published private(set) var homeResetToken = 0
+    private(set) var homeResetToken = 0
 
     /// Tapping Home while on Home: pop to root and clear the search. Needs a method because writing the same
     /// `selectedTab` is invisible. Arriving from another tab doesn't reset (see `DiscoverSessionStore`).
@@ -47,14 +48,14 @@ final class IOSAppState: ObservableObject {
 
     /// Whether the full player is up. Owned here, not by `MiniPlayerBar`, which unmounts while the engine
     /// is between songs and would take the sheet with it.
-    @Published var showNowPlaying = false
+    var showNowPlaying = false
 
     // MARK: - Messages
 
     /// Messages, full screen over everything like Instagram's.
-    @Published var showMessages = false
+    var showMessages = false
     /// A conversation for the cover to open on, consumed by MessagesView.
-    @Published var messagesWith: UserProfile?
+    var messagesWith: UserProfile?
 
     func openMessages(with person: UserProfile? = nil) {
         messagesWith = person
@@ -67,39 +68,39 @@ final class IOSAppState: ObservableObject {
 
     /// A library artist to push on the Library tab. Only set by Library > Artists; names elsewhere use
     /// `openOnlineArtist`.
-    @Published var pendingLibraryArtist: Artist? = nil
+    var pendingLibraryArtist: Artist? = nil
 
     /// Artist name to resolve and push on Discover, when no library artist matches.
-    @Published var pendingDiscoverArtistName: String? = nil
+    var pendingDiscoverArtistName: String? = nil
 
     /// Album to resolve and push on Discover, as a probe song carrying its title and artist.
-    @Published var pendingDiscoverAlbum: OnlineTrack? = nil
+    var pendingDiscoverAlbum: OnlineTrack? = nil
 
     /// Library playlist to push on the Library tab, when picked from outside the library.
-    @Published var pendingLibraryPlaylist: Playlist? = nil
+    var pendingLibraryPlaylist: Playlist? = nil
 
     /// Song to build a station from on the Discover tab. Mirrors `MacAppState.showSongRadio`.
     struct SongRadioSeed: Equatable {
         let title: String
         let artistName: String
     }
-    @Published var pendingSongRadio: SongRadioSeed? = nil
+    var pendingSongRadio: SongRadioSeed? = nil
 
     /// Push Mixtape's profile on Discover. A flag: the page builds from the session store.
-    @Published var pendingMixtapeProfile = false
+    var pendingMixtapeProfile = false
 
     /// Song whose info sheet is open, presented once at the tab root. A sheet inside a `.contextMenu` is
     /// torn down when the menu closes. Mirrors `MacAppState.showInspector(for:)`.
-    @Published var infoTrack: Track? = nil
+    var infoTrack: Track? = nil
 
     /// The song editor's song, presented at the tab root like `infoTrack`.
-    @Published var editTrack: Track? = nil
+    var editTrack: Track? = nil
 
     /// An edit being posted to the community, presented like `editTrack`.
-    @Published var postTrack: Track? = nil
+    var postTrack: Track? = nil
 
     /// A community post's share code to push on Discover.
-    @Published var pendingPost: String? = nil
+    var pendingPost: String? = nil
 
     func openPost(code: String) {
         pendingPost = code
@@ -107,7 +108,7 @@ final class IOSAppState: ObservableObject {
     }
 
     /// A profile to push on Discover, e.g. a new follower from the inbox.
-    @Published var pendingProfile: UserProfile? = nil
+    var pendingProfile: UserProfile? = nil
 
     func openProfile(_ profile: UserProfile) {
         pendingProfile = profile
@@ -123,7 +124,7 @@ final class IOSAppState: ObservableObject {
         selectedTab = .library
     }
 
-    @Published var pendingLibraryCrate: Crate? = nil
+    var pendingLibraryCrate: Crate? = nil
 
     func openLibraryCrate(_ id: UUID) {
         pendingLibraryCrate = CrateService.shared.crate(id: id)
@@ -162,7 +163,7 @@ final class IOSAppState: ObservableObject {
     // MARK: - Metadata Review Queue
 
     /// Enrichment candidates waiting for user review, shown one at a time.
-    @Published private(set) var reviewQueue: [MetadataReviewItem] = []
+    private(set) var reviewQueue: [MetadataReviewItem] = []
 
     /// The item currently shown in the review sheet (front of queue).
     var pendingReview: MetadataReviewItem? { reviewQueue.first }
@@ -177,7 +178,7 @@ final class IOSAppState: ObservableObject {
     }
 
     /// Add Music is up. It shows the review itself, since the tab view can't present over it.
-    @Published var importSheetOpen = false
+    var importSheetOpen = false
 
     func enqueueReview(_ item: MetadataReviewItem) {
         if reviewQueue.isEmpty { batchTotal = 0 }   // fresh batch

@@ -4,9 +4,11 @@
 
 import Foundation
 import Combine
+import Observation
 
+@Observable
 @MainActor
-public final class SavedAlbumsService: ObservableObject {
+public final class SavedAlbumsService {
 
     public static let shared = SavedAlbumsService()
 
@@ -19,11 +21,11 @@ public final class SavedAlbumsService: ObservableObject {
     }
 
     /// key -> entry.
-    @Published public private(set) var entries: [String: Entry] = [:]
+    public private(set) var entries: [String: Entry] = [:]
 
-    public var pushWriter: ((String) -> Void)?
+    @ObservationIgnored public var pushWriter: ((String) -> Void)?
     /// Handed the album-only songs of an album being removed, so they leave too.
-    public var onUnsave: (([UUID]) -> Void)?
+    @ObservationIgnored public var onUnsave: (([UUID]) -> Void)?
 
     public var albumOnlyIDs: Set<UUID> { Set(entries.values.flatMap { $0.albumOnly ?? [] }) }
 
@@ -67,9 +69,18 @@ public final class SavedAlbumsService: ObservableObject {
     }
 
     public static func key(title: String, artistName: String) -> String {
+        let pair = KeyPair(title: title, artistName: artistName)
+        if let hit = keys[pair] { return hit }
         let artist = ImportService.creditedArtists(from: artistName).first ?? artistName
-        return (title + "|" + artist).lowercased().trimmingCharacters(in: .whitespaces)
+        let key = (title + "|" + artist).lowercased().trimmingCharacters(in: .whitespaces)
+        if keys.count > 20_000 { keys.removeAll() }
+        keys[pair] = key
+        return key
     }
+
+    /// Album lists sort by `savedAt`, so every comparison built two keys.
+    private struct KeyPair: Hashable { let title: String; let artistName: String }
+    private static var keys: [KeyPair: String] = [:]
 
     public func isSaved(title: String, artistName: String) -> Bool {
         entries[Self.key(title: title, artistName: artistName)] != nil

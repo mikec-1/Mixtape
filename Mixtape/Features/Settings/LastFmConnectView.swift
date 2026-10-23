@@ -8,7 +8,7 @@ import SwiftUI
 
 struct LastFmConnectView: View {
 
-    @ObservedObject private var scrobbler = LastFmScrobbler.shared
+    @Bindable private var scrobbler = LastFmScrobbler.shared
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
 

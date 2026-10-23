@@ -8,9 +8,11 @@ import Foundation
 import Combine
 import Supabase
 import OSLog
+import Observation
 
+@Observable
 @MainActor
-public final class ContinuityService: ObservableObject {
+public final class ContinuityService {
 
     nonisolated public struct Device: Codable, Hashable, Identifiable, Sendable {
         public let id: String
@@ -70,13 +72,13 @@ public final class ContinuityService: ObservableObject {
     }
 
     /// The user's other open devices.
-    @Published public private(set) var devices: [Device] = []
+    public private(set) var devices: [Device] = []
     /// The device this one is showing and controlling; nil while playback is local.
-    @Published public private(set) var activeRemote: Device?
+    public private(set) var activeRemote: Device?
     /// Keyed by device id.
-    @Published public private(set) var statuses: [String: DeviceStatus] = [:]
+    public private(set) var statuses: [String: DeviceStatus] = [:]
     /// This device. `quality` changes when the user changes it in Settings.
-    @Published public private(set) var me: Device
+    public private(set) var me: Device
 
     private let client: SupabaseClient
     private let engine: PlaybackEngine
@@ -84,24 +86,24 @@ public final class ContinuityService: ObservableObject {
     private let toast: (Toast) -> Void
 
     /// Weak, only used for one lookup.
-    public weak var online: OnlinePlaybackCoordinator?
+    @ObservationIgnored public weak var online: OnlinePlaybackCoordinator?
 
-    private var channel: RealtimeChannelV2?
-    private var channelTask: Task<Void, Never>?
-    private var tickTask: Task<Void, Never>?
-    private var cancellables = Set<AnyCancellable>()
+    @ObservationIgnored private var channel: RealtimeChannelV2?
+    @ObservationIgnored private var channelTask: Task<Void, Never>?
+    @ObservationIgnored private var tickTask: Task<Void, Never>?
+    @ObservationIgnored private var cancellables = Set<AnyCancellable>()
 
-    private var since: Double = 0
-    private var handledSince: [String: Double] = [:]
-    private var lastStates: [String: (msg: StateMessage, at: TimeInterval)] = [:]
-    private var lastSent: (position: Double, at: TimeInterval, playing: Bool)?
-    private var presenceRefs: [String: Set<String>] = [:]
-    private var sendScheduled = false
+    @ObservationIgnored private var since: Double = 0
+    @ObservationIgnored private var handledSince: [String: Double] = [:]
+    @ObservationIgnored private var lastStates: [String: (msg: StateMessage, at: TimeInterval)] = [:]
+    @ObservationIgnored private var lastSent: (position: Double, at: TimeInterval, playing: Bool)?
+    @ObservationIgnored private var presenceRefs: [String: Set<String>] = [:]
+    @ObservationIgnored private var sendScheduled = false
 
     /// Memoized cover lookups both ways. A nil value means nothing was found.
     private let catalogue = ITunesSearchClient()
-    private var coverURLs: [UUID: String?] = [:]
-    private var remoteCovers: [UUID: Data?] = [:]
+    @ObservationIgnored private var coverURLs: [UUID: String?] = [:]
+    @ObservationIgnored private var remoteCovers: [UUID: Data?] = [:]
 
     private var uptime: TimeInterval { ProcessInfo.processInfo.systemUptime }
 
@@ -114,8 +116,8 @@ public final class ContinuityService: ObservableObject {
         self.toast   = toast
         self.me      = Device(id: deviceID, name: name, platform: platform, quality: nil)
 
-        // `$state` fires in willSet: `engine.state` is still the old value here.
-        engine.$state
+        // `statePublisher` fires in willSet: `engine.state` is still the old value here.
+        engine.statePublisher
             .sink { [weak self] next in
                 guard let self else { return }
                 if next == .playing, engine.state != .playing, engine.remoteTransport == nil {
@@ -124,7 +126,7 @@ public final class ContinuityService: ObservableObject {
                 scheduleSend()
             }
             .store(in: &cancellables)
-        engine.queue.$currentIndex
+        engine.queue.currentIndexPublisher
             .sink { [weak self] _ in self?.scheduleSend() }
             .store(in: &cancellables)
     }

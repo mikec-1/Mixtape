@@ -29,16 +29,20 @@ public struct WatchedFolder: Identifiable, Codable, Hashable, Sendable {
 // MARK: - Store
 
 @MainActor
-public final class WatchedFoldersStore: ObservableObject {
+@Observable
+public final class WatchedFoldersStore {
 
-    @Published public private(set) var folders: [WatchedFolder] = []
+    public private(set) var folders: [WatchedFolder] = [] { didSet { changes.send() } }
+
+    /// Fires after `folders` changes, for `LocalFilesService`.
+    @ObservationIgnored public let changes = PassthroughSubject<Void, Never>()
 
     private let defaults: UserDefaults
     private static let key = "localFiles.watchedFolders.v1"
 
     /// Scopes opened this launch and kept open (AVPlayer may read a file for a
     /// whole song). Released at exit.
-    private var openScopes: [UUID: URL] = [:]
+    @ObservationIgnored private var openScopes: [UUID: URL] = [:]
 
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults

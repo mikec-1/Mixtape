@@ -11,11 +11,11 @@ import AppKit
 
 struct AccountPane: View {
 
-    @ObservedObject var vm: SettingsViewModel
+    @Bindable var vm: SettingsViewModel
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
     #if os(macOS)
-    @EnvironmentObject private var appState: MacAppState
+    @Environment(MacAppState.self) private var appState
     #endif
     @AppStorage(ProfileStatsService.sharingDefaultsKey) private var shareListeningActivity = true
     @AppStorage(Analytics.optInKey) private var helpImprove = false
@@ -200,15 +200,15 @@ struct AccountPane: View {
 
 struct GeneralPane: View {
 
-    @EnvironmentObject private var deps:  AppDependencies
-    @EnvironmentObject private var theme: ThemeManager
-    @ObservedObject private var meta = PlaylistMetadataService.shared
+    @Environment(AppDependencies.self) private var deps
+    @Bindable private var theme = ThemeManager.shared
+    @Bindable private var meta = PlaylistMetadataService.shared
     #if os(iOS)
     @AppStorage("haptics.enabled") private var hapticsEnabled = true
     @AppStorage(NowPlayingSurfaces.liveActivityKey) private var liveActivity = false
     #endif
     #if os(macOS)
-    @StateObject private var launchAtLogin = LaunchAtLogin.shared
+    private var launchAtLogin: LaunchAtLogin { .shared }
     @AppStorage(MacMenuBarPlayer.visibleKey) private var showsMenuBarPlayer = true
     /// The value waiting on the restart prompt.
     @State private var accelerationChange: Bool?
@@ -444,7 +444,7 @@ private struct NotificationToggleRow: View {
 /// None plus the preset colours, one tap each.
 private struct BackdropSwatches: View {
 
-    @ObservedObject var theme: ThemeManager
+    @Bindable var theme: ThemeManager
 
     var body: some View {
         HStack(spacing: 8) {
@@ -487,8 +487,8 @@ private struct BackdropSwatches: View {
 struct PlaybackPane: View {
 
     // Passed in because only these two republish; a picker bound through `deps` goes stale.
-    @ObservedObject var engine:    PlaybackEngine
-    @ObservedObject var equalizer: AudioEqualizer
+    var engine:    PlaybackEngine
+    var equalizer: AudioEqualizer
     @AppStorage("playback.crossfadeOnSkip") private var crossfadeOnSkip = false
     @AppStorage("playback.normalizeVolume") private var normalizeVolume = true
     @AppStorage("playback.trimPadding")     private var trimPadding = true
@@ -693,10 +693,10 @@ struct PlaybackSpeed: Identifiable, Hashable {
 
 struct DownloadsPane: View {
 
-    @ObservedObject var manager: DownloadManager
-    @EnvironmentObject private var exportManager: ExportManager
-    @EnvironmentObject private var deps: AppDependencies
-    @ObservedObject private var prefetch = PlaybackPrefetchSettings.shared
+    var manager: DownloadManager
+    @Environment(ExportManager.self) private var exportManager
+    @Environment(AppDependencies.self) private var deps
+    private var prefetch: PlaybackPrefetchSettings { .shared }
     @State private var confirmRequality = false
     @State private var confirmResave = false
 
@@ -860,12 +860,12 @@ struct DownloadsPane: View {
 
 struct StoragePane: View {
 
-    @ObservedObject var manager: DownloadManager
-    @EnvironmentObject private var deps: AppDependencies
+    var manager: DownloadManager
+    @Environment(AppDependencies.self) private var deps
 
     @State private var report = SettingsStorageReport.empty
     @State private var isMeasuring = true
-    @ObservedObject private var lyricsStore = UserLyricsStore.shared
+    private var lyricsStore: UserLyricsStore { .shared }
 
     @State private var confirmRemoveDownloads = false
     /// The user-lyrics list takes the whole pane, like Connections' sub-pages.
@@ -1007,7 +1007,7 @@ struct StoragePane: View {
             Text("\(manager.offlineCount) song\(manager.offlineCount == 1 ? "" : "s") will need the network again. Any file copies in your export folder are kept, and songs you imported yourself aren't touched.")
         }
         .sheet(isPresented: $showMergeDuplicates) {
-            MergeDuplicatesSheet().environmentObject(deps)
+            MergeDuplicatesSheet().environment(deps)
         }
     }
 
@@ -1052,8 +1052,8 @@ struct StoragePane: View {
 
 struct SyncPane: View {
 
-    @ObservedObject var vm: SettingsViewModel
-    @EnvironmentObject private var deps: AppDependencies
+    @Bindable var vm: SettingsViewModel
+    @Environment(AppDependencies.self) private var deps
 
     var body: some View {
         SettingsPage(title: "Sync") {
@@ -1139,12 +1139,12 @@ struct SyncPane: View {
 
 struct ConnectionsPane: View {
 
-    @ObservedObject var vm: SettingsViewModel
+    @Bindable var vm: SettingsViewModel
 
-    @EnvironmentObject private var deps: AppDependencies
-    @ObservedObject private var route = SettingsRoute.shared
+    @Environment(AppDependencies.self) private var deps
+    private var route: SettingsRoute { .shared }
 
-    @ObservedObject private var scrobbler = LastFmScrobbler.shared
+    @Bindable private var scrobbler = LastFmScrobbler.shared
     @State private var showLastFm = false
     /// The Spotify library picker takes the whole pane. See SpotifyConnectionView.
     @State private var showSpotifyLibrary = false
@@ -1152,7 +1152,7 @@ struct ConnectionsPane: View {
     @State private var showSpotifyLikesPush = false
 
     #if os(iOS)
-    @EnvironmentObject private var resolverStatus: ResolverStatusService
+    @Environment(ResolverStatusService.self) private var resolverStatus
     @AppStorage(RemoteResolverService.baseURLDefaultsKey) private var resolverURLString = ""
     @State private var resolverTesting = false
     @State private var resolverTestResult: ResolverTestResult?
@@ -1429,8 +1429,8 @@ struct AboutPane: View {
 
 struct DeveloperPane: View {
 
-    @ObservedObject var vm: SettingsViewModel
-    @EnvironmentObject private var deps: AppDependencies
+    @Bindable var vm: SettingsViewModel
+    @Environment(AppDependencies.self) private var deps
     @State private var recapError: String?
 
     var body: some View {
@@ -1472,12 +1472,12 @@ struct DeveloperPane: View {
 /// finishes on mixtaped.tech, next to the data export.
 struct DangerZonePane: View {
 
-    @ObservedObject var vm: SettingsViewModel
+    @Bindable var vm: SettingsViewModel
 
-    @EnvironmentObject private var deps:  AppDependencies
-    @EnvironmentObject private var theme: ThemeManager
+    @Environment(AppDependencies.self) private var deps
+    @Environment(ThemeManager.self) private var theme
     @Environment(\.openURL) private var openURL
-    @ObservedObject private var lyricsStore = UserLyricsStore.shared
+    private var lyricsStore: UserLyricsStore { .shared }
 
     @State private var confirmResetSettings    = false
     @State private var confirmRemoveLyrics     = false

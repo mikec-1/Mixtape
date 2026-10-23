@@ -7,6 +7,7 @@ import Combine
 import ServiceManagement
 #endif
 import OSLog
+import Observation
 
 // MARK: - Storage report
 
@@ -62,14 +63,15 @@ nonisolated struct SettingsStorageReport: Equatable {
 #if os(macOS)
 /// Wraps `SMAppService` as a `Bool`. Registration can fail (unsigned build, denied in
 /// System Settings), so the value is re-read after every write.
+@Observable
 @MainActor
-final class LaunchAtLogin: ObservableObject {
+final class LaunchAtLogin {
 
     static let shared = LaunchAtLogin()
 
-    @Published private(set) var isEnabled: Bool
+    private(set) var isEnabled: Bool
     /// Set when the last attempt failed, for display next to the switch.
-    @Published private(set) var failure: String?
+    private(set) var failure: String?
 
     private init() {
         isEnabled = SMAppService.mainApp.status == .enabled

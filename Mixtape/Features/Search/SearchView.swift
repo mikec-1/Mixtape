@@ -3,11 +3,11 @@ import Combine
 
 public struct SearchView: View {
 
-    @EnvironmentObject private var deps:   AppDependencies
-    @EnvironmentObject private var engine: PlaybackEngine
+    @Environment(AppDependencies.self) private var deps
+    @Environment(PlaybackEngine.self) private var engine
     #if os(iOS)
-    @EnvironmentObject private var coordinator: OnlinePlaybackCoordinator
-    @EnvironmentObject private var iosAppState: IOSAppState
+    @Environment(OnlinePlaybackCoordinator.self) private var coordinator
+    @Environment(IOSAppState.self) private var iosAppState
     #endif
 
     @State private var query: String = ""
@@ -25,13 +25,13 @@ public struct SearchView: View {
     #if os(iOS)
     /// The catalogue half of the field, shared with Discover. Observed here because this
     /// view decides whether there are any results.
-    @ObservedObject private var catalogue = DiscoverSessionStore.shared
+    private var catalogue: DiscoverSessionStore { .shared }
     #endif
 
     // Recent searches persisted across launches (newline-delimited, newest first).
 
     /// Past searches, shared with the Mac's dropdown. See `SearchSuggestionsStore`.
-    @ObservedObject private var history = SearchSuggestionsStore.shared
+    private var history: SearchSuggestionsStore { .shared }
 
     private var isSearching: Bool { !query.trimmingCharacters(in: .whitespaces).isEmpty }
 
@@ -140,14 +140,14 @@ public struct SearchView: View {
             #else
             .navigationTitle("Search")
             #endif
-            .navigationDestination(for: Album.self)  { AlbumDetailView(album: $0).environmentObject(deps) }
-            .navigationDestination(for: Artist.self) { ArtistDetailView(artist: $0).environmentObject(deps) }
+            .navigationDestination(for: Album.self)  { AlbumDetailView(album: $0).environment(deps) }
+            .navigationDestination(for: Artist.self) { ArtistDetailView(artist: $0).environment(deps) }
             .navigationDestination(for: Playlist.self) {
-                PlaylistDetailView(playlist: $0).environmentObject(deps)
+                PlaylistDetailView(playlist: $0).environment(deps)
             }
             .navigationDestination(for: UserProfile.self) { profile in
                 ProfilePageView(profile: profile)
-                    .environmentObject(deps)
+                    .environment(deps)
                     .miniPlayerSafeArea()
             }
             #if os(iOS)
@@ -157,8 +157,8 @@ public struct SearchView: View {
             #endif
             .navigationDestination(for: BrowseCategory.self) { category in
                 SearchCategoryListView(category: category)
-                    .environmentObject(deps)
-                    .environmentObject(engine)
+                    .environment(deps)
+                    .environment(engine)
                     .miniPlayerSafeArea()
             }
         }
@@ -1115,8 +1115,8 @@ struct SearchCategoryListView: View {
 
     let category: BrowseCategory
 
-    @EnvironmentObject private var deps:   AppDependencies
-    @EnvironmentObject private var engine: PlaybackEngine
+    @Environment(AppDependencies.self) private var deps
+    @Environment(PlaybackEngine.self) private var engine
 
     /// Bumped on download manager publishes, since `body` reads download state without observing it.
     @State private var downloadTick = 0
@@ -1287,8 +1287,8 @@ private extension View {
 
 #Preview {
     SearchView()
-        .environmentObject(AppDependencies())
-        .environmentObject(PlaybackEngine(
+        .environment(AppDependencies())
+        .environment(PlaybackEngine(
             queue:       QueueService(),
             fileStorage: SupabaseFileStorageService(client: SupabaseConfig.client),
             equalizer:   AudioEqualizer()

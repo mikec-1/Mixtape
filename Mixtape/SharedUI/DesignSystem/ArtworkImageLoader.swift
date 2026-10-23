@@ -10,6 +10,7 @@ import Combine
 import UIKit
 #else
 import AppKit
+import Observation
 #endif
 
 /// What a view wants drawn. No `Data` case: callers with bytes use `mixImage(from:)`.
@@ -23,8 +24,9 @@ enum ArtworkSource: Hashable, Sendable {
 
 /// Decoded covers keyed by row and size. Separate from `ArtworkDecodeCache`
 /// (keyed by bytes), since a view here only has an id.
+@Observable
 @MainActor
-final class ArtworkImageLoader: ObservableObject {
+final class ArtworkImageLoader {
 
     static let shared = ArtworkImageLoader()
 
@@ -32,7 +34,7 @@ final class ArtworkImageLoader: ObservableObject {
 
     /// Candidate refs for a playlist's cover, best first. Supplied by
     /// `AppDependencies`; the rule lives in `LibraryService`.
-    var playlistCoverRefs: ((UUID) -> [ArtworkRef])?
+    @ObservationIgnored var playlistCoverRefs: ((UUID) -> [ArtworkRef])?
 
     private init() {
         // Charged by decoded size. 48MB is roughly 700 row covers.
@@ -70,7 +72,7 @@ final class ArtworkImageLoader: ObservableObject {
     /// its source changes, and a playlist's source (its id) doesn't change when the
     /// cover does, so this counter re-runs them. One counter for all refs:
     /// invalidations are rare and a per-ref map would have to be published too.
-    @Published private(set) var generation = 0
+    private(set) var generation = 0
 
     /// Drops everything (wipe, account switch, refresh), alongside `ArtworkProvider`.
     func invalidateAll() {
@@ -195,7 +197,7 @@ struct AsyncArtworkImage<Placeholder: View>: View {
     @State private var loaded: PlatformImage?
     /// Not read directly; re-runs `.task` when a cover changes under the same
     /// source. See `ArtworkImageLoader.generation`.
-    @ObservedObject private var loader = ArtworkImageLoader.shared
+    private var loader: ArtworkImageLoader { .shared }
 
     /// How long a row must stay on screen before loading, so fast scrolling is free.
     private static var settleDelay: Duration { .milliseconds(60) }

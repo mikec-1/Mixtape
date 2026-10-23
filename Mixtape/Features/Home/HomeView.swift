@@ -161,7 +161,7 @@ private final class HomeShelvesMemo: ObservableObject {
 
             let tracks       = library.tracks
             let favouriteIDs = library.favouriteIDs()
-            let topNames     = stats().topArtists.map(\.name)
+            let topNames     = self.topNames(stats)
             let recentKeys   = Set(historyKeys.prefix(12))
 
             // `Task.detached`, not `nonisolated async`, which runs on the caller's actor
@@ -177,6 +177,16 @@ private final class HomeShelvesMemo: ObservableObject {
             self.favourites      = shelves.favourites
             self.recommendations = shelves.recommendations
         }
+    }
+
+    /// All-time stats fetch every play on main, and history changes on every skip. Picks can lag a bit.
+    private var topNamesCache: (at: Date, names: [String])?
+
+    private func topNames(_ stats: @MainActor () -> ListeningStats) -> [String] {
+        if let cached = topNamesCache, Date().timeIntervalSince(cached.at) < 120 { return cached.names }
+        let names = stats().topArtists.map(\.name)
+        topNamesCache = (Date(), names)
+        return names
     }
 
     private struct LibraryShelves: Sendable {
@@ -223,15 +233,15 @@ private final class HomeShelvesMemo: ObservableObject {
 
 public struct HomeSections: View {
 
-    @EnvironmentObject private var deps: AppDependencies
-    @EnvironmentObject private var engine: PlaybackEngine
-    @EnvironmentObject private var library: LibraryService
+    @Environment(AppDependencies.self) private var deps
+    @Environment(PlaybackEngine.self) private var engine
+    @Environment(LibraryService.self) private var library
 
     /// For "Recently played" playlists.
-    @ObservedObject private var meta = PlaylistMetadataService.shared
+    private var meta: PlaylistMetadataService { .shared }
 
     /// Observed so deleting a smart playlist updates the shelf.
-    @EnvironmentObject private var smartService: SmartPlaylistService
+    @Environment(SmartPlaylistService.self) private var smartService
 
     /// Invoked when a quick-link chip is tapped. Host translates navigation.
     private let onQuickLink: (HomeQuickLink) -> Void
@@ -506,14 +516,14 @@ public struct HomeSections: View {
         }
         .sheet(isPresented: $showsSmartEditor) {
             SmartPlaylistEditorView(service: smartService)
-                .environmentObject(deps)
+                .environment(deps)
         }
         .sheet(isPresented: $showsTapes, onDismiss: {
             if let tape = pendingTape { pendingTape = nil; openSmart(tape) }
         }) {
             TapeArchiveView(service: smartService) { pendingTape = $0 }
-                .environmentObject(engine)
-                .environmentObject(library)
+                .environment(engine)
+                .environment(library)
         }
         .task(id: prefetchKey) {
             guard bands.contains(.top) else { return }
@@ -526,13 +536,13 @@ public struct HomeSections: View {
         #if os(iOS)
         .navigationDestination(item: $navSmart) { playlist in
             SmartPlaylistDetailView(playlist: playlist, service: smartService)
-                .environmentObject(deps)
-                .environmentObject(engine)
+                .environment(deps)
+                .environment(engine)
         }
         .navigationDestination(item: $navPlaylist) { playlist in
             PlaylistDetailView(playlist: playlist)
-                .environmentObject(deps)
-                .environmentObject(engine)
+                .environment(deps)
+                .environment(engine)
         }
         #endif
     }
@@ -887,9 +897,9 @@ public struct HomeSections: View {
 
 public struct HomeStatsCard: View {
 
-    @EnvironmentObject private var deps: AppDependencies
-    @EnvironmentObject private var engine: PlaybackEngine
-    @EnvironmentObject private var library: LibraryService
+    @Environment(AppDependencies.self) private var deps
+    @Environment(PlaybackEngine.self) private var engine
+    @Environment(LibraryService.self) private var library
 
     @State private var showStats = false
 
@@ -923,8 +933,8 @@ public struct HomeStatsCard: View {
         }
         .sheet(isPresented: $showStats) {
             ListeningStatsView()
-                .environmentObject(deps)
-                .environmentObject(engine)
+                .environment(deps)
+                .environment(engine)
         }
     }
 }
@@ -934,8 +944,8 @@ public struct HomeStatsCard: View {
 
 public struct HomeView: View {
 
-    @EnvironmentObject private var engine: PlaybackEngine
-    @EnvironmentObject private var library: LibraryService
+    @Environment(PlaybackEngine.self) private var engine
+    @Environment(LibraryService.self) private var library
 
     private let onQuickLink: (HomeQuickLink) -> Void
     private let onPlay: (_ track: Track, _ context: [Track], _ origin: String) -> Void

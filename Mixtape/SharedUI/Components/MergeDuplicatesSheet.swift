@@ -10,7 +10,7 @@ extension Notification.Name {
 
 struct MergeDuplicatesSheet: View {
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
 
     @State private var plan: DuplicateMergePlan?
     @State private var mergedCount: Int?

@@ -4,7 +4,7 @@ import SwiftUI
 
 struct SkipNoticeBox: View {
 
-    @ObservedObject private var unavailable = UnavailableTracks.shared
+    private var unavailable: UnavailableTracks { .shared }
 
     var body: some View {
         if !unavailable.recentSkips.isEmpty {

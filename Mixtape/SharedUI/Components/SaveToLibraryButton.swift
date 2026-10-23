@@ -21,7 +21,7 @@ struct SaveToLibraryButton: View {
     var dimmed: Bool = false
     let action: () -> Void
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
     /// Optimistic flag between the tap and the library row appearing.
     @State private var justSaved = false
     @State private var showingSavedIn = false
@@ -90,7 +90,7 @@ struct SaveToLibraryButton: View {
             // Re-read the track: the saved row has real artwork.
             if let track = libraryTrack {
                 AddToPlaylistSheet(track: track, purpose: .savedIn)
-                    .environmentObject(deps)
+                    .environment(deps)
             }
         }
         #endif
@@ -128,9 +128,9 @@ struct NowPlayingSaveButton: View {
     let trackID: UUID
     var size: CGFloat = 17
 
-    @EnvironmentObject private var deps: AppDependencies
-    @EnvironmentObject private var coordinator: OnlinePlaybackCoordinator
-    @EnvironmentObject private var engine: PlaybackEngine
+    @Environment(AppDependencies.self) private var deps
+    @Environment(OnlinePlaybackCoordinator.self) private var coordinator
+    @Environment(PlaybackEngine.self) private var engine
 
     var body: some View {
         // Unsaved Discover songs save through the coordinator; library songs just need

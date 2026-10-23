@@ -26,11 +26,11 @@ public struct ImportView: View {
 
     #if os(iOS)
     // Used to queue enrichment candidates for review after import.
-    @EnvironmentObject private var iosAppState: IOSAppState
+    @Environment(IOSAppState.self) private var iosAppState
     #endif
 
     /// Passed explicitly into the nested link sheet.
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
 
     // MARK: - State
 
@@ -74,9 +74,9 @@ public struct ImportView: View {
         }
         .sheet(item: $linkService) { service in
             LinkImportView(service: service)
-                .environmentObject(deps)
+                .environment(deps)
                 #if os(iOS)
-                .environmentObject(iosAppState)
+                .environment(iosAppState)
                 #endif
         }
         .sheet(isPresented: $showSpotifyImport) {
@@ -95,8 +95,8 @@ public struct ImportView: View {
             set: { _ in iosAppState.dequeueReview() }
         )) { item in
             IOSMetadataReviewSheet(item: item)
-                .environmentObject(deps)
-                .environmentObject(iosAppState)
+                .environment(deps)
+                .environment(iosAppState)
         }
         #endif
     }

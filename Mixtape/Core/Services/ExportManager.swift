@@ -4,6 +4,7 @@
 import Foundation
 import OSLog
 import Combine
+import Observation
 
 // MARK: - ID3TagWriter
 // Writes an ID3v2.3 tag to an MP3, replacing any existing one. Audio isn't re-encoded.
@@ -94,24 +95,23 @@ private enum ID3TagWriter {
     }
 }
 
-public final class ExportManager: ObservableObject {
+@Observable
+public final class ExportManager {
     
     public static let shared = ExportManager()
     
-    @Published public private(set) var exportURL: URL?
+    public private(set) var exportURL: URL?
     
     public var currentUserID: String? = nil {
         didSet {
-            objectWillChange.send()
             loadExportURL()
         }
     }
     
-    public var currentUsername: String? = nil {
-        didSet {
-            objectWillChange.send()
-        }
-    }
+    public var currentUsername: String? = nil
+
+    /// Bumped by `setDidSkip`, so views reading `didSkip` see the defaults write.
+    private var skipRevision = 0
     
     private var bookmarkKey: String {
         if let id = currentUserID {
@@ -188,12 +188,13 @@ public final class ExportManager: ObservableObject {
     }
 
     public var didSkip: Bool {
-        UserDefaults.standard.bool(forKey: skipKey)
+        _ = skipRevision
+        return UserDefaults.standard.bool(forKey: skipKey)
     }
 
     public func setDidSkip(_ value: Bool) {
         UserDefaults.standard.set(value, forKey: skipKey)
-        objectWillChange.send()
+        skipRevision += 1
     }
 
     public var suggestedURL: URL {

@@ -9,8 +9,8 @@ import SwiftUI
 
 struct UserLyricsPage: View {
 
-    @EnvironmentObject private var deps: AppDependencies
-    @ObservedObject private var store = UserLyricsStore.shared
+    @Environment(AppDependencies.self) private var deps
+    private var store: UserLyricsStore { .shared }
     let onBack: () -> Void
 
     /// Built on appear and after changes, not in body: it hashes the whole library.
@@ -55,7 +55,7 @@ struct UserLyricsPage: View {
         // The editor writes straight to the store, so rebuild on the way out.
         .sheet(item: $editing, onDismiss: reload) { track in
             LyricsEditorSheet(track: track)
-                .environmentObject(deps)
+                .environment(deps)
         }
         .alert("Remove these lyrics?", isPresented: $confirmRemoveOrphans) {
             Button("Remove", role: .destructive) {

@@ -4,6 +4,7 @@
 import Foundation
 import Supabase
 import Combine
+import Observation
 import AuthenticationServices
 #if os(iOS)
 import UIKit
@@ -13,12 +14,14 @@ import AppKit
 import OSLog
 
 @MainActor
-public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
+@Observable
+public final class SupabaseAuthService: AuthServiceProtocol {
 
     // MARK: - Published State
 
-    @Published private(set) public var authState: AuthState = .loading {
+    private(set) public var authState: AuthState = .loading {
         didSet {
+            authStateSubject.send(authState)
             // Scope EQ to the signed-in user so settings don't leak between accounts.
             if case .authenticated(let user) = authState {
                 AudioEqualizer.currentUserID = user.id.uuidString
@@ -42,32 +45,37 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
 
     /// Running on a cached session because the token couldn't be refreshed. Still signed in,
     /// just no server to confirm with. See `enterOffline`.
-    @Published private(set) public var isOffline: Bool = false
+    private(set) public var isOffline: Bool = false { didSet { isOfflineSubject.send(isOffline) } }
 
     /// Set by a password-reset link. The session is live for updatePassword, but authState
     /// stays .unauthenticated until the new password is set.
-    @Published public private(set) var isAwaitingPasswordReset: Bool = false
+    public private(set) var isAwaitingPasswordReset: Bool = false
 
     /// Set after signUp() when email confirmation is required. Cleared by the confirmation link.
-    @Published public private(set) var pendingEmailConfirmation: Bool = false
+    public private(set) var pendingEmailConfirmation: Bool = false
 
     /// Set after a social sign-in while the user still has the trigger's `user_xxxxxxxx`
     /// username. RootView shows a one-time, skippable prompt.
-    @Published public private(set) var pendingUsernameSelection: Bool = false
+    public private(set) var pendingUsernameSelection: Bool = false
 
     /// Username suggestion from the provider profile, or nil.
     public private(set) var suggestedUsername: String?
     /// The provider's name as given ("Mike Smith"), to pre-fill the display name.
     public private(set) var suggestedDisplayName: String?
     /// Asks only for a display name (older accounts that already have a real username).
-    @Published public private(set) var promptNameOnly = false
-    private var checkedDisplayName = false
+    public private(set) var promptNameOnly = false
+    @ObservationIgnored private var checkedDisplayName = false
 
     // MARK: - Protocol
 
     public var authStatePublisher: AnyPublisher<AuthState, Never> {
-        $authState.eraseToAnyPublisher()
+        authStateSubject.eraseToAnyPublisher()
     }
+
+    /// `$isOffline` for Combine users; `@Observable` has no projections.
+    public var isOfflinePublisher: AnyPublisher<Bool, Never> { isOfflineSubject.eraseToAnyPublisher() }
+    @ObservationIgnored private let authStateSubject = CurrentValueSubject<AuthState, Never>(.loading)
+    @ObservationIgnored private let isOfflineSubject = CurrentValueSubject<Bool, Never>(false)
 
     public var currentUser: AppUser? {
         if case .authenticated(let user) = authState { return user }
@@ -80,12 +88,12 @@ public final class SupabaseAuthService: ObservableObject, AuthServiceProtocol {
 
     // Building the client is slow, so it's created on first use instead of at launch.
     private let clientProvider: () -> SupabaseClient
-    private lazy var client: SupabaseClient = clientProvider()
-    private var listenerTask: Task<Void, Never>?
+    @ObservationIgnored private lazy var client: SupabaseClient = clientProvider()
+    @ObservationIgnored private var listenerTask: Task<Void, Never>?
 
     /// Continuation used by restoreSession() to wait for the first SDK event.
-    private var restoreContinuation: CheckedContinuation<Void, Never>?
-    private var didReceiveInitialEvent = false
+    @ObservationIgnored private var restoreContinuation: CheckedContinuation<Void, Never>?
+    @ObservationIgnored private var didReceiveInitialEvent = false
 
     // MARK: - Init
 

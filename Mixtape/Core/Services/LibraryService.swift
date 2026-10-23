@@ -4,15 +4,18 @@
 import Foundation
 import SwiftData
 import Combine
+import Observation
 import OSLog
 
-@MainActor
-public final class LibraryService: ObservableObject {
+@MainActor @Observable
+public final class LibraryService {
 
     // MARK: - Published Library State
 
-    @Published public private(set) var tracks:    [Track]    = [] {
+    public private(set) var tracks:    [Track]    = [] {
         didSet {
+            tracksSubject.send(tracks)
+            noteLocalChange()
             revision &+= 1
             trackRevision &+= 1
             rebuildTrackCoverIndex()
@@ -26,13 +29,15 @@ public final class LibraryService: ObservableObject {
 
     /// Whether there's a network. Nothing is hidden: unplayable songs draw grey. The Downloaded filter turns
     /// on when this goes true.
-    @Published public var offlineOnly: Bool = false
+    public var offlineOnly: Bool = false { didSet { noteLocalChange() } }
 
     /// The Downloaded filter, a user choice. While true the display accessors below hide songs with no local file.
     /// `tracks` itself is never filtered: sync, smart-playlist generators and the Spotify push all read it.
-    @Published public var downloadedOnly: Bool = false {
+    public var downloadedOnly: Bool = false {
         // Memo caches keyed on `revision` can't otherwise tell the same ids now resolve to fewer songs.
         didSet {
+            downloadedOnlySubject.send(downloadedOnly)
+            noteLocalChange()
             guard oldValue != downloadedOnly else { return }
             revision &+= 1
             trackRevision &+= 1
@@ -40,7 +45,7 @@ public final class LibraryService: ObservableObject {
     }
 
     /// What plays offline. Supplied by `AppDependencies` so the library holds no download manager reference.
-    public var offlinePlayableIDs: () -> Set<UUID> = { [] }
+    @ObservationIgnored public var offlinePlayableIDs: () -> Set<UUID> = { [] }
 
     /// `tracks` minus what can't play offline. Display lists read this; anything that computes reads `tracks`.
     public var displayTracks: [Track] {
@@ -57,18 +62,30 @@ public final class LibraryService: ObservableObject {
     }
 
     /// Bumped whenever `tracks` or `playlists` is replaced, for views caching derived lists. Favourites are a
-    /// playlist edit, hence both. Not `@Published`: it moves in lockstep with them.
+    /// playlist edit, hence both. It moves in lockstep with them.
     public private(set) var revision: UInt64 = 0
 
     /// Bumped only when `tracks` is replaced. For caches keyed on the track array plus an explicit id list:
     /// playing a song is a playlist write, so `revision` would invalidate them on every press.
     public private(set) var trackRevision: UInt64 = 0
-    @Published public private(set) var albums:    [Album]    = []
-    @Published public private(set) var artists:   [Artist]   = []
+    public private(set) var albums:    [Album]    = [] { didSet { albumsSubject.send(albums); noteLocalChange() } }
+    public private(set) var artists:   [Artist]   = [] { didSet { artistsSubject.send(artists); noteLocalChange() } }
     /// Playlists, with Favourites always pinned at index 0.
-    @Published public private(set) var playlists: [Playlist] = [] {
-        didSet { revision &+= 1 }
+    public private(set) var playlists: [Playlist] = [] {
+        didSet { playlistsSubject.send(playlists); noteLocalChange(); revision &+= 1 }
     }
+
+    /// `$tracks` and friends for Combine users; `@Observable` has no projections. Sent after the set.
+    public var tracksPublisher: AnyPublisher<[Track], Never> { tracksSubject.eraseToAnyPublisher() }
+    public var albumsPublisher: AnyPublisher<[Album], Never> { albumsSubject.eraseToAnyPublisher() }
+    public var artistsPublisher: AnyPublisher<[Artist], Never> { artistsSubject.eraseToAnyPublisher() }
+    public var playlistsPublisher: AnyPublisher<[Playlist], Never> { playlistsSubject.eraseToAnyPublisher() }
+    public var downloadedOnlyPublisher: AnyPublisher<Bool, Never> { downloadedOnlySubject.eraseToAnyPublisher() }
+    @ObservationIgnored private let tracksSubject = CurrentValueSubject<[Track], Never>([])
+    @ObservationIgnored private let albumsSubject = CurrentValueSubject<[Album], Never>([])
+    @ObservationIgnored private let artistsSubject = CurrentValueSubject<[Artist], Never>([])
+    @ObservationIgnored private let playlistsSubject = CurrentValueSubject<[Playlist], Never>([])
+    @ObservationIgnored private let downloadedOnlySubject = CurrentValueSubject<Bool, Never>(false)
 
     // MARK: - Dependencies
 
@@ -85,31 +102,26 @@ public final class LibraryService: ObservableObject {
     // MARK: - Local change signal
 
     /// Fires when something changed the library, not when a refresh merely republished it. The sync push
-    /// watches this; `objectWillChange` is for view invalidation only.
+    /// watches this; observation is for view invalidation only.
     public let localChanges = PassthroughSubject<Void, Never>()
 
     /// Non-zero while a refresh pass republishes. A counter because passes can overlap in `loadForDisplay`.
-    private var refreshDepth = 0
+    @ObservationIgnored private var refreshDepth = 0
 
-    /// Forwards `objectWillChange` to `localChanges`, minus the republishes.
-    private var localChangeForward: AnyCancellable?
-
-    private func startLocalChangeForwarding() {
-        localChangeForward = objectWillChange
-            .sink { [weak self] _ in
-                guard let self, self.refreshDepth == 0 else { return }
-                self.localChanges.send()
-            }
+    /// Called by each library property's `didSet`: `localChanges`, minus the republishes.
+    private func noteLocalChange() {
+        guard refreshDepth == 0 else { return }
+        localChanges.send()
     }
 
     /// Called with the selection just before it leaves the library, while still in `tracks`. Installed by
     /// `AppDependencies` for downloads and playback, which this service doesn't own. Before, not after:
     /// `DownloadManager.removeDownloads(for:)` looks the tracks up here. Batched to avoid per-song disk work.
-    public var onTracksWillDelete: ((Set<UUID>) -> Void)?
+    @ObservationIgnored public var onTracksWillDelete: ((Set<UUID>) -> Void)?
 
     /// A playlist from outside was just created (import, Spotify transfer, saved share). Only fired for
     /// `imported: true`, never for playlists arriving by sync, which would download the whole library.
-    public var onPlaylistImported: ((UUID) -> Void)?
+    @ObservationIgnored public var onPlaylistImported: ((UUID) -> Void)?
 
     // MARK: - Init
 
@@ -128,7 +140,6 @@ public final class LibraryService: ObservableObject {
         self.favoriteRepo = favoriteRepo
         self.deviceID     = deviceID
 
-        startLocalChangeForwarding()
         ensureSystemPlaylists()
         observePinChanges()
     }
@@ -158,7 +169,7 @@ public final class LibraryService: ObservableObject {
         }
     }
 
-    private var pinObserver: NSObjectProtocol?
+    @ObservationIgnored private var pinObserver: NSObjectProtocol?
 
     deinit {
         if let pinObserver { NotificationCenter.default.removeObserver(pinObserver) }
@@ -199,7 +210,7 @@ public final class LibraryService: ObservableObject {
         }
     }
 
-    @Published public private(set) var activity: Activity = .idle
+    public private(set) var activity: Activity = .idle { didSet { noteLocalChange() } }
 
     /// Announces library work, cleared when the body returns or throws.
     func withActivity<T>(_ label: String, detail: String? = nil, _ body: () throws -> T) rethrows -> T {
@@ -219,14 +230,14 @@ public final class LibraryService: ObservableObject {
     }
 
     /// A refresh that has been asked for but not run yet. See `scheduleRefresh`.
-    private var pendingRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var pendingRefreshTask: Task<Void, Never>?
 
     /// Live track ids as of the last refresh that ran the repair passes. Nil until then, so launch repairs once.
-    private var lastRepairedTrackIDs: Set<UUID>?
+    @ObservationIgnored private var lastRepairedTrackIDs: Set<UUID>?
 
     /// Fetch cost of the last refresh and whether it ran repairs, for the refresh log line.
-    private var fetchMilliseconds = 0
-    private var didRunRepairs = false
+    @ObservationIgnored private var fetchMilliseconds = 0
+    @ObservationIgnored private var didRunRepairs = false
 
     /// Asks for a refresh soon, coalescing bursts. A full refresh is expensive, so loops call this instead;
     /// callers that need current state now use `flushPendingRefresh()`.
@@ -354,7 +365,7 @@ public final class LibraryService: ObservableObject {
     }
 
     /// The repair-and-publish half of a refresh, given rows read elsewhere. Main actor: the repairs use
-    /// main-actor repositories and the results are `@Published`.
+    /// main-actor repositories and the results are observed.
     private func apply(_ snapshot: LibrarySnapshot) {
         mixMainActivity("library-refresh/apply") { applyOnMain(snapshot) }
     }
@@ -437,7 +448,7 @@ public final class LibraryService: ObservableObject {
             }
 
             mixMainActivity("library-refresh/publish-tracks") {
-                // Only assign when changed: `@Published` announces on assignment, and republishing an equal library
+                // Only assign when changed: observation announces every assignment, and republishing an equal library
                 // re-renders every observer. The compare is cheap (no artwork blobs in these rows).
                 let tracksChanged = tracks != allTracks
                 if tracksChanged {
@@ -469,18 +480,18 @@ public final class LibraryService: ObservableObject {
             if repairsNeeded { mixMainActivity("library-refresh/prune-playlists") { prunePlaylistsOfDeletedTracks(allTracks) } }
 
             // All Songs is rebuilt on every refresh so it matches exactly what this device holds, synced tracks included.
+            // From the playlists this pass already published, not a second read of every row.
             mixMainActivity("library-refresh/all-songs") {
-                if var allSongs = try? playlistRepo.fetch(id: Playlist.allSongsID) {
-                    let albumOnly = SavedAlbumsService.shared.albumOnlyIDs
-                    let held      = heldTrackIDs()
-                    // Album-only songs are held but not listed, like Spotify keeps a saved album out of Liked Songs.
-                    let expectedIDs = allTracks.sorted { $0.dateImported < $1.dateImported }.map(\.id)
-                        .filter { held.contains($0) && !albumOnly.contains($0) }
-                    if allSongs.trackIDs != expectedIDs {
-                        allSongs.trackIDs = expectedIDs
-                        try? playlistRepo.save(allSongs)
-                    }
-                }
+                guard let listed = playlists.first(where: \.isAllSongs) else { return }
+                let albumOnly = SavedAlbumsService.shared.albumOnlyIDs
+                let held      = heldTrackIDs(in: playlists)
+                // Album-only songs are held but not listed, like Spotify keeps a saved album out of Liked Songs.
+                let expectedIDs = allTracks.sorted { $0.dateImported < $1.dateImported }.map(\.id)
+                    .filter { held.contains($0) && !albumOnly.contains($0) }
+                guard listed.trackIDs != expectedIDs,
+                      var allSongs = try? playlistRepo.fetch(id: Playlist.allSongsID) else { return }
+                allSongs.trackIDs = expectedIDs
+                try? playlistRepo.save(allSongs)
             }
     }
 
@@ -516,6 +527,17 @@ public final class LibraryService: ObservableObject {
         refreshPlaylists()
     }
 
+    /// Republishes rows already in the library after a metadata edit or a re-file, with their buckets, without
+    /// re-reading everything. Membership doesn't change, so the sweeps have nothing to do until the next refresh.
+    public func publishEdited(_ rows: [Track]) {
+        flushDirtyArtwork()
+        let withCover = rows.filter { $0.artworkData != nil }.map(\.id)
+        // Published rows carry no cover bytes; one that did would make the next refresh republish everything.
+        insertLocally(rows.map { var row = $0; row.artworkData = nil; return row })
+        tracksWithArtwork.formUnion(withCover)
+        publishBuckets()
+    }
+
     /// Republishes the album and artist arrays only, for callers that filed new rows after `insertLocally`.
     public func publishBuckets() {
         let liveIDs = Set(tracks.lazy.filter { !$0.isDeleted }.map(\.id))
@@ -545,8 +567,15 @@ public final class LibraryService: ObservableObject {
         }
         guard !losers.isEmpty else { return rows }
         if persist {
-            for loser in losers { try? albumRepo.softDelete(id: loser.id) }
-            for key in touched { if var w = winners[key] { w.sync.markModified(); try? albumRepo.save(w) } }
+            // One bulk save: per-row saves took over a second after a big import.
+            var rows = losers.map { loser -> Album in
+                var row = loser
+                row.isDeleted = true
+                row.sync.markDeleted()
+                return row
+            }
+            for key in touched { if var w = winners[key] { w.sync.markModified(); rows.append(w) } }
+            try? albumRepo.save(rows)
         }
         return order.compactMap { winners[$0] }
     }
@@ -593,9 +622,9 @@ public final class LibraryService: ObservableObject {
     // MARK: - Repair bookkeeping
 
     /// Rows the repair passes wrote, so `apply` doesn't re-read the store after each pass.
-    private var repairedArtists: [UUID: Artist] = [:]
-    private var repairedAlbums:  [UUID: Album]  = [:]
-    private var retiredArtists:  Set<UUID>      = []
+    @ObservationIgnored private var repairedArtists: [UUID: Artist] = [:]
+    @ObservationIgnored private var repairedAlbums:  [UUID: Album]  = [:]
+    @ObservationIgnored private var retiredArtists:  Set<UUID>      = []
 
     private func beginRepairCollection() {
         repairedArtists.removeAll(keepingCapacity: true)
@@ -697,31 +726,30 @@ public final class LibraryService: ObservableObject {
                 byArtist[name, default: []].append(track.id)
             }
         }
-        guard !byArtist.isEmpty else { return false }
+        guard !byArtist.isEmpty,
+              let found = try? artistRepo.findOrCreate(names: Set(byArtist.keys), deviceID: deviceID)
+        else { return false }
+        let (rows, bare) = found
 
+        var changed: [Artist] = []
         for (name, trackIDs) in byArtist {
-            guard var artist = try? artistRepo.findOrCreate(name: name, deviceID: deviceID) else { continue }
-            let missing = trackIDs.filter { !artist.trackIDs.contains($0) }
+            guard var artist = rows[name] else { continue }
+            let have = Set(artist.trackIDs)
+            let missing = trackIDs.filter { !have.contains($0) }
             guard !missing.isEmpty else { continue }
             artist.trackIDs.append(contentsOf: missing)
-            // Give a freshly created row a face, so it isn't a blank circle.
-            if artist.artworkData == nil,
-               let art = allTracks.lazy.filter({ missing.contains($0.id) })
-                   .compactMap({ ArtworkProvider.shared.data(for: .track($0.id)) }).first {
+            // Give a row without a face one of its songs' covers, so it isn't a blank circle.
+            if bare.contains(artist.id),
+               let art = missing.lazy.compactMap({ ArtworkProvider.shared.data(for: .track($0)) }).first {
                 artist.artworkData = art
                 noteArtworkChanged(.artist(artist.id))
             }
             artist.sync.markModified()
-            try? artistRepo.save(artist)
-            noteRepaired(artist)
+            changed.append(artist)
         }
+        try? artistRepo.save(changed)
+        changed.forEach(noteRepaired)
         return true
-    }
-
-    /// An album row's bucket: title plus primary artist, the key `ImportService.updateAlbum(for:)` uses.
-    private struct AlbumKey: Hashable {
-        let title: String
-        let artistName: String
     }
 
     /// Files every track that isn't in any album row under its (album title,
@@ -735,7 +763,7 @@ public final class LibraryService: ObservableObject {
 
         // Grouped so each album row is saved once. By primary artist, so a featured track stays on the
         // headliner's album, like the import path.
-        var byAlbum: [AlbumKey: [UUID]] = [:]
+        var byAlbum: [AlbumKey: [Track]] = [:]
         for track in allTracks where !claimed.contains(track.id) && track.origin != .edit {
             // A single has no album; an album called "" would be a permanent blank tile.
             guard !track.albumTitle.isEmpty else { continue }
@@ -743,24 +771,24 @@ public final class LibraryService: ObservableObject {
                 title:      track.albumTitle,
                 artistName: ImportService.primaryArtistName(from: track.artistName)
             )
-            byAlbum[key, default: []].append(track.id)
+            byAlbum[key, default: []].append(track)
         }
-        guard !byAlbum.isEmpty else { return false }
+        guard !byAlbum.isEmpty,
+              let found = try? albumRepo.findOrCreate(keys: Set(byAlbum.keys), deviceID: deviceID)
+        else { return false }
+        let (rows, bare) = found
 
-        for (key, trackIDs) in byAlbum {
-            guard var album = try? albumRepo.findOrCreate(
-                title:      key.title,
-                artistName: key.artistName,
-                deviceID:   deviceID
-            ) else { continue }
-
-            let missing = trackIDs.filter { !album.trackIDs.contains($0) }
-            guard !missing.isEmpty else { continue }
-            album.trackIDs.append(contentsOf: missing)
+        var changed: [Album] = []
+        var albumsByArtist: [String: [UUID]] = [:]
+        for (key, tracks) in byAlbum {
+            guard var album = rows[key] else { continue }
+            let have = Set(album.trackIDs)
+            let adopted = tracks.filter { !have.contains($0.id) }
+            guard !adopted.isEmpty else { continue }
+            album.trackIDs.append(contentsOf: adopted.map(\.id))
 
             // Give a new row a cover and year so it isn't blank.
-            let adopted = allTracks.filter { missing.contains($0.id) }
-            if album.artworkData == nil {
+            if bare.contains(album.id) {
                 album.artworkData = adopted.lazy
                     .compactMap { ArtworkProvider.shared.data(for: .track($0.id)) }.first
                 if album.artworkData != nil { noteArtworkChanged(.album(album.id)) }
@@ -770,27 +798,34 @@ public final class LibraryService: ObservableObject {
             }
 
             album.sync.markModified()
-            try? albumRepo.save(album)
-            noteRepaired(album)
-            linkAlbum(album, toArtistsCreditedOn: adopted)
+            changed.append(album)
+            for name in Set(adopted.flatMap { ImportService.creditedArtists(from: $0.artistName) }) {
+                albumsByArtist[name, default: []].append(album.id)
+            }
         }
+        try? albumRepo.save(changed)
+        changed.forEach(noteRepaired)
+        linkAlbums(albumsByArtist)
         return true
     }
 
-    /// Links the album to every credited artist, like `attachTrack` on import: artist pages list albums by `albumIDs`.
-    private func linkAlbum(_ album: Album, toArtistsCreditedOn tracks: [Track]) {
-        var names = Set<String>()
-        for track in tracks {
-            names.formUnion(ImportService.creditedArtists(from: track.artistName))
-        }
-        for name in names {
-            guard var artist = try? artistRepo.findOrCreate(name: name, deviceID: deviceID),
-                  !artist.albumIDs.contains(album.id) else { continue }
-            artist.albumIDs.append(album.id)
+    /// Links albums to every credited artist, like `attachTrack` on import: artist pages list albums by `albumIDs`.
+    private func linkAlbums(_ albumsByArtist: [String: [UUID]]) {
+        guard !albumsByArtist.isEmpty,
+              let rows = try? artistRepo.findOrCreate(names: Set(albumsByArtist.keys), deviceID: deviceID).rows
+        else { return }
+        var changed: [Artist] = []
+        for (name, albumIDs) in albumsByArtist {
+            guard var artist = rows[name] else { continue }
+            let have = Set(artist.albumIDs)
+            let missing = albumIDs.filter { !have.contains($0) }
+            guard !missing.isEmpty else { continue }
+            artist.albumIDs.append(contentsOf: missing)
             artist.sync.markModified()
-            try? artistRepo.save(artist)
-            noteRepaired(artist)
+            changed.append(artist)
         }
+        try? artistRepo.save(changed)
+        changed.forEach(noteRepaired)
     }
 
     /// Stores a pin on the playlist row. `PlaylistMetadataService` writes back through this, see `pinWriter`.
@@ -826,9 +861,9 @@ public final class LibraryService: ObservableObject {
 
     // MARK: - Coalesced refreshes
 
-    private var refreshHoldDepth = 0
-    private var pendingFullRefresh = false
-    private var pendingPlaylistRefresh = false
+    @ObservationIgnored private var refreshHoldDepth = 0
+    @ObservationIgnored private var pendingFullRefresh = false
+    @ObservationIgnored private var pendingPlaylistRefresh = false
     private var holdRefreshes: Bool { refreshHoldDepth > 0 }
 
     /// Runs `body` with refreshes held, then does at most one of each. Several write paths refresh per item,
@@ -854,7 +889,6 @@ public final class LibraryService: ObservableObject {
     }
 
     private func refreshPlaylistsBody() {
-        invalidateFavouriteIndex()
         do {
             var all = try playlistRepo.fetchAll()
             let meta = PlaylistMetadataService.shared
@@ -944,7 +978,7 @@ public final class LibraryService: ObservableObject {
 
     /// Extra work to stop when the library stops its own. Installed by `AppDependencies`: artwork compaction
     /// owns a `ModelContext` the library doesn't know about, and a wipe has to stop it.
-    public var onCancelBackgroundWork: (() -> Void)?
+    @ObservationIgnored public var onCancelBackgroundWork: (() -> Void)?
 
     /// Stops this service's own background work (artist photos, cover backfill).
     public func cancelBackgroundWork() {
@@ -1092,20 +1126,10 @@ public final class LibraryService: ObservableObject {
 
     // MARK: - Favourites
 
-    /// Cached favourite ids. Nil means not loaded, see `invalidateFavouriteIndex`.
-    private var favouriteIDCache: Set<UUID>?
-
-    /// Drops the cached favourites. Called from `refreshPlaylists()`, which every favourite change ends with.
-    private func invalidateFavouriteIndex() {
-        favouriteIDCache = nil
-    }
-
     /// The whole set, for callers (Home's shelves) that would otherwise ask per track.
+    /// Cached in the repository, which clears it on every write.
     public func favouriteIDs() -> Set<UUID> {
-        if let cached = favouriteIDCache { return cached }
-        let ids = Set((try? favoriteRepo.allFavouritedIDs()) ?? [])
-        favouriteIDCache = ids
-        return ids
+        (try? favoriteRepo.favouritedIDSet()) ?? []
     }
 
     /// Answered from the in-memory set: every visible row asks this during layout.
@@ -1119,7 +1143,6 @@ public final class LibraryService: ObservableObject {
         guard track(id: trackID) != nil else { return false }
         if isFavourited(trackID: trackID) {
             try? favoriteRepo.remove(trackID: trackID)
-            favouriteIDCache?.remove(trackID)
             mutatePlaylist(id: Playlist.favouritesID) { $0.removeTrack(trackID) }
             // Unliking removes a song only the like was holding. Songs held by a playlist, saved album or local file stay.
             if orphanedTrackIDs(among: [trackID]).isEmpty {
@@ -1138,7 +1161,6 @@ public final class LibraryService: ObservableObject {
     /// The like without the publish. Shared with `saveToLibrary`, whose row isn't in the index yet.
     private func addFavourite(_ trackID: UUID) {
         try? favoriteRepo.add(trackID: trackID, deviceID: deviceID)
-        favouriteIDCache?.insert(trackID)
         mutatePlaylist(id: Playlist.favouritesID) { $0.addTrack(trackID) }
         // Liked on its own, so it is a library song now rather than its album's.
         SavedAlbumsService.shared.promote(trackID)
@@ -1268,10 +1290,11 @@ public final class LibraryService: ObservableObject {
     /// Songs the library holds: a like, a playlist, a saved album, or being one of the user's own files.
     /// All Songs is derived from this set, so a song that falls out of all four is simply gone.
     /// One read, not one per song: the delete confirmation asks this while on screen.
-    private func heldTrackIDs(ignoring excluded: UUID? = nil) -> Set<UUID> {
+    /// `rows` skips the read when the caller has just published them.
+    private func heldTrackIDs(ignoring excluded: UUID? = nil, in rows: [Playlist]? = nil) -> Set<UUID> {
         // Favourites and `FavoriteEntity` record the same fact; either one holds.
-        var held = Set((try? favoriteRepo.allFavouritedIDs()) ?? [])
-        for playlist in (try? playlistRepo.fetchAll()) ?? []
+        var held = (try? favoriteRepo.favouritedIDSet()) ?? []
+        for playlist in rows ?? (try? playlistRepo.fetchAll()) ?? []
         where !playlist.isAllSongs && playlist.id != excluded {
             held.formUnion(playlist.trackIDs)
         }
@@ -1611,10 +1634,12 @@ public final class LibraryService: ObservableObject {
         try? trackRepo.save(writes)
 
         // Match the remote order exactly. Stable: same snapshot and library give the same ids.
+        var listChanged = false
         mutatePlaylist(id: localPlaylistID) { playlist in
             if playlist.trackIDs != resolvedTrackIDs {
                 playlist.trackIDs = resolvedTrackIDs
                 playlist.touch()
+                listChanged = true
             }
             if var mapped = notes {
                 for (from, to) in swapped {
@@ -1625,11 +1650,18 @@ public final class LibraryService: ObservableObject {
                 if playlist.notes != mapped {
                     playlist.notes = mapped
                     playlist.touch()
+                    listChanged = true
                 }
             }
         }
 
-        refresh()
+        // Every open of a shared playlist lands here, usually with nothing new. Reloading the whole
+        // library each time stalled the main thread on big libraries.
+        if !writes.isEmpty {
+            refresh()
+        } else if listChanged {
+            refreshPlaylists()
+        }
 
         // Covers after the list is on screen; the snapshot has no artwork and waiting would look like a hang.
         // A local `ITunesSearchClient` is fine: it's stateless and artist photos aren't needed here.
@@ -1734,10 +1766,11 @@ public final class LibraryService: ObservableObject {
     /// Owned-recording lookup by name rather than row id. Online ids hash "title|artist" and catalogues
     /// spell both differently (Deezer's "Ran To Atlanta" by "Drake" vs Spotify's version with features).
     /// Read from view bodies; built on demand and dropped when `tracks` is replaced (see its `didSet`).
-    private var cachedRecordingIndex: LibraryTrackIndex?
+    @ObservationIgnored private var cachedRecordingIndex: LibraryTrackIndex?
 
     /// The current recording index, rebuilt if it was dropped.
     private var recordingIndex: LibraryTrackIndex {
+        access(keyPath: \.tracks)
         if let cachedRecordingIndex { return cachedRecordingIndex }
         let built = LibraryTrackIndex(tracks: tracks)
         cachedRecordingIndex = built
@@ -1787,8 +1820,10 @@ public final class LibraryService: ObservableObject {
     }
 
     public func tracks(by artist: Artist) -> [Track] {
-        let ids = Set(artist.trackIDs)
-        return tracks.filter { ids.contains($0.id) }
+        // Through the index in library order. Artist cards call this per redraw, and filtering every song
+        // per card stalled the grid.
+        Set(artist.trackIDs.compactMap { trackIndex[$0] }).sorted()
+            .compactMap { $0 < tracks.count ? tracks[$0] : nil }
     }
 
     // MARK: - Playlist Covers
@@ -1798,7 +1833,7 @@ public final class LibraryService: ObservableObject {
     private var tracksWithArtwork: Set<UUID> = []
 
     /// Set by `insertLocally`, which builds the cover index from rows it already has.
-    private var suppressCoverIndexRebuild = false
+    @ObservationIgnored private var suppressCoverIndexRebuild = false
 
     private func rebuildTrackCoverIndex() {
         guard !suppressCoverIndexRebuild else { return }
@@ -1807,7 +1842,7 @@ public final class LibraryService: ObservableObject {
     }
 
     /// Composed 2x2s. Composing decodes four JPEGs and rows ask on every redraw.
-    private var mosaics: [UUID: (sources: [CoverFingerprint], data: Data)] = [:]
+    @ObservationIgnored private var mosaics: [UUID: (sources: [CoverFingerprint], data: Data)] = [:]
 
     /// Enough to tell covers apart without hashing the image, so a one-album playlist doesn't get four copies.
     private struct CoverFingerprint: Hashable {
@@ -1873,10 +1908,10 @@ public final class LibraryService: ObservableObject {
     // MARK: - Artwork invalidation
 
     /// Covers written since the last refresh.
-    private var dirtyArtwork: Set<ArtworkRef> = []
+    @ObservationIgnored private var dirtyArtwork: Set<ArtworkRef> = []
 
     /// Every cover is stale (wipe, account switch).
-    private var allArtworkDirty = false
+    @ObservationIgnored private var allArtworkDirty = false
 
     /// Records that one row's cover has changed. The next refresh drops it.
     public func noteArtworkChanged(_ ref: ArtworkRef) {
@@ -1913,7 +1948,7 @@ public final class LibraryService: ObservableObject {
 
     /// Tiles each baked cover was made from, so an add that can't change the first four skips re-composing
     /// and re-uploading. In memory, so the first edit after launch always re-composes.
-    private var bakedCoverSources: [UUID: [CoverFingerprint]] = [:]
+    @ObservationIgnored private var bakedCoverSources: [UUID: [CoverFingerprint]] = [:]
 
     /// Composes a playlist's borrowed cover and stores it as its own, so every device shows the same picture
     /// instead of whatever subset of artwork each one holds. Refuses chosen covers and the system playlists.
@@ -1998,9 +2033,9 @@ public final class LibraryService: ObservableObject {
     private static let artistImageClient = SpotifyClient()
 
     /// Names Spotify has no artist for, so they aren't re-queried after every import.
-    private var artistImageMisses: Set<String> = []
+    @ObservationIgnored private var artistImageMisses: Set<String> = []
 
-    private var artistImageBackfillTask: Task<Void, Never>?
+    @ObservationIgnored private var artistImageBackfillTask: Task<Void, Never>?
 
     /// True when the row shows an album-cover stand-in from import (byte-identical to the cover) rather than
     /// a real photo.
@@ -2071,7 +2106,7 @@ public final class LibraryService: ObservableObject {
     // MARK: - Placeholder Track Artwork
 
     /// The one cover backfill allowed in flight, so it can be cancelled and runs don't overlap.
-    private var artworkBackfillTask: Task<Void, Never>?
+    @ObservationIgnored private var artworkBackfillTask: Task<Void, Never>?
 
     /// Catalogue lookups one automatic backfill may make. They're sequential (iTunes 403s bursts), so an
     /// unbounded run is an hour of traffic. Settings' "Find Missing Covers" is the unbounded version.

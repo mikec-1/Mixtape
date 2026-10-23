@@ -99,7 +99,7 @@ struct ShareMenuItems: View {
 
     init(_ item: ShareItem) { self.item = item }
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
 
     var body: some View {
         Button {
@@ -129,7 +129,7 @@ struct ShareMenuItems: View {
 struct PlaylistShareMenuItems: View {
     let playlist: Playlist
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
 
     var body: some View {
         Group {
@@ -194,8 +194,8 @@ enum ShareSheet {
     static func sendTo(_ item: ShareItem, deps: AppDependencies) {
         #if os(iOS)
         guard let top = topViewController() else { return }
-        let host = UIHostingController(rootView: SendToSheet(item: item, close: {}).environmentObject(deps))
-        host.rootView = SendToSheet(item: item) { [weak host] in host?.dismiss(animated: true) }.environmentObject(deps)
+        let host = UIHostingController(rootView: SendToSheet(item: item, close: {}).environment(deps))
+        host.rootView = SendToSheet(item: item) { [weak host] in host?.dismiss(animated: true) }.environment(deps)
         host.view.backgroundColor = UIColor(Color.mixBackground)
         if let sheet = host.sheetPresentationController {
             sheet.detents = [.medium(), .large()]
@@ -208,8 +208,8 @@ enum ShareSheet {
         }
         #elseif os(macOS)
         guard let parent = NSApp.keyWindow?.contentViewController else { return }
-        let host = NSHostingController(rootView: SendToSheet(item: item, close: {}).environmentObject(deps))
-        host.rootView = SendToSheet(item: item) { [weak host] in host?.dismiss(nil) }.environmentObject(deps)
+        let host = NSHostingController(rootView: SendToSheet(item: item, close: {}).environment(deps))
+        host.rootView = SendToSheet(item: item) { [weak host] in host?.dismiss(nil) }.environment(deps)
         parent.presentAsSheet(host)
         #endif
     }
@@ -268,7 +268,7 @@ struct ShareHeroButton: View {
     init(_ item: ShareItem) { self.item = item }
 
     #if os(iOS)
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
     #endif
 
     var body: some View {

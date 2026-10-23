@@ -6,8 +6,8 @@ import Charts
 
 public struct ListeningStatsView: View {
 
-    @EnvironmentObject private var deps:   AppDependencies
-    @EnvironmentObject private var engine: PlaybackEngine
+    @Environment(AppDependencies.self) private var deps
+    @Environment(PlaybackEngine.self) private var engine
     @State private var period: StatsPeriod = .allTime
     @State private var stats: ListeningStats = .empty
     @State private var showHistory = false
@@ -31,8 +31,8 @@ public struct ListeningStatsView: View {
         // Recomputed on the way back: the history page can clear the log.
         .sheet(isPresented: $showHistory, onDismiss: recompute) {
             ListeningHistoryView()
-                .environmentObject(deps)
-                .environmentObject(engine)
+                .environment(deps)
+                .environment(engine)
         }
     }
 

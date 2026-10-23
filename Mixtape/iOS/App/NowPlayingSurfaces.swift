@@ -30,13 +30,13 @@ final class NowPlayingSurfaces {
             Task { await stale.end(nil, dismissalPolicy: .immediate) }
         }
         // `playlists` changes when a song is liked (Liked Songs is a playlist).
-        engine.$state.combineLatest(engine.queue.$currentIndex, engine.queue.$queue, engine.$duration)
-            .combineLatest(library.$playlists, engine.queue.$shuffleEnabled)
+        engine.statePublisher.combineLatest(engine.queue.currentIndexPublisher, engine.queue.queuePublisher, engine.durationPublisher)
+            .combineLatest(library.playlistsPublisher, engine.queue.shuffleEnabledPublisher)
             .debounce(for: .milliseconds(300), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in self?.publish() }
             .store(in: &cancellables)
         // A seek moves the bar's start; late-arriving artwork fills the cover.
-        engine.clock.$currentTime
+        engine.clock.currentTimePublisher
             .throttle(for: .seconds(1), scheduler: DispatchQueue.main, latest: true)
             .sink { [weak self] _ in
                 guard let self, let shown = self.shown, engine.state.isActive else { return }

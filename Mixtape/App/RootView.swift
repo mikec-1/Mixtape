@@ -7,8 +7,8 @@ import CoreSpotlight
 
 public struct RootView: View {
 
-    @EnvironmentObject private var deps: AppDependencies
-    @EnvironmentObject private var exportManager: ExportManager
+    @Environment(AppDependencies.self) private var deps
+    @Environment(ExportManager.self) private var exportManager
     @Environment(\.scenePhase) private var scenePhase
     @State private var showDownloadPrompt = false
     /// An invite, Jam or Blend link that arrived before the main screen was up.
@@ -126,7 +126,7 @@ public struct RootView: View {
         .modifier(NewCratePrompt(library: deps.libraryService))
         .sheet(isPresented: $showDownloadPrompt) {
             WelcomeDownloadPrompt()
-                .environmentObject(exportManager)
+                .environment(exportManager)
         }
         // First social sign-in: offer to replace the generated username. Skippable.
         .sheet(isPresented: Binding(
@@ -265,5 +265,5 @@ private struct SplashView: View {
 
 #Preview("Unauthenticated") {
     RootView()
-        .environmentObject(AppDependencies())
+        .environment(AppDependencies())
 }

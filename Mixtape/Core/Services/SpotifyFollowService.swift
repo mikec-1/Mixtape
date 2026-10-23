@@ -9,9 +9,11 @@
 import Foundation
 import Combine
 import OSLog
+import Observation
 
+@Observable
 @MainActor
-public final class SpotifyFollowService: ObservableObject {
+public final class SpotifyFollowService {
 
     // MARK: - Link
 
@@ -75,11 +77,11 @@ public final class SpotifyFollowService: ObservableObject {
     // MARK: - Published
 
     /// Playlists being checked right now, for the spinner in their header.
-    @Published public private(set) var syncing: Set<UUID> = []
+    public private(set) var syncing: Set<UUID> = []
     /// Last successful check per playlist, for "Updated 4 minutes ago".
-    @Published public private(set) var lastSynced: [UUID: Date] = [:]
+    public private(set) var lastSynced: [UUID: Date] = [:]
     /// Why the last check failed, per playlist. Cleared by the next success.
-    @Published public private(set) var failures: [UUID: String] = [:]
+    public private(set) var failures: [UUID: String] = [:]
 
     // MARK: - Dependencies
 
@@ -92,13 +94,13 @@ public final class SpotifyFollowService: ObservableObject {
     /// Set by `AppDependencies` so auth can hand over the account's copy. Not a singleton.
     public private(set) static weak var shared: SpotifyFollowService?
 
-    private var links: [UUID: Link] = [:]
+    @ObservationIgnored private var links: [UUID: Link] = [:]
     /// Playlists from the last publish, so a deletion isn't confused with a library
     /// that hasn't loaded yet.
-    private var seenPlaylistIDs: Set<UUID> = []
-    private var timer: Task<Void, Never>?
-    private var running: Task<Void, Never>?
-    private var localEdits: AnyCancellable?
+    @ObservationIgnored private var seenPlaylistIDs: Set<UUID> = []
+    @ObservationIgnored private var timer: Task<Void, Never>?
+    @ObservationIgnored private var running: Task<Void, Never>?
+    @ObservationIgnored private var localEdits: AnyCancellable?
 
     /// Background check interval. The unchanged case is one tiny request per playlist.
     private static let interval: TimeInterval = 3 * 60
@@ -247,7 +249,7 @@ public final class SpotifyFollowService: ObservableObject {
     /// Pushes local edits to two-way/push links right away instead of waiting for
     /// the timer. Debounced, since a drag of 20 songs publishes 20 times.
     private func observeLocalEdits() {
-        localEdits = libraryService.$playlists
+        localEdits = libraryService.playlistsPublisher
             .debounce(for: .seconds(1.5), scheduler: DispatchQueue.main)
             .sink { [weak self] playlists in
                 guard let self else { return }
@@ -432,7 +434,7 @@ public final class SpotifyFollowService: ObservableObject {
         if merged != localIDs {
             // `setTracks` bypasses `isEditable`: the source is allowed to write a mirror.
             libraryService.setTracks(merged, inPlaylist: playlistID)
-            importService.finaliseImport()
+            await importService.finaliseImport()
         }
 
         // --- Spotify's half ---
@@ -633,7 +635,7 @@ public final class SpotifyFollowService: ObservableObject {
         link.contributedIDs = ids
         link.likedCount     = remote.tracks.count
 
-        if !toAdd.isEmpty { importService.finaliseImport() }
+        if !toAdd.isEmpty { await importService.finaliseImport() }
     }
 
     /// Adds Mixtape-made hearts (Favourites minus `contributedIDs`) to Liked Songs.
@@ -712,10 +714,10 @@ public final class SpotifyFollowService: ObservableObject {
     // MARK: - Account sync
 
     /// Writes the encoded links to `user_metadata`.
-    public var pushWriter: ((String) -> Void)?
+    @ObservationIgnored public var pushWriter: ((String) -> Void)?
 
-    private var isApplyingRemote = false
-    private var pushTask: Task<Void, Never>?
+    @ObservationIgnored private var isApplyingRemote = false
+    @ObservationIgnored private var pushTask: Task<Void, Never>?
 
     /// Adopts the account's copy on sign-in and refresh. Local bulk fields survive
     /// since they aren't in the payload.
@@ -754,7 +756,7 @@ public final class SpotifyFollowService: ObservableObject {
     /// `adoptRemote` can't see deletions, so without this a refresh before the
     /// debounced push would restore the link and re-import its songs. Kept in
     /// defaults; cleared when the playlist is linked again.
-    private var unlinked: [UUID: [UUID]] = SpotifyFollowService.loadUnlinked() {
+    @ObservationIgnored private var unlinked: [UUID: [UUID]] = SpotifyFollowService.loadUnlinked() {
         didSet {
             UserDefaults.standard.set(
                 unlinked.reduce(into: [String: [String]]()) { $0[$1.key.uuidString] = $1.value.map(\.uuidString) },

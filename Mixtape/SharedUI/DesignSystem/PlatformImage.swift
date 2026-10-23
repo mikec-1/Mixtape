@@ -79,27 +79,48 @@ nonisolated final class ArtworkDecodeCache: @unchecked Sendable {
     }
 
     static func decode(_ data: Data, bucket: Int) -> PlatformImage? {
-        guard bucket != fullSize else { return PlatformImage(data: data) }
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
             return PlatformImage(data: data)
         }
-        let options: [CFString: Any] = [
+        // Full size goes through ImageIO too: `PlatformImage(data:)` decoded on first draw, on main.
+        var options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceShouldCacheImmediately: true,
-            kCGImageSourceThumbnailMaxPixelSize: bucket
+            kCGImageSourceShouldCacheImmediately: true
         ]
+        if bucket != fullSize { options[kCGImageSourceThumbnailMaxPixelSize] = bucket }
         guard let thumb = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
             return PlatformImage(data: data)
         }
+        let ready = displayReady(thumb)
         #if os(iOS)
-        return UIImage(cgImage: thumb)
+        return UIImage(cgImage: ready)
         #else
-        return NSImage(cgImage: thumb, size: .zero)
+        return NSImage(cgImage: ready, size: .zero)
         #endif
     }
 
-    private static func decodedCost(_ image: PlatformImage) -> Int {
+    /// Redrawn as premultiplied BGRA in the screen's colour space, which Core Animation uploads as is.
+    /// Anything else (a JPEG's own profile, plain sRGB on a P3 screen) was colour matched again on the
+    /// main thread when the cover first showed.
+    static func displayReady(_ image: CGImage) -> CGImage {
+        let info = CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+        guard let space = targetSpace,
+              let context = CGContext(data: nil, width: image.width, height: image.height,
+                                      bitsPerComponent: 8, bytesPerRow: 0, space: space, bitmapInfo: info)
+        else { return image }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        return context.makeImage() ?? image
+    }
+
+    /// Read once: a cover drawn after the window moves screens just gets matched by Core Animation again.
+    #if os(macOS)
+    private static let targetSpace = CGDisplayCopyColorSpace(CGMainDisplayID()) as CGColorSpace?
+    #else
+    private static let targetSpace = CGColorSpace(name: CGColorSpace.sRGB)
+    #endif
+
+    static func decodedCost(_ image: PlatformImage) -> Int {
         #if os(iOS)
         let pixels = image.size.width * image.scale * image.size.height * image.scale
         #else

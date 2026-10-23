@@ -6,9 +6,9 @@ import SwiftUI
 
 struct MacLibraryView: View {
 
-    @EnvironmentObject private var appState: MacAppState
-    @EnvironmentObject private var deps: AppDependencies
-    @EnvironmentObject private var library: LibraryService
+    @Environment(MacAppState.self) private var appState
+    @Environment(AppDependencies.self) private var deps
+    @Environment(LibraryService.self) private var library
 
     /// The Smart tab's empty state can open the editor; the + menu's copy lives in `MacTopBar`.
     @State private var showSmartEditor = false
@@ -39,7 +39,7 @@ struct MacLibraryView: View {
         }
         .sheet(isPresented: $showSmartEditor) {
             SmartPlaylistEditorView(service: deps.smartPlaylistService)
-                .environmentObject(deps)
+                .environment(deps)
         }
     }
 

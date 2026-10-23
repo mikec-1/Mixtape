@@ -3,6 +3,7 @@
 import AVFoundation
 import Combine
 import Foundation
+import Observation
 
 // MARK: - Preset
 
@@ -68,8 +69,9 @@ public enum EqualizerPreset: String, CaseIterable, Identifiable {
 
 // MARK: - Service
 
+@Observable
 @MainActor
-public final class AudioEqualizer: ObservableObject {
+public final class AudioEqualizer {
 
     // MARK: - Constants
 
@@ -98,7 +100,7 @@ public final class AudioEqualizer: ObservableObject {
     // MARK: - The live node (inserted into PlaybackEngine's graph)
 
     /// Lazy because creating an AVAudioUnit is slow at launch. Built with the saved curve.
-    public lazy var node: AVAudioUnitEQ = {
+    @ObservationIgnored public lazy var node: AVAudioUnitEQ = {
         let eq = AVAudioUnitEQ(numberOfBands: Self.frequencies.count)
         eq.globalGain = 0
 
@@ -121,7 +123,7 @@ public final class AudioEqualizer: ObservableObject {
     }()
 
     /// Guards writes so they don't force the lazy node into existence.
-    private var nodeBuilt = false
+    @ObservationIgnored private var nodeBuilt = false
 
     /// Applies `body` to the node only if there is one.
     private func withNode(_ body: (AVAudioUnitEQ) -> Void) {
@@ -131,17 +133,17 @@ public final class AudioEqualizer: ObservableObject {
 
     // MARK: - Published State (UI binds to these)
 
-    @Published public var isEnabled: Bool {
+    public var isEnabled: Bool {
         didSet {
             withNode { $0.bypass = !isEnabled }
             UserDefaults.standard.set(isEnabled, forKey: Keys.enabled)
         }
     }
 
-    @Published public private(set) var gains: [Float]
+    public private(set) var gains: [Float]
 
     /// The currently selected preset. `.custom` once the user moves a slider.
-    @Published public private(set) var preset: EqualizerPreset {
+    public private(set) var preset: EqualizerPreset {
         didSet { UserDefaults.standard.set(preset.rawValue, forKey: Keys.preset) }
     }
 
@@ -180,7 +182,7 @@ public final class AudioEqualizer: ObservableObject {
         }
     }
 
-    private var accountObserver: NSObjectProtocol?
+    @ObservationIgnored private var accountObserver: NSObjectProtocol?
 
     deinit {
         if let accountObserver { NotificationCenter.default.removeObserver(accountObserver) }

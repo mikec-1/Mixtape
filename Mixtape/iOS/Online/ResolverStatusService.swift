@@ -4,16 +4,18 @@
 #if os(iOS)
 import Foundation
 import Combine
+import Observation
 
+@Observable
 @MainActor
-public final class ResolverStatusService: ObservableObject {
+public final class ResolverStatusService {
 
     public enum Status: Equatable { case checking, online, offline }
 
     /// Reachability of the active source. Drives the status dot.
-    @Published public private(set) var status: Status = .checking
+    public private(set) var status: Status = .checking
     /// The source currently serving (or about to serve) streams, if any.
-    @Published public private(set) var activeSource: ResolverSource?
+    public private(set) var activeSource: ResolverSource?
 
     private let session: URLSession
 

@@ -4,7 +4,7 @@ import SwiftUI
 
 struct ForgotPasswordSheet: View {
 
-    @ObservedObject var vm: AuthViewModel
+    @Bindable var vm: AuthViewModel
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {

@@ -2,15 +2,35 @@
 import SwiftUI
 import AppKit
 
+/// The menu bar toggle, for the App. An `@AppStorage` there re-ran the whole App body on every
+/// defaults write, and the split view writes its frames on every window resize frame.
+@Observable final class MenuBarPlayerVisibility {
+    static let shared = MenuBarPlayerVisibility()
+    private(set) var isVisible = MenuBarPlayerVisibility.read()
+
+    private init() {
+        NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated {
+                let now = Self.read()
+                if now != Self.shared.isVisible { Self.shared.isVisible = now }
+            }
+        }
+    }
+
+    private static func read() -> Bool {
+        UserDefaults.standard.object(forKey: MacMenuBarPlayer.visibleKey) as? Bool ?? true
+    }
+}
+
 /// Menu bar mini-player: the player bar in a popover. Toggle in Settings > General.
 struct MacMenuBarPlayer: View {
     static let visibleKey = "mac.menuBarPlayer"
     /// The song's title beside the icon in the menu bar itself.
     static let titleKey = "mac.menuBarPlayer.title"
 
-    @ObservedObject var engine: PlaybackEngine
-    @ObservedObject var queue: QueueService
-    @ObservedObject var library: LibraryService   // only so the heart follows the like
+    var engine: PlaybackEngine
+    var queue: QueueService
+    var library: LibraryService   // only so the heart follows the like
 
     @AppStorage(MacMenuBarPlayer.titleKey) private var showsTitle = false
     @State private var wash: [Color] = []
@@ -20,7 +40,7 @@ struct MacMenuBarPlayer: View {
         VStack(alignment: .leading, spacing: 12) {
             header(track)
             MacProgressScrubber(clock: engine.clock)
-                .environmentObject(engine)
+                .environment(engine)
             transport(hasTrack: track != nil)
             volume
             if let track { MenuBarLyricLine(track: track, clock: engine.clock) }
@@ -104,10 +124,9 @@ struct MacMenuBarPlayer: View {
     private var volume: some View {
         HStack(spacing: 8) {
             Image(systemName: "speaker.fill").foregroundStyle(.secondary)
-            Slider(value: Binding(get: { Double(engine.volume) }, set: { engine.volume = Float($0) }))
-                .controlSize(.small)
-                .tint(Color.mixPrimary)
+            BarSlider(value: Double(engine.volume)) { engine.volume = Float($0) }
                 .accessibilityLabel("Volume")
+                .accessibilityValue("\(Int((engine.volume * 100).rounded())) percent")
             Image(systemName: "speaker.wave.3.fill").foregroundStyle(.secondary)
         }
         .font(.caption)
@@ -205,8 +224,8 @@ struct MacMenuBarPlayer: View {
 /// Current and next line, own view so clock ticks only redraw these.
 private struct MenuBarLyricLine: View {
     let track: Track
-    @ObservedObject var clock: PlaybackClock
-    @ObservedObject private var lyrics = LyricsService.shared
+    var clock: PlaybackClock
+    private var lyrics: LyricsService { .shared }
 
     var body: some View {
         let lines = lyrics.cached(for: track)?.synced ?? []
@@ -228,7 +247,7 @@ private struct MenuBarLyricLine: View {
 
 /// The Mixtape mark, plus the song if enabled.
 struct MacMenuBarLabel: View {
-    @ObservedObject var queue: QueueService
+    var queue: QueueService
     @AppStorage(MacMenuBarPlayer.titleKey) private var showsTitle = false
 
     var body: some View {

@@ -4,13 +4,15 @@
 
 import SwiftUI
 import Combine
+import Observation
 
 // MARK: - Center
 
 /// The one open panel. Separate from `AppDependencies` so opening it doesn't
 /// redraw the whole tree (like `savedToasts`).
+@Observable
 @MainActor
-public final class SavedInPanelCenter: ObservableObject {
+public final class SavedInPanelCenter {
 
     public struct Request: Identifiable, Equatable {
         public let id = UUID()
@@ -23,7 +25,7 @@ public final class SavedInPanelCenter: ObservableObject {
         public static func == (a: Request, b: Request) -> Bool { a.id == b.id }
     }
 
-    @Published public private(set) var request: Request?
+    public private(set) var request: Request?
 
     public init() {}
 
@@ -44,7 +46,7 @@ public final class SavedInPanelCenter: ObservableObject {
 /// doesn't jump while searching.
 public struct SavedInPanelHost: View {
 
-    @ObservedObject private var center: SavedInPanelCenter
+    private var center: SavedInPanelCenter
     /// Room left under the panel for the player bar.
     private let bottomGap: CGFloat
 

@@ -7,7 +7,7 @@ struct CommunityView: View {
     let onOpenPost: (String) -> Void
     let onOpenProfile: (UserProfile) -> Void
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
 
     @State private var feed: CommunityFeed = .hot
     @State private var style: PostStyle?
@@ -66,7 +66,7 @@ struct CommunityView: View {
         .onChange(of: signedIn) { _, now in if !now, feed == .following { feed = .hot } }
         .sheet(item: $posting) { track in
             PostSheet(track: track, onOpen: { code in posting = nil; onOpenPost(code) })
-                .environmentObject(deps)
+                .environment(deps)
         }
     }
 
@@ -103,7 +103,7 @@ struct CommunityView: View {
 
 /// Your postable edits, newest first, each with Post. A tip on how to make one when there are none.
 private struct YourEdits: View {
-    @ObservedObject var library: LibraryService
+    var library: LibraryService
     let onPost: (Track) -> Void
 
     var body: some View {
@@ -226,10 +226,10 @@ private struct PostRow: View {
     let onOpenPost: (String) -> Void
     let onOpenProfile: (UserProfile) -> Void
 
-    @EnvironmentObject private var deps: AppDependencies
-    @EnvironmentObject private var engine: PlaybackEngine
-    @EnvironmentObject private var queueService: QueueService
-    @ObservedObject private var marks = PlayingPostMarks.shared
+    @Environment(AppDependencies.self) private var deps
+    @Environment(PlaybackEngine.self) private var engine
+    @Environment(QueueService.self) private var queueService
+    private var marks: PlayingPostMarks { .shared }
     @State private var hovered = false
 
     private var post: CommunityPost { item.post }

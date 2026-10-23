@@ -7,7 +7,7 @@ struct PostSheet: View {
     /// Opens the post once it's up, by its share code.
     let onOpen: (String) -> Void
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
     @Environment(\.dismiss) private var dismiss
 
     @State private var artwork: Data?

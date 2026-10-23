@@ -1,6 +1,12 @@
 import Foundation
 import SwiftData
 
+/// An album row's bucket: title plus primary artist, the key `ImportService.updateAlbum(for:)` uses.
+public struct AlbumKey: Hashable, Sendable {
+    public let title: String
+    public let artistName: String
+}
+
 @MainActor
 public final class AlbumRepository {
 
@@ -64,6 +70,57 @@ public final class AlbumRepository {
         context.insert(AlbumEntity(from: album))
         try context.saveBatched()
         return album
+    }
+
+    /// `findOrCreate(title:artistName:)` for many albums in a few fetches. See the artist version.
+    /// Rows come back without artwork; `bare` holds the ids that have none, new rows included.
+    public func findOrCreate(keys: Set<AlbumKey>, deviceID: String) throws -> (rows: [AlbumKey: Album], bare: Set<UUID>) {
+        var rows: [AlbumKey: Album] = [:]
+        var bare = Set<UUID>()
+        let titles = Array(Set(keys.map(\.title)))
+        for start in stride(from: 0, to: titles.count, by: 500) {
+            let chunk = Array(titles[start..<min(start + 500, titles.count)])
+            var d = FetchDescriptor<AlbumEntity>(
+                predicate: #Predicate { chunk.contains($0.title) && !$0.isSoftDeleted },
+                sortBy: [SortDescriptor(\.dateCreated)]
+            )
+            d.propertiesToFetch = [\.id]
+            for entity in try context.fetch(d) {
+                let key = AlbumKey(title: entity.title, artistName: entity.artistName)
+                // First match wins, like the single version.
+                guard keys.contains(key), rows[key] == nil else { continue }
+                rows[key] = entity.toDomain(includingArtwork: false)
+            }
+            var noArt = FetchDescriptor<AlbumEntity>(
+                predicate: #Predicate { chunk.contains($0.title) && !$0.isSoftDeleted && $0.artworkData == nil }
+            )
+            noArt.propertiesToFetch = [\.id]
+            bare.formUnion(try context.fetch(noArt).map(\.id))
+        }
+        for key in keys where rows[key] == nil {
+            let album = Album(title: key.title, artistName: key.artistName, sync: SyncMetadata(deviceID: deviceID))
+            context.insert(AlbumEntity(from: album))
+            rows[key] = album
+            bare.insert(album.id)
+        }
+        try context.saveBatched()
+        return (rows, bare)
+    }
+
+    /// `save(_:)` for many rows, matched by id in one fetch per 500.
+    public func save(_ albums: [Album]) throws {
+        var byID: [UUID: AlbumEntity] = [:]
+        let ids = albums.map(\.id)
+        for start in stride(from: 0, to: ids.count, by: 500) {
+            let chunk = Array(ids[start..<min(start + 500, ids.count)])
+            var d = FetchDescriptor<AlbumEntity>(predicate: #Predicate { chunk.contains($0.id) })
+            d.propertiesToFetch = [\.id]
+            for entity in try context.fetch(d) { byID[entity.id] = entity }
+        }
+        for album in albums {
+            if let existing = byID[album.id] { existing.update(from: album) } else { context.insert(AlbumEntity(from: album)) }
+        }
+        try context.saveBatched()
     }
 
     // MARK: - Save

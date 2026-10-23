@@ -7,9 +7,11 @@ import Supabase
 import UserNotifications
 import OSLog
 import Combine
+import Observation
 
+@Observable
 @MainActor
-public final class RecapService: NSObject, ObservableObject {
+public final class RecapService: NSObject {
 
     /// One `recap_snapshots` row.
     public struct Recap: Codable, Sendable, Identifiable, Hashable {
@@ -30,24 +32,24 @@ public final class RecapService: NSObject, ObservableObject {
     }
 
     /// The account's recaps, newest first.
-    @Published public private(set) var recaps: [Recap] = []
+    public private(set) var recaps: [Recap] = []
     /// Months watched or dismissed on this device.
-    @Published private var seen: Set<String> = []
+    private var seen: Set<String> = []
     /// The story on screen.
-    @Published public var presented: Recap?
+    public var presented: Recap?
     /// Whose it is: nil for your own.
-    public private(set) var presentedOwner: UserProfile?
+    @ObservationIgnored public private(set) var presentedOwner: UserProfile?
     /// Opens on the summary card, as the profile shelf does.
-    public private(set) var presentedAtCard = false
+    @ObservationIgnored public private(set) var presentedAtCard = false
     /// A notification tapped before the recap was loaded.
-    private var pendingOpen: String?
+    @ObservationIgnored private var pendingOpen: String?
 
-    public var currentUserID: UUID? {
+    @ObservationIgnored public var currentUserID: UUID? {
         didSet { if currentUserID != oldValue { loadLocal() } }
     }
 
     private let clientProvider: () -> SupabaseClient
-    private lazy var client: SupabaseClient = clientProvider()
+    @ObservationIgnored private lazy var client: SupabaseClient = clientProvider()
     private let history: PlayHistoryRepository
     private let library: LibraryService
     private let snapshots: PlayedTrackSnapshotRepository

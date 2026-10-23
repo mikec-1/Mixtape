@@ -10,11 +10,12 @@
 import Foundation
 import Combine
 import OSLog
+import Observation
 
 // MARK: - Models
 
 /// One word of a line, with the span of time it is sung over.
-public struct LyricWord: Equatable, Sendable {
+public nonisolated struct LyricWord: Equatable, Sendable {
     public let time: TimeInterval
     public let end: TimeInterval
     public let text: String
@@ -27,7 +28,7 @@ public struct LyricWord: Equatable, Sendable {
 }
 
 /// A single timestamped lyric line.
-public struct LyricLine: Identifiable, Equatable, Sendable {
+public nonisolated struct LyricLine: Identifiable, Equatable, Sendable {
     public let id = UUID()
     public let time: TimeInterval
     public let text: String
@@ -36,7 +37,7 @@ public struct LyricLine: Identifiable, Equatable, Sendable {
 }
 
 /// Resolved lyrics for a track. Any field may be nil/empty.
-public struct TrackLyrics: Equatable, Sendable {
+public nonisolated struct TrackLyrics: Equatable, Sendable {
     /// Timestamped lines, sorted ascending. Empty when no synced lyrics exist.
     public var synced: [LyricLine]
     /// Plain (untimed) lyrics text, if available.
@@ -92,21 +93,22 @@ enum LyricsSourceChoice {
 
 // MARK: - Service
 
+@Observable
 @MainActor
-public final class LyricsService: ObservableObject {
+public final class LyricsService {
 
     public static let shared = LyricsService()
 
     /// Cache keyed by track id. Stored value of `.empty` means "looked, found nothing".
-    @Published public private(set) var cache: [UUID: TrackLyrics] = [:]
+    public private(set) var cache: [UUID: TrackLyrics] = [:]
 
     /// In-flight fetches by track id, so prefetch and resolve share one request.
-    private var inFlight: [UUID: Task<TrackLyrics, Never>] = [:]
+    @ObservationIgnored private var inFlight: [UUID: Task<TrackLyrics, Never>] = [:]
 
-    /// Every source's lyrics per track, for the switcher. Not published: only the switcher reads it.
-    private var probed: [UUID: [LyricsSource: TrackLyrics]] = [:]
+    /// Every source's lyrics per track, for the switcher. Not observed: only the switcher reads it.
+    @ObservationIgnored private var probed: [UUID: [LyricsSource: TrackLyrics]] = [:]
 
-    private let session: URLSession
+    private nonisolated let session: URLSession
 
     /// Ephemeral, cookie-less session. A NetEase guest cookie turns search into "recommended" feeds.
     private static func makeDefaultSession() -> URLSession {
@@ -308,13 +310,13 @@ public final class LyricsService: ObservableObject {
         var hit: TrackLyrics?
         switch source {
         case .yours:
-            hit = UserLyricsStore.shared.text(for: track).map(Self.parse)
+            if let own = UserLyricsStore.shared.text(for: track) { hit = await Self.parseOffMain(own) }
             hit?.isUserProvided = true
         case .file:
             if let embedded = track.lyrics, !embedded.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                hit = Self.parse(embedded)
-            } else if let sidecar = Self.readSidecar(for: track) {
-                hit = Self.parse(sidecar)
+                hit = await Self.parseOffMain(embedded)
+            } else {
+                hit = await Self.sidecarOffMain(for: track)
             }
         case .wordTimed:
             hit = await fetchWordTimed(for: track)
@@ -346,12 +348,25 @@ public final class LyricsService: ObservableObject {
                      file: FileProvenance(fileHash: "", fileSize: 0, localPath: ""))
     }
 
+}
+
+// Network, decoding and parsing. Off the main actor: a song change used to parse here for 10-25 ms.
+nonisolated extension LyricsService {
+
+    @concurrent
+    private static func parseOffMain(_ raw: String) async -> TrackLyrics { parse(raw) }
+
+    @concurrent
+    private static func sidecarOffMain(for track: Track) async -> TrackLyrics? {
+        readSidecar(for: track).map(parse)
+    }
+
     // MARK: - Word-timed (Apple TTML)
 
     /// Apple Music TTML index. Same source as the web client (`src/pages/api/lyrics.ts`).
     private static let ttmlIndex = "https://lyrics-api.binimum.org/"
 
-    private struct TTMLIndexResponse: Decodable {
+    nonisolated private struct TTMLIndexResponse: Decodable {
         struct Entry: Decodable {
             let lyricsUrl: String?
             let timingType: String?
@@ -369,6 +384,7 @@ public final class LyricsService: ObservableObject {
         let results: [Entry]?
     }
 
+    @concurrent
     private func fetchWordTimed(for track: Track) async -> TrackLyrics? {
         guard !track.title.isEmpty, !track.artistName.isEmpty else { return nil }
         var components = URLComponents(string: Self.ttmlIndex)
@@ -428,7 +444,7 @@ public final class LyricsService: ObservableObject {
 
     // MARK: - Remote (LRCLIB)
 
-    private struct LRCLibResponse: Decodable {
+    nonisolated private struct LRCLibResponse: Decodable {
         let syncedLyrics: String?
         let plainLyrics: String?
         let duration: Double?
@@ -437,6 +453,7 @@ public final class LyricsService: ObservableObject {
     }
 
     /// LRCLIB and NetEase run concurrently, then the best result is picked.
+    @concurrent
     private func fetchRemote(for track: Track) async -> TrackLyrics? {
         // Both providers run in parallel. Only the final re-skin needs LRCLIB's plain text.
         async let lrclibTask = fetchLRCLib(for: track)
@@ -611,7 +628,7 @@ public final class LyricsService: ObservableObject {
     /// NetEase timestamps run about 1s ahead of the audio.
     private static let neteaseTimingOffset: TimeInterval = 1.0
 
-    private struct NetEaseSearchResponse: Decodable {
+    nonisolated private struct NetEaseSearchResponse: Decodable {
         struct Result: Decodable {
             struct Song: Decodable {
                 struct Artist: Decodable { let name: String? }
@@ -626,7 +643,7 @@ public final class LyricsService: ObservableObject {
         let result: Result?
     }
 
-    private struct NetEaseLyricResponse: Decodable {
+    nonisolated private struct NetEaseLyricResponse: Decodable {
         struct Lyric: Decodable { let lyric: String? }
         let lrc: Lyric?
     }
@@ -770,7 +787,7 @@ public final class LyricsService: ObservableObject {
     }
 
     /// One LRCLIB word: comparison tokens plus its original spelling for display.
-    private struct PlainWord {
+    nonisolated private struct PlainWord {
         let tokens: Set<String>
         let display: String
     }
@@ -1030,7 +1047,7 @@ public final class LyricsService: ObservableObject {
 
 /// Parses Apple's word-timed TTML. Spans with no whitespace between them are one word
 /// split up ("ba" "byyy"), so a new word starts only after a space.
-private final class TTMLParserDelegate: NSObject, XMLParserDelegate {
+nonisolated private final class TTMLParserDelegate: NSObject, XMLParserDelegate {
     private(set) var lines: [LyricLine] = []
 
     private var lineStart: TimeInterval?

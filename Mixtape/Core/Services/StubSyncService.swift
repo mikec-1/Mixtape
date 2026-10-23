@@ -6,17 +6,21 @@
 import Foundation
 import Combine
 import OSLog
+import Observation
 
+@Observable
 @MainActor
-public final class StubSyncService: ObservableObject, SyncServiceProtocol {
+public final class StubSyncService: SyncServiceProtocol {
 
-    @Published private(set) public var syncState: SyncState = .idle
+    private(set) public var syncState: SyncState = .idle { didSet { syncStateSubject.send(syncState) } }
 
+    /// `$syncState` for Combine users; sent after the set.
     public var syncStatePublisher: AnyPublisher<SyncState, Never> {
-        $syncState.eraseToAnyPublisher()
+        syncStateSubject.prepend(syncState).eraseToAnyPublisher()
     }
+    @ObservationIgnored private let syncStateSubject = PassthroughSubject<SyncState, Never>()
 
-    private var backgroundTask: Task<Void, Never>?
+    @ObservationIgnored private var backgroundTask: Task<Void, Never>?
 
     public init() {}
 

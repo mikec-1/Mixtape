@@ -5,7 +5,7 @@ import SwiftUI
 
 struct LocalFilesSettingsGroup: View {
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
 
     @State private var showFolderPicker = false
 

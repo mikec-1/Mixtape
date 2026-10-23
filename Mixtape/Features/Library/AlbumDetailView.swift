@@ -4,12 +4,12 @@ public struct AlbumDetailView: View {
 
     let album: Album
 
-    @EnvironmentObject private var deps:   AppDependencies
-    @EnvironmentObject private var engine: PlaybackEngine
+    @Environment(AppDependencies.self) private var deps
+    @Environment(PlaybackEngine.self) private var engine
     /// Observed directly: `engine.queue` doesn't republish through the engine.
-    @EnvironmentObject private var queueService: QueueService
+    @Environment(QueueService.self) private var queueService
     /// The header shuffle is this list's setting. See `ShufflePreferences`.
-    @ObservedObject private var shufflePrefs = ShufflePreferences.shared
+    private var shufflePrefs: ShufflePreferences { .shared }
 
     private var tracks: [Track] {
         deps.libraryService.tracks(in: album)
@@ -172,10 +172,7 @@ private struct AlbumTrackRow: View {
             // Track number / waveform
             Group {
                 if isCurrent {
-                    Image(systemName: "waveform")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Color.mixPrimary)
-                        .mixVariableColor(isActive: isPlaying)
+                    PlayingWave(size: 12, isPlaying: isPlaying)
                 } else {
                     Text("\(index)")
                         .font(.mixCaption)
@@ -220,8 +217,8 @@ private struct AlbumTrackRow: View {
 #Preview {
     NavigationStack {
         AlbumDetailView(album: Album.previewAlbums[0])
-            .environmentObject(AppDependencies())
-            .environmentObject(PlaybackEngine(
+            .environment(AppDependencies())
+            .environment(PlaybackEngine(
                 queue: QueueService(),
                 fileStorage: SupabaseFileStorageService(client: SupabaseConfig.client),
                 equalizer: AudioEqualizer()

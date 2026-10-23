@@ -6,12 +6,12 @@ import SwiftUI
 
 struct MacQueuePanelView: View {
 
-    @EnvironmentObject private var deps:        AppDependencies
-    @EnvironmentObject private var engine:      PlaybackEngine
-    @EnvironmentObject private var coordinator: OnlinePlaybackCoordinator
+    @Environment(AppDependencies.self) private var deps
+    @Environment(PlaybackEngine.self) private var engine
+    @Environment(OnlinePlaybackCoordinator.self) private var coordinator
     /// Observed directly: `engine.queue` is a plain `let`, so its changes don't
     /// publish through the engine.
-    @EnvironmentObject private var queueService: QueueService
+    @Environment(QueueService.self) private var queueService
 
     /// Drop lands above this row.
     @State private var dropTarget: QueueService.Entry.ID?
@@ -261,7 +261,7 @@ struct MacQueuePanelView: View {
 
 struct MacRecentPanelView: View {
 
-    @EnvironmentObject private var engine: PlaybackEngine
+    @Environment(PlaybackEngine.self) private var engine
 
     var body: some View {
         Group {
@@ -315,9 +315,9 @@ private struct QueuePanelRow: View {
 
     @State private var isHovered = false
 
-    @EnvironmentObject private var engine:      PlaybackEngine
-    @EnvironmentObject private var deps:        AppDependencies
-    @EnvironmentObject private var coordinator: OnlinePlaybackCoordinator
+    @Environment(PlaybackEngine.self) private var engine
+    @Environment(AppDependencies.self) private var deps
+    @Environment(OnlinePlaybackCoordinator.self) private var coordinator
 
     /// Online track id (stored as the file hash). Empty outside online sessions.
     private var onlineID: String { track.file.fileHash }
@@ -429,10 +429,7 @@ private struct QueuePanelRow: View {
                 .controlSize(.small)
                 .scaleEffect(0.6)
         } else if isCurrent && engine.state.isPlaying {
-            Image(systemName: "waveform")
-                .font(.system(size: 12))
-                .foregroundStyle(Color.mixPrimary)
-                .mixPulse()
+            PlayingWave(size: 12, isPlaying: true, pulses: true)
         } else if isHovered, let onRemove {
             Button(action: onRemove) {
                 Image(systemName: "xmark")

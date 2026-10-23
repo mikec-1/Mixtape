@@ -21,12 +21,12 @@ struct OnlineSongMenu: View {
     var onOpenAlbum:  (() -> Void)?       = nil
     var onOpenArtist: ((String) -> Void)? = nil
 
-    @EnvironmentObject private var deps:        AppDependencies
-    @EnvironmentObject private var coordinator: OnlinePlaybackCoordinator
+    @Environment(AppDependencies.self) private var deps
+    @Environment(OnlinePlaybackCoordinator.self) private var coordinator
     #if os(macOS)
-    @EnvironmentObject private var appState:    MacAppState
+    @Environment(MacAppState.self) private var appState
     #else
-    @EnvironmentObject private var iosAppState: IOSAppState
+    @Environment(IOSAppState.self) private var iosAppState
     #endif
 
     var body: some View {

@@ -5,18 +5,18 @@ import SwiftUI
 
 struct MacPlaylistsView: View {
 
-    @EnvironmentObject private var library:  LibraryService
-    @EnvironmentObject private var engine:   PlaybackEngine
-    @EnvironmentObject private var appState: MacAppState
-    @EnvironmentObject private var deps:     AppDependencies
+    @Environment(LibraryService.self) private var library
+    @Environment(PlaybackEngine.self) private var engine
+    @Environment(MacAppState.self) private var appState
+    @Environment(AppDependencies.self) private var deps
     /// Observed directly: `deps.visibleSmartPlaylists` reads a nested ObservableObject that doesn't republish.
-    @EnvironmentObject private var smartService: SmartPlaylistService
+    @Environment(SmartPlaylistService.self) private var smartService
 
     /// The unfiltered Library also lists saved albums and smart playlists.
     var showPlaylists = true
     var showAlbums = false
     var showSmart  = false
-    @ObservedObject private var saved = SavedAlbumsService.shared
+    private var saved: SavedAlbumsService { .shared }
 
     private var albums: [Album] {
         guard showAlbums else { return [] }
@@ -60,12 +60,12 @@ struct MacPlaylistsView: View {
         // Join shared playlist sheet
         .sheet(isPresented: $showJoinShared) {
             JoinSharedPlaylistSheet()
-                .environmentObject(deps)
+                .environment(deps)
         }
         // New playlist sheet
         .sheet(isPresented: $showNewSheet) {
             PlaylistEditorSheet()
-                .environmentObject(deps)
+                .environment(deps)
         }
     }
 
@@ -119,7 +119,7 @@ struct MacPlaylistsView: View {
                                     kind: "Album • \(album.artistName)",
                                     album: album,
                                     onOpen: { appState.selectedAlbum = album })
-                        .environmentObject(deps.downloadManager)
+                        .environment(deps.downloadManager)
                         .contextMenu { AlbumActionsMenu(album: album) }
                 
     }
@@ -129,7 +129,7 @@ struct MacPlaylistsView: View {
         PlaylistRowItem(playlist: smart.asPlaylist(trackIDs: deps.smartTrackIDs(smart)),
                         kind: "Smart Playlist",
                         onOpen: { appState.showSmartPlaylist(smart) })
-            .environmentObject(deps.downloadManager)
+            .environment(deps.downloadManager)
             .contextMenu {
                 SmartPlaylistActionsMenu(playlist: smart, service: smartService)
             }
@@ -152,7 +152,7 @@ struct MacPlaylistsView: View {
                 appState.selectedPlaylist = playlist
             }
         )
-        .environmentObject(deps.downloadManager)
+        .environment(deps.downloadManager)
         // Drag onto the sidebar to add it there. The prefix tells it apart from a track drop.
         .onDrag {
             appState.isDraggingTracks = false
@@ -181,11 +181,11 @@ struct PlaylistRowItem: View {
     var onContextClick: () -> Void = {}
     let onOpen:   () -> Void
 
-    @ObservedObject private var meta = PlaylistMetadataService.shared
-    @EnvironmentObject private var engine:  PlaybackEngine
-    @EnvironmentObject private var library: LibraryService
+    private var meta: PlaylistMetadataService { .shared }
+    @Environment(PlaybackEngine.self) private var engine
+    @Environment(LibraryService.self) private var library
     /// Injected so the offline badge updates when a download finishes; `deps` doesn't republish it.
-    @EnvironmentObject private var downloads: DownloadManager
+    @Environment(DownloadManager.self) private var downloads
 
     @State private var isHovered = false
 

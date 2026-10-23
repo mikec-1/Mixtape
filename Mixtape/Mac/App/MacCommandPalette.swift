@@ -7,13 +7,13 @@ import SwiftUI
 
 struct MacCommandPalette: View {
 
-    @EnvironmentObject private var appState: MacAppState
-    @EnvironmentObject private var library:  LibraryService
-    @EnvironmentObject private var engine:   PlaybackEngine
-    @EnvironmentObject private var deps:     AppDependencies
+    @Environment(MacAppState.self) private var appState
+    @Environment(LibraryService.self) private var library
+    @Environment(PlaybackEngine.self) private var engine
+    @Environment(AppDependencies.self) private var deps
     @Environment(\.mixChrome) private var chrome
 
-    @ObservedObject private var meta = PlaylistMetadataService.shared
+    private var meta: PlaylistMetadataService { .shared }
 
     @State private var query = ""
     @State private var selection = 0

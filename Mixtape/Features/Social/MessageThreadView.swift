@@ -14,17 +14,17 @@ struct MessageThreadView: View {
     /// Nil leaves View Profile out.
     var openProfile: (() -> Void)? = nil
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
     #if os(macOS)
-    @EnvironmentObject private var appState: MacAppState
+    @Environment(MacAppState.self) private var appState
     #else
-    @EnvironmentObject private var iosAppState: IOSAppState
+    @Environment(IOSAppState.self) private var iosAppState
     @State private var picked: [PhotosPickerItem] = []
     @State private var publicPlaylist: PublicPlaylistTarget?
     #endif
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openURL) private var openURL
-    @ObservedObject private var sharing = PlaylistSharingService.shared
+    private var sharing: PlaylistSharingService { .shared }
 
     /// Oldest first.
     @State private var messages: [MessagesService.Message] = []
@@ -93,7 +93,7 @@ struct MessageThreadView: View {
         }
         .navigationDestination(item: $publicPlaylist) { target in
             PublicPlaylistPage(summary: target.summary, ownerName: target.ownerName)
-                .environmentObject(deps)
+                .environment(deps)
         }
         .fullScreenCover(item: $lightbox) { photoViewer($0) }
         .fullScreenCover(item: $focused) { focusCard($0) }
@@ -1383,7 +1383,7 @@ struct SendToSheet: View {
     let item: ShareItem
     let close: () -> Void
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
     @State private var sending = false
 
     var body: some View {
@@ -1444,8 +1444,8 @@ struct NewMessagePicker: View {
     var back: (() -> Void)? = nil
     let pick: (UserProfile) -> Void
 
-    @EnvironmentObject private var deps: AppDependencies
-    @ObservedObject private var messages = MessagesService.shared
+    @Environment(AppDependencies.self) private var deps
+    private var messages: MessagesService { .shared }
     @StateObject private var people = PeopleSearch()
     @State private var query = ""
 

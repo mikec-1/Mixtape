@@ -98,6 +98,8 @@ final class TrackListMemo {
     private(set) var tracks: [Track] = []
     private(set) var visible: [Track] = []
     private(set) var playable: [Track] = []
+    /// Summed here so the header doesn't walk every row per body pass.
+    private(set) var totalSeconds = 0
 
     /// Recomputes only if an input changed. `resolve` is passed in, not held, so
     /// this keeps no reference to the library.
@@ -112,6 +114,7 @@ final class TrackListMemo {
         key = next
 
         tracks   = ids.compactMap(resolve)
+        totalSeconds = Int(tracks.reduce(0) { $0 + $1.duration })
         visible  = tracks.matching(query: query).sorted(by: sort)
         playable = visible.filter(isPlayable)
     }

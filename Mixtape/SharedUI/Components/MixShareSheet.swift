@@ -483,7 +483,7 @@ private struct SharePeopleRow: View {
     let item: ShareItem
     let deps: AppDependencies
 
-    @ObservedObject private var messages = MessagesService.shared
+    private var messages: MessagesService { .shared }
     @State private var sending: Set<UUID> = []
     @State private var sent: Set<UUID> = []
 

@@ -8,10 +8,10 @@ import Combine
 
 struct MacArtistsView: View {
 
-    @EnvironmentObject private var library:  LibraryService
-    @EnvironmentObject private var engine:   PlaybackEngine
-    @EnvironmentObject private var appState: MacAppState
-    @EnvironmentObject private var deps:     AppDependencies
+    @Environment(LibraryService.self) private var library
+    @Environment(PlaybackEngine.self) private var engine
+    @Environment(MacAppState.self) private var appState
+    @Environment(AppDependencies.self) private var deps
 
     let searchText: String
 
@@ -107,8 +107,8 @@ private struct MacArtistCard: View {
     let artist: Artist
     let onSelect: () -> Void
 
-    @EnvironmentObject private var library: LibraryService
-    @EnvironmentObject private var engine:  PlaybackEngine
+    @Environment(LibraryService.self) private var library
+    @Environment(PlaybackEngine.self) private var engine
 
     @State private var isHovered = false
 
@@ -157,14 +157,17 @@ private struct MacArtistCard: View {
 
     private var avatar: some View {
         Group {
-            if let data = artist.displayArtwork, let img = NSImage(data: data) {
-                Image(nsImage: img).resizable().scaledToFill()
+            // Decoding in body and a store fetch per miss ran on every redraw of every card.
+            if let data = artist.artworkData, !data.isEmpty, let img = mixImage(from: data, displaySize: 180) {
+                img.resizable().scaledToFill()
             } else {
-                Text(String(artist.name.prefix(1)).uppercased())
-                    .font(.system(size: 34, weight: .bold))
-                    .foregroundStyle(Color.mixTextTertiary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.mixSurface)
+                AsyncArtworkImage(source: .row(.artist(artist.id)), size: 180) {
+                    Text(String(artist.name.prefix(1)).uppercased())
+                        .font(.system(size: 34, weight: .bold))
+                        .foregroundStyle(Color.mixTextTertiary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(Color.mixSurface)
+                }
             }
         }
         .aspectRatio(1, contentMode: .fit)
@@ -180,10 +183,10 @@ private struct MacArtistDetailPanel: View {
     let artist: Artist
     let onBack: () -> Void
 
-    @EnvironmentObject private var library:  LibraryService
-    @EnvironmentObject private var engine:   PlaybackEngine
-    @EnvironmentObject private var appState: MacAppState
-    @EnvironmentObject private var deps:     AppDependencies
+    @Environment(LibraryService.self) private var library
+    @Environment(PlaybackEngine.self) private var engine
+    @Environment(MacAppState.self) private var appState
+    @Environment(AppDependencies.self) private var deps
 
     @Environment(\.mixChrome) private var chrome
 
@@ -244,21 +247,10 @@ private struct MacArtistDetailPanel: View {
 
     // MARK: - Hero Banner
 
+    // Not a bottom-leading ZStack: sizing one asked the row for its alignment guides too, which laid the whole
+    // row out a second time, about 100 ms of every artist open.
     private var heroSection: some View {
-        ZStack(alignment: .bottomLeading) {
-            // Blurred artwork fills the banner
-            heroBackground
-                .frame(height: 210)
-                .clipped()
-
-            // Fade-to-background gradient at the bottom so content blends in
-            LinearGradient(
-                colors: [.clear, Color.mixBackground],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .frame(height: 210)
-
+        BottomLeadingPin(minHeight: 210) {
             // Artist photo + info pinned to the bottom of the banner
             HStack(alignment: .bottom, spacing: 18) {
                 artistAvatar
@@ -328,6 +320,22 @@ private struct MacArtistDetailPanel: View {
             }
             .padding(.horizontal, 24)
         }
+        .background(alignment: .bottom) {
+            ZStack {
+                // Blurred artwork fills the banner
+                heroBackground
+                    .frame(height: 210)
+                    .clipped()
+
+                // Fade-to-background gradient at the bottom so content blends in
+                LinearGradient(
+                    colors: [.clear, Color.mixBackground],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 210)
+            }
+        }
     }
 
     private var heroBackground: some View {
@@ -356,8 +364,8 @@ private struct MacArtistDetailPanel: View {
     /// Just the photo. `LibraryService.scheduleArtistImageBackfill()` fetches artist pictures.
     private var artistAvatar: some View {
         Group {
-            if let data = artist.displayArtwork, let img = NSImage(data: data) {
-                Image(nsImage: img).resizable().scaledToFill()
+            if let data = artist.displayArtwork, let img = mixImage(from: data, displaySize: 90) {
+                img.resizable().scaledToFill()
             } else {
                 ZStack {
                     Color.mixPrimary.opacity(0.20)
@@ -465,6 +473,26 @@ private struct MacArtistDetailPanel: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 56)
     }
+}
+
+/// Full width, at least `minHeight` tall, its content pinned bottom-leading by size alone.
+private struct BottomLeadingPin: Layout {
+    var minHeight: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let size = subviews.first?.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil)) ?? .zero
+        return CGSize(width: proposal.width ?? size.width, height: max(minHeight, size.height))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: CGPoint(x: bounds.minX, y: bounds.maxY), anchor: .bottomLeading,
+                              proposal: ProposedViewSize(width: bounds.width, height: nil))
+    }
+    // No guides of its own. The default merges the row's, which lays it out again.
+    func explicitAlignment(of guide: HorizontalAlignment, in bounds: CGRect, proposal: ProposedViewSize,
+                           subviews: Subviews, cache: inout ()) -> CGFloat? { nil }
+    func explicitAlignment(of guide: VerticalAlignment, in bounds: CGRect, proposal: ProposedViewSize,
+                           subviews: Subviews, cache: inout ()) -> CGFloat? { nil }
 }
 
 // MARK: - Album Card (within artist detail)

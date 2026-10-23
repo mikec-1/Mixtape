@@ -23,7 +23,7 @@ public final class MainThreadHangMonitor: @unchecked Sendable {
 
     /// Starts watching. No-op in release builds or if already started.
     public func start() {
-        #if DEBUG
+        #if DEBUG || PERFOPT // TEMP perf
         queue.async { [weak self] in
             guard let self, !self.running else { return }
             self.running = true
@@ -36,12 +36,16 @@ public final class MainThreadHangMonitor: @unchecked Sendable {
         queue.async { [weak self] in self?.running = false }
     }
 
-    #if DEBUG
+    #if DEBUG || PERFOPT // TEMP perf
     /// Time of the last stack capture, so a storm of hangs costs one sample.
     private var lastCapture: CFAbsoluteTime = 0
 
     /// `sample` suspends the process, so capturing every hang would cause hangs.
     private let captureCooldown: TimeInterval = 10
+
+    /// `-HangStacks NO` for timing runs, where the capture itself would stall the app.
+    /// Launch arguments arrive as strings, so `as? Bool` would miss "NO".
+    private let captureStacks = UserDefaults.standard.object(forKey: "HangStacks") == nil || UserDefaults.standard.bool(forKey: "HangStacks")
 
     /// When the probe block ran. The semaphore orders the write before the read, so no lock.
     private final class Arrival { var at: CFAbsoluteTime = 0 }
@@ -64,17 +68,18 @@ public final class MainThreadHangMonitor: @unchecked Sendable {
             var stuck: String? = nil
             if outcome == .timedOut {
                 stuck = MainThreadActivity.shared.trail
-                captureStackIfDue()
+                if captureStacks { captureStackIfDue() }
                 // Bounded so a wedged main thread keeps being reported.
                 outcome = arrived.wait(timeout: .now() + 5)
             }
-            let waited = mark.at - sent
 
             if outcome == .timedOut {
-                MixLog.hangs.error("Main thread unresponsive for over 5 s\(Self.blame(stuck))")
-                // Don't race ahead of a block that hasn't run yet.
+                MixLog.hangs.error("Main thread unresponsive for over 5 s\(Self.blame(stuck), privacy: .public)")
+                // Don't race ahead of a block that hasn't run yet; then log how long it really was.
                 arrived.wait()
-            } else if waited >= threshold {
+            }
+            let waited = mark.at - sent
+            if waited >= threshold {
                 // Logged on the launch timeline clock with the full window, since the line is emitted
                 // when the probe lands and the hang reaches back from there.
                 let endedAt = LaunchTimeline.elapsedMilliseconds()

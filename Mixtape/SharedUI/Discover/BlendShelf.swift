@@ -14,7 +14,7 @@ extension BlendService {
 /// A grid on the Mac, a carousel on the phone, like "Your mixes".
 struct BlendShelf: View {
 
-    @ObservedObject var blends: BlendService
+    var blends: BlendService
     let deps: AppDependencies
     var showsHeader = true
     var resolvingID: String? = nil

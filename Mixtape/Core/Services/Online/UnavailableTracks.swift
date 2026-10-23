@@ -4,21 +4,23 @@
 
 import Foundation
 import Combine
+import Observation
 
+@Observable
 @MainActor
-public final class UnavailableTracks: ObservableObject {
+public final class UnavailableTracks {
 
     public static let shared = UnavailableTracks()
 
     /// Keyed by title|artist, not Track.id, since the same song arrives with different ids.
-    @Published public private(set) var keys: Set<String> = []
+    public private(set) var keys: Set<String> = []
 
     /// Songs confirmed findable, so the scanner doesn't re-ask on every queue change.
-    @Published public private(set) var verified: Set<String> = []
+    public private(set) var verified: Set<String> = []
 
     /// Songs the queue just dropped. One short-lived list read by both the player
     /// card and the queue notice; entries clear themselves.
-    @Published public private(set) var recentSkips: [Announcement] = []
+    public private(set) var recentSkips: [Announcement] = []
 
     private init() {}
 

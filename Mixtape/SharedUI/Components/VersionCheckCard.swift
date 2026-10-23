@@ -5,8 +5,8 @@ import SwiftUI
 
 struct VersionCheckHost: View {
 
-    @ObservedObject var coordinator: OnlinePlaybackCoordinator
-    @ObservedObject var queue: QueueService
+    var coordinator: OnlinePlaybackCoordinator
+    var queue: QueueService
     /// Gap below the card; carried by the card so an empty host takes no space.
     var bottomGap: CGFloat = 0
 
@@ -28,7 +28,7 @@ private struct VersionCheckCard: View {
 
     let check: OnlinePlaybackCoordinator.VersionCheck
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
 
     var body: some View {
         HStack(spacing: 6) {

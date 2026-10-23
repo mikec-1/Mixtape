@@ -9,8 +9,8 @@ struct MacMetadataReviewSheet: View {
 
     let item: MetadataReviewItem
 
-    @EnvironmentObject private var deps:     AppDependencies
-    @EnvironmentObject private var appState: MacAppState
+    @Environment(AppDependencies.self) private var deps
+    @Environment(MacAppState.self) private var appState
 
     @State private var draft: MetadataDraft
 
@@ -193,8 +193,8 @@ struct MacMetadataReviewSheet: View {
                         .background(Color.mixSurface)
                 }
             }
-        } else if let data = item.track.displayArtwork, let img = NSImage(data: data) {
-            Image(nsImage: img).resizable().scaledToFill()
+        } else if let data = item.track.displayArtwork, let img = mixImage(from: data) {
+            img.resizable().scaledToFill()
         } else {
             artworkPlaceholder
         }

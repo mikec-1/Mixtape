@@ -16,9 +16,11 @@ import Foundation
 import Combine
 import os
 import Supabase
+import Observation
 
+@Observable
 @MainActor
-public final class JamService: ObservableObject {
+public final class JamService {
 
     typealias TrackSummary = ContinuityService.TrackSummary
 
@@ -111,17 +113,17 @@ public final class JamService: ObservableObject {
         var nearby: Bool? = nil
     }
 
-    @Published public private(set) var session: Session? {
+    public private(set) var session: Session? {
         didSet { persist(); nearby.joined = session?.code }
     }
     /// Everyone connected, this device included.
-    @Published public private(set) var members: [Member] = []
-    @Published public private(set) var upNext: [Item] = []
-    @Published public private(set) var shuffle = false
-    @Published public private(set) var repeatMode: RepeatMode = .off
-    @Published public private(set) var isBusy = false
+    public private(set) var members: [Member] = []
+    public private(set) var upNext: [Item] = []
+    public private(set) var shuffle = false
+    public private(set) var repeatMode: RepeatMode = .off
+    public private(set) var isBusy = false
     /// Drives the Jam sheet from anywhere (device picker, links).
-    @Published public var isSheetPresented = false
+    public var isSheetPresented = false
 
     public var isGuest: Bool { session.map { !$0.isHost } ?? false }
     public var hostPresent: Bool { members.contains { $0.host } }
@@ -145,44 +147,44 @@ public final class JamService: ObservableObject {
     private let deviceID: String
     private let currentUser: () -> AppUser?
     private let toast: (Toast) -> Void
-    public weak var online: OnlinePlaybackCoordinator?
+    @ObservationIgnored public weak var online: OnlinePlaybackCoordinator?
 
-    private var channel: RealtimeChannelV2?
-    private var channelTask: Task<Void, Never>?
-    private var tickTask: Task<Void, Never>?
-    private var cancellables = Set<AnyCancellable>()
-    private var me: Member?
-    private var presenceRefs: [String: Set<String>] = [:]
+    @ObservationIgnored private var channel: RealtimeChannelV2?
+    @ObservationIgnored private var channelTask: Task<Void, Never>?
+    @ObservationIgnored private var tickTask: Task<Void, Never>?
+    @ObservationIgnored private var cancellables = Set<AnyCancellable>()
+    @ObservationIgnored private var me: Member?
+    @ObservationIgnored private var presenceRefs: [String: Set<String>] = [:]
     /// Guest: the host's last state and when it arrived.
-    private var last: (msg: StateMessage, at: TimeInterval)?
+    @ObservationIgnored private var last: (msg: StateMessage, at: TimeInterval)?
     /// Host: who queued each song, by track id.
     // ponytail: keyed by song, so the same song queued twice shows the latest name.
-    private var addedBy: [UUID: String] = [:]
+    @ObservationIgnored private var addedBy: [UUID: String] = [:]
     /// Host: removed this session, ignored until their socket drops.
-    private var kicked: Set<String> = []
+    @ObservationIgnored private var kicked: Set<String> = []
     /// Signed links to imported songs' uploaded files, so other devices play
     /// the file itself instead of searching for the song.
-    private var fileLinks: [UUID: String] = [:]
+    @ObservationIgnored private var fileLinks: [UUID: String] = [:]
     /// Storage keys signed and links fetched, so neither happens twice.
-    private var fileTried: Set<String> = []
+    @ObservationIgnored private var fileTried: Set<String> = []
     /// Songs whose shared file is still downloading.
-    private var fetching: Set<UUID> = []
+    @ObservationIgnored private var fetching: Set<UUID> = []
     /// Each song's cover as whoever queued it sees it: a signed link to their
     /// stored cover, or the catalogue picture. Every device draws this one.
-    private var coverLinks: [UUID: String] = [:]
+    @ObservationIgnored private var coverLinks: [UUID: String] = [:]
     /// Those covers, by link, once fetched.
-    private var covers: [String: Data] = [:]
-    private var lastSent: (position: Double, at: TimeInterval, playing: Bool)?
+    @ObservationIgnored private var covers: [String: Data] = [:]
+    @ObservationIgnored private var lastSent: (position: Double, at: TimeInterval, playing: Bool)?
     /// Host: its own queued songs already seen, nil until the first state seeds it.
-    private var seenOwnAdds: Set<UUID>?
-    private var sendScheduled = false
-    private var lastCheck: TimeInterval = -.infinity
+    @ObservationIgnored private var seenOwnAdds: Set<UUID>?
+    @ObservationIgnored private var sendScheduled = false
+    @ObservationIgnored private var lastCheck: TimeInterval = -.infinity
     /// Checks in a row that got no answer; three is about the host's 90 s lease.
-    private var missedChecks = 0
+    @ObservationIgnored private var missedChecks = 0
     /// Guest listening here: the host song loaded locally, and when it was last nudged into step.
-    private var localTrackID: UUID?
-    private var localLoading = false
-    private var lastLocalSeek: TimeInterval = -.infinity
+    @ObservationIgnored private var localTrackID: UUID?
+    @ObservationIgnored private var localLoading = false
+    @ObservationIgnored private var lastLocalSeek: TimeInterval = -.infinity
 
     private static let storeKey = "jam.session"
     private var uptime: TimeInterval { ProcessInfo.processInfo.systemUptime }
@@ -201,11 +203,11 @@ public final class JamService: ObservableObject {
         nearby.joined = session?.code
         if isGuest { installGuestHooks() }
 
-        engine.$state.sink { [weak self] _ in self?.scheduleSend() }.store(in: &cancellables)
-        engine.queue.$currentIndex.sink { [weak self] _ in self?.scheduleSend() }.store(in: &cancellables)
-        engine.queue.$queue.sink { [weak self] _ in self?.scheduleSend() }.store(in: &cancellables)
-        engine.queue.$shuffleEnabled.sink { [weak self] _ in self?.scheduleSend() }.store(in: &cancellables)
-        engine.queue.$repeatMode.sink { [weak self] _ in self?.scheduleSend() }.store(in: &cancellables)
+        engine.statePublisher.sink { [weak self] _ in self?.scheduleSend() }.store(in: &cancellables)
+        engine.queue.currentIndexPublisher.sink { [weak self] _ in self?.scheduleSend() }.store(in: &cancellables)
+        engine.queue.queuePublisher.sink { [weak self] _ in self?.scheduleSend() }.store(in: &cancellables)
+        engine.queue.shuffleEnabledPublisher.sink { [weak self] _ in self?.scheduleSend() }.store(in: &cancellables)
+        engine.queue.repeatModePublisher.sink { [weak self] _ in self?.scheduleSend() }.store(in: &cancellables)
     }
 
     // MARK: - Starting, joining, leaving

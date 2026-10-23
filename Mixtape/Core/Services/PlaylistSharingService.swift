@@ -9,9 +9,11 @@ import Foundation
 import Combine
 import Supabase
 import OSLog
+import Observation
 
+@Observable
 @MainActor
-public final class PlaylistSharingService: ObservableObject {
+public final class PlaylistSharingService {
 
     public static let shared = PlaylistSharingService()
 
@@ -908,7 +910,7 @@ public final class PlaylistSharingService: ObservableObject {
 
     /// Invites waiting on this account, newest first. Published so every surface can badge it; refreshed
     /// on sign-in and foreground.
-    @Published public private(set) var pendingInvites: [PendingInvite] = []
+    public private(set) var pendingInvites: [PendingInvite] = []
 
     /// Re-reads the inbox. Silent on failure since it runs unprompted. Existing RLS covers it; two
     /// queries because the join crosses into `auth.users`.

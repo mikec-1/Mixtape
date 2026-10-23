@@ -8,7 +8,7 @@ struct DubSheet: View {
     let playlist: Playlist
     let tracks: [Track]
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
     @Environment(\.dismiss) private var dismiss
 
     @StateObject private var people = PeopleSearch()

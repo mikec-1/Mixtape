@@ -8,9 +8,9 @@ import AppKit
 
 public struct LocalFilesPage: View {
 
-    @EnvironmentObject private var deps:    AppDependencies
-    @EnvironmentObject private var engine:  PlaybackEngine
-    @EnvironmentObject private var library: LibraryService
+    @Environment(AppDependencies.self) private var deps
+    @Environment(PlaybackEngine.self) private var engine
+    @Environment(LibraryService.self) private var library
 
     @State private var searchText = ""
     @State private var savingAll  = false
@@ -18,10 +18,10 @@ public struct LocalFilesPage: View {
     #if os(macOS)
     @State private var selectedIDs: Set<Track.ID> = []
     @State private var savingSelection = false
-    @EnvironmentObject private var appState: MacAppState
+    @Environment(MacAppState.self) private var appState
     #endif
     #if os(iOS)
-    @EnvironmentObject private var iosAppState: IOSAppState
+    @Environment(IOSAppState.self) private var iosAppState
     #endif
 
     public init() {}

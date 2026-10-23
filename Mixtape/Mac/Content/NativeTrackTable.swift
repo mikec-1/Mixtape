@@ -339,6 +339,9 @@ extension NativeTrackTable {
         // Tracks what we last loaded so updateNSView skips no-op reloads.
         private var lastDisplayHash: Int        = 0
         private var lastScale:       CGFloat    = 1.0
+        /// Held so an upstream edit has to copy: the same storage next time means the same rows.
+        private var lastSource:      [Track]    = []
+        private var lastSelection:   Set<Track.ID> = []
 
         // Prevents a SwiftUI->AppKit->SwiftUI selection feedback loop.
         private var suppressSelectionSync = false
@@ -417,7 +420,12 @@ extension NativeTrackTable {
             }
 
             // A hash of what's drawn, not just ids, so enrichment edits (same id) re-sort too.
-            let newHash     = displayHash(of: parent.tracks)
+            // A resize re-renders the page every frame with the same array, so skip hashing every row.
+            let sameSource = parent.tracks.count == lastSource.count && parent.tracks.withUnsafeBufferPointer { a in
+                lastSource.withUnsafeBufferPointer { a.baseAddress == $0.baseAddress }
+            }
+            let newHash     = sameSource ? lastDisplayHash : displayHash(of: parent.tracks)
+            lastSource      = parent.tracks
             let needsReload = newHash != lastDisplayHash || scaleChanged || metricsChanged
             if needsReload {
                 lastDisplayHash = newHash
@@ -426,24 +434,25 @@ extension NativeTrackTable {
                     ? sorted(parent.tracks, by: tv.sortDescriptors.first)
                     : parent.tracks
                 tv.reloadData()
-            } else if prev.currentTrackID != parent.currentTrackID
-                    || prev.isPlaying      != parent.isPlaying {
-                // Only the playing state changed: reload the visible rows' columns.
-                // All columns, since both "index" and "title" draw the playing state.
-                let visible = tv.rows(in: tv.visibleRect)
-                if visible.location != NSNotFound && visible.length > 0,
-                   tv.numberOfColumns > 0 {
-                    tv.reloadData(
-                        forRowIndexes: IndexSet(integersIn: visible.location ..< NSMaxRange(visible)),
-                        columnIndexes: IndexSet(integersIn: 0 ..< tv.numberOfColumns)
-                    )
-                }
             } else {
+                // Only rows whose playing or loading state moved, all columns, since both "index" and
+                // "title" draw it. A skip used to reload every visible row.
+                let rows = changedStatusRows(tv, prev: prev)
+                if !rows.isEmpty, tv.numberOfColumns > 0 {
+                    tv.reloadData(forRowIndexes: rows,
+                                  columnIndexes: IndexSet(integersIn: 0 ..< tv.numberOfColumns))
+                }
                 // Favourite/save state changes no drawn text, so refresh the action column directly.
                 refreshRowActions(tv)
             }
 
             // Sync selection SwiftUI -> AppKit (only for external changes).
+            if needsReload || parent.selectedIDs != lastSelection { syncSelection(tv) }
+        }
+
+        /// Selects the rows of `parent.selectedIDs`. A scan of every row, so only after a change.
+        func syncSelection(_ tv: NSTableView) {
+            lastSelection = parent.selectedIDs
             let desired = IndexSet(
                 tracks.indices.filter { parent.selectedIDs.contains(tracks[$0].id) }
             )
@@ -463,19 +472,41 @@ extension NativeTrackTable {
                 h.combine(t.artistName)
                 h.combine(t.albumTitle)
                 h.combine(t.artworkData != nil)
-                
-                h.combine(parent.resolvingIDs.contains(t.id))
-
-                let status = parent.availability(t.id)
-                switch status {
-                case .streamOnly:  h.combine(0)
-                case .downloading: h.combine(1)
-                case .offline:     h.combine(2)
-                case .local:       h.combine(3)
-                case .failed:      h.combine(4)
-                }
             }
             return h.finalize()
+        }
+
+        /// Loading and download state each title cell was last drawn with. Off-screen rows read it fresh when
+        /// they scroll in, so a song starting to load no longer reloads and re-sorts every row.
+        private var drawnStatus: [Track.ID: Int] = [:]
+
+        /// Visible rows whose loading state differs from what their cells drew, plus the old and new
+        /// playing rows when that moved.
+        private func changedStatusRows(_ tv: NSTableView, prev: NativeTrackTable) -> IndexSet {
+            let visible = tv.rows(in: tv.visibleRect)
+            guard visible.location != NSNotFound else { return [] }
+            let playingMoved = prev.currentTrackID != parent.currentTrackID || prev.isPlaying != parent.isPlaying
+            var rows = IndexSet()
+            for row in visible.location ..< NSMaxRange(visible) where row < tracks.count {
+                let id = tracks[row].id
+                if drawnStatus[id] != statusCode(id)
+                    || (playingMoved && (id == prev.currentTrackID || id == parent.currentTrackID)) {
+                    rows.insert(row)
+                }
+            }
+            return rows
+        }
+
+        private func statusCode(_ id: Track.ID) -> Int {
+            let base: Int
+            switch parent.availability(id) {
+            case .streamOnly:  base = 0
+            case .downloading: base = 1
+            case .offline:     base = 2
+            case .local:       base = 3
+            case .failed:      base = 4
+            }
+            return parent.resolvingIDs.contains(id) ? base + 8 : base
         }
 
         // MARK: - Crisp rendering helper
@@ -1032,6 +1063,7 @@ extension NativeTrackTable.Coordinator: NSTableViewDataSource {
         }
         tracks = sorted(tracks, by: tableView.sortDescriptors.first)
         tableView.reloadData()
+        syncSelection(tableView)
     }
 
     // MARK: - Dragging rows out (-> sidebar playlists)
@@ -1094,6 +1126,7 @@ extension NativeTrackTable.Coordinator: NSTableViewDelegate {
                         isPlaying: parent.isPlaying,
                         availability: parent.availability(track.id),
                         isResolving: parent.resolvingIDs.contains(track.id))
+            drawnStatus[track.id] = statusCode(track.id)
             // Clicking the artwork plays on a single click.
             c.onArtworkClick = { [weak self] in self?.play(row: row) }
             c.setHovered((tableView as? MelTableView)?.hoveredRow == row)
@@ -1355,7 +1388,7 @@ private final class TrackTitleCell: NSTableCellView {
         titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         // Waveform "now playing" dot
-        waveView.image              = NSImage(systemSymbolName: "waveform", accessibilityDescription: nil)
+        waveView.image              = RowSymbol.image("waveform")
         waveView.contentTintColor   = NSColor(red: 1.0, green: 107/255, blue: 0, alpha: 1)
         waveView.isHidden           = true
 
@@ -1365,7 +1398,7 @@ private final class TrackTitleCell: NSTableCellView {
         playBadge.layer?.cornerRadius    = 3
         playBadge.isHidden               = true
 
-        playIcon.image            = NSImage(systemSymbolName: "play.fill", accessibilityDescription: "Play")
+        playIcon.image            = RowSymbol.image("play.fill", description: "Play")
         playIcon.contentTintColor = .white
         playIcon.imageScaling     = .scaleProportionallyUpOrDown
 
@@ -1669,12 +1702,18 @@ private final class TrackLinkCell: NSTableCellView {
         }
     }
 
+    /// Reuses the labels already there, since scrolling hands this cell a new row every few frames.
     private func rebuild() {
-        stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        var labels = stack.arrangedSubviews.compactMap { $0 as? LinkLabel }
+        while labels.count > names.count { labels.removeLast().removeFromSuperview() }
 
         // The ", " rides on the preceding name so it truncates with it.
         for (index, name) in names.enumerated() {
             let text = index < names.count - 1 ? name + ", " : name
+            if index < labels.count {
+                labels[index].update(text: text, font: font, color: color)
+                continue
+            }
             let label = LinkLabel(text: text, font: font, color: color, isLink: true)
             // Later names truncate first.
             label.setContentCompressionResistancePriority(
@@ -1706,6 +1745,8 @@ private final class LinkLabel: NSTextField {
     let isLink: Bool
     var onClick: (() -> Void)? {
         didSet {
+            // Set on every configure; only having an action or not changes anything.
+            guard (oldValue == nil) != (onClick == nil) else { return }
             // A reused row with no action drops its hover styling.
             if onClick == nil, isHovering { isHovering = false }
             restyle()
@@ -1713,8 +1754,8 @@ private final class LinkLabel: NSTextField {
         }
     }
 
-    private let text:  String
-    private let base:  NSColor
+    private var text:  String
+    private var base:  NSColor
     private var isHovering = false
 
     init(text: String, font: NSFont, color: NSColor, isLink: Bool) {
@@ -1737,6 +1778,13 @@ private final class LinkLabel: NSTextField {
 
     private var isInteractive: Bool { isLink && onClick != nil }
 
+    func update(text newText: String, font newFont: NSFont, color newColor: NSColor) {
+        text = newText
+        base = newColor
+        font = newFont
+        restyle()
+    }
+
     private func restyle() {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineBreakMode = .byTruncatingTail
@@ -1753,7 +1801,8 @@ private final class LinkLabel: NSTextField {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
+        // .inVisibleRect follows the bounds on its own, so one area is enough.
+        guard trackingAreas.isEmpty else { return }
         addTrackingArea(NSTrackingArea(
             rect: .zero,
             options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
@@ -1878,7 +1927,7 @@ fileprivate final class TrackRowActionCell: NSTableCellView {
 
     func configure(_ state: State, size: CGFloat) {
         self.state = state
-        icon.image = NSImage(systemSymbolName: state.symbol, accessibilityDescription: state.label)
+        icon.image = RowSymbol.image(state.symbol, description: state.label)
         icon.symbolConfiguration = NSImage.SymbolConfiguration(
             pointSize: size, weight: state == .saved ? .semibold : .regular
         )
@@ -1985,9 +2034,8 @@ final class MelTableHeaderView: NSTableHeaderView {
             (fieldHost, self.titles) = (host, titles)
         }
         // Repaint when the wash changes (new page or late cover colours) or the backdrop moves.
-        washObserver = ArtworkWashTint.shared.objectWillChange.map { _ in () }
-            .merge(with: BackdropRenderer.shared.$image.map { _ in () },
-                   BackdropRenderer.shared.$fieldSize.map { _ in () })
+        washObserver = ArtworkWashTint.shared.changed
+            .merge(with: BackdropRenderer.shared.changed)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
                 self?.needsDisplay = true

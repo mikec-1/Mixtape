@@ -7,9 +7,11 @@
 
 import Foundation
 import Combine
+import Observation
 
+@Observable
 @MainActor
-public final class SpotifyImportLedger: ObservableObject {
+public final class SpotifyImportLedger {
 
     // MARK: - Entry
 
@@ -42,10 +44,10 @@ public final class SpotifyImportLedger: ObservableObject {
     }
 
     /// Keyed by the kind-qualified `SpotifyLibraryItem.id`.
-    @Published public private(set) var entries: [String: Entry] = [:]
+    public private(set) var entries: [String: Entry] = [:]
 
     /// Checks entries still point at something. Weak to avoid a cycle.
-    private weak var libraryService: LibraryService?
+    @ObservationIgnored private weak var libraryService: LibraryService?
 
     /// Set by `AppDependencies` so auth can hand over the account's copy. Not a singleton.
     public private(set) static weak var shared: SpotifyImportLedger?
@@ -191,10 +193,10 @@ public final class SpotifyImportLedger: ObservableObject {
     // MARK: - Account sync
 
     /// Writes the encoded ledger to `user_metadata`.
-    public var pushWriter: ((String) -> Void)?
+    @ObservationIgnored public var pushWriter: ((String) -> Void)?
 
-    private var isApplyingRemote = false
-    private var pushTask: Task<Void, Never>?
+    @ObservationIgnored private var isApplyingRemote = false
+    @ObservationIgnored private var pushTask: Task<Void, Never>?
 
     /// Adopts the account's copy on sign-in and refresh. Local track ids survive.
     public func adoptRemote(_ raw: String?) {
@@ -224,7 +226,7 @@ public final class SpotifyImportLedger: ObservableObject {
     }
 
     /// Imports the user undid on this device. See `adoptRemote`.
-    private var forgotten: Set<String> = Set(
+    @ObservationIgnored private var forgotten: Set<String> = Set(
         UserDefaults.standard.stringArray(forKey: "mix.spotifyForgottenImports") ?? []
     ) {
         didSet { UserDefaults.standard.set(Array(forgotten), forKey: "mix.spotifyForgottenImports") }

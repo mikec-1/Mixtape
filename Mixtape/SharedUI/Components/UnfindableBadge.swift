@@ -4,7 +4,7 @@ import SwiftUI
 
 struct UnfindableBadge: View {
 
-    @ObservedObject private var unavailable = UnavailableTracks.shared
+    private var unavailable: UnavailableTracks { .shared }
 
     @State private var isHovering = false
 

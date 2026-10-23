@@ -29,7 +29,7 @@ struct InviteCollaboratorsSheet: View {
     private let coverData: Data?
     private let declaredOwner: Bool?
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
     @Environment(\.dismiss) private var dismiss
 
     // MARK: State

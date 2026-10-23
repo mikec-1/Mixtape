@@ -4,14 +4,16 @@
 
 import Foundation
 import Combine
+import Observation
 
+@Observable
 @MainActor
-public final class SpotifyThrottle: ObservableObject {
+public final class SpotifyThrottle {
 
     public static let shared = SpotifyThrottle()
 
     /// When Spotify said it would start answering again, or nil when it is.
-    @Published public private(set) var until: Date?
+    public private(set) var until: Date?
 
     private init() {}
 

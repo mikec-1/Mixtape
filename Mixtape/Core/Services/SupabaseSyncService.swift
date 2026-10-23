@@ -13,24 +13,28 @@ import CoreGraphics
 import UIKit
 #endif
 import OSLog
+import Observation
 
+@Observable
 @MainActor
-public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
+public final class SupabaseSyncService: SyncServiceProtocol {
 
     // MARK: - Published State
 
-    @Published private(set) public var syncState: SyncState = .idle
+    private(set) public var syncState: SyncState = .idle { didSet { syncStateSubject.send(syncState) } }
 
+    /// `$syncState` for Combine users; sent after the set.
     public var syncStatePublisher: AnyPublisher<SyncState, Never> {
-        $syncState.eraseToAnyPublisher()
+        syncStateSubject.prepend(syncState).eraseToAnyPublisher()
     }
+    @ObservationIgnored private let syncStateSubject = PassthroughSubject<SyncState, Never>()
 
     // MARK: - Dependencies
 
     // A provider, not a value: building the SupabaseClient is slow, and doing it in `AppDependencies.init`
     // blocked the first frame. `@autoclosure` defers it to the first network call.
     private let clientProvider: () -> SupabaseClient
-    private lazy var client: SupabaseClient = clientProvider()
+    @ObservationIgnored private lazy var client: SupabaseClient = clientProvider()
     /// Never stored; the context belongs to whichever account's store is open. See `ModelStore`.
     private var context: ModelContext { ModelStore.shared.context }
     private let libraryService: LibraryService
@@ -38,38 +42,38 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
 
     // MARK: - Private State
 
-    private var currentUser:    AppUser?
+    @ObservationIgnored private var currentUser:    AppUser?
 
     /// Last token given to the realtime socket, so waking from background can reapply it.
-    private var realtimeToken:  String?
-    private var backgroundTask: Task<Void, Never>?
-    private var isSyncing = false
+    @ObservationIgnored private var realtimeToken:  String?
+    @ObservationIgnored private var backgroundTask: Task<Void, Never>?
+    @ObservationIgnored private var isSyncing = false
 
     /// A sync requested while one was running. Dropping it lost data: the running sync may be past `pullAll`,
     /// so its rows weren't included. Requests are coalesced into one follow-up instead.
-    private var syncRequestedWhileBusy = false
+    @ObservationIgnored private var syncRequestedWhileBusy = false
 
     /// Signs the user out as soon as this device's `devices` row is deleted (force logout from the web).
-    private var revocationChannel: RealtimeChannelV2?
-    private var revocationTask:    Task<Void, Never>?
+    @ObservationIgnored private var revocationChannel: RealtimeChannelV2?
+    @ObservationIgnored private var revocationTask:    Task<Void, Never>?
 
     /// Listens on this user's library rows so edits from other devices arrive without waiting for the timer.
-    private var libraryChannel: RealtimeChannelV2?
-    private var libraryTask:    Task<Void, Never>?
+    @ObservationIgnored private var libraryChannel: RealtimeChannelV2?
+    @ObservationIgnored private var libraryTask:    Task<Void, Never>?
 
     /// Coalesces a burst of remote events (a 200-song import is 200 events) into one pull.
-    private var remotePullTask: Task<Void, Never>?
+    @ObservationIgnored private var remotePullTask: Task<Void, Never>?
 
     /// Local edits are pushed quickly too, so other devices don't get minute-old news.
-    private var localPushTask:      Task<Void, Never>?
-    private var localChangeWatch:   AnyCancellable?
+    @ObservationIgnored private var localPushTask:      Task<Void, Never>?
+    @ObservationIgnored private var localChangeWatch:   AnyCancellable?
 
     /// Called when this device is revoked remotely. AppDependencies wires it to sign-out. Main actor.
-    public var onDeviceRevoked: (() async -> Void)?
+    @ObservationIgnored public var onDeviceRevoked: (() async -> Void)?
     /// Realtime has credentials, so other channels (continuity) may subscribe.
-    public var onRealtimeReady: ((UUID) -> Void)?
+    @ObservationIgnored public var onRealtimeReady: ((UUID) -> Void)?
     /// The server refused an unconfirmed bulk change and the local copy went back to the server's.
-    public var onBulkRefused: (() -> Void)?
+    @ObservationIgnored public var onBulkRefused: (() -> Void)?
 
     // MARK: - Init
 
@@ -145,14 +149,14 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
     // MARK: - Sync
 
     /// True when this sync wrote to the local store. A no-change sync doesn't need `libraryService.refresh()`.
-    private var didWriteLocally = false
+    @ObservationIgnored private var didWriteLocally = false
 
     /// Set by `cancelAllWork()`, cleared when a sync starts. Lives on the service because `sync()` is called
     /// from many places, each with its own Task.
-    private var abortRequested = false
+    @ObservationIgnored private var abortRequested = false
 
     /// Whether this sync has raised the activity banner. See `runSync`.
-    private var announcedActivity = false
+    @ObservationIgnored private var announcedActivity = false
 
     /// Raises the banner, once, and only if nothing else already owns it.
     private func announceWork() {
@@ -162,7 +166,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
     }
 
     /// When the backlog sweeps last ran to completion. See `shouldSweepBacklog`.
-    private var lastBacklogSweep: Date?
+    @ObservationIgnored private var lastBacklogSweep: Date?
 
     /// The backlog sweeps (pending uploads, artwork scans, deleted-audio prune) fetch whole tables, some
     /// against `.externalStorage` artwork. Run them when the sync did something, otherwise on a ten-minute
@@ -174,7 +178,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
     }
 
     /// When the device heartbeat was last written. See `heartbeatDevice`.
-    private var lastHeartbeat: Date?
+    @ObservationIgnored private var lastHeartbeat: Date?
 
 
     /// True when whatever is running should stop at its next opportunity.
@@ -362,7 +366,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
         }
     }
 
-    private var didReconcileThisLaunch = false
+    @ObservationIgnored private var didReconcileThisLaunch = false
 
     /// Checks both sides hold the same songs. The push filters rows it can't send (`isPushable`) and the pull
     /// skips rows it won't insert, both silently, so lost rows only showed as an off-by-one count. Logs the
@@ -820,7 +824,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
     }
 
     /// Start of the current burst, cleared when its pull fires.
-    private var pullBurstStart: Date?
+    @ObservationIgnored private var pullBurstStart: Date?
 
     /// Longest a burst may hold the pull off. See `scheduleRemotePull`.
     private static let pullBurstCap: Duration = .milliseconds(1500)
@@ -1649,12 +1653,16 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
 
     /// The exact number of rows this device owes the server; drives the visible pending count. Applies the
     /// Swift-side `isPushable` filter so a stuck non-pushable row reads as zero, not pending forever.
+    /// Only tracks need their rows; the rest are counted in the store, since loading a big library's
+    /// albums and artists to count them held main for 150 ms after every sync.
     private func pendingCount() -> Int {
-        let tracks    = (try? fetchPendingTracks())?.count    ?? 0
-        let albums    = (try? fetchPendingAlbums())?.count    ?? 0
-        let artists   = (try? fetchPendingArtists())?.count   ?? 0
-        let playlists = (try? fetchPendingPlaylists())?.count ?? 0
-        let plays     = (try? fetchPendingPlayHistory())?.count ?? 0
+        let synced = SyncStatus.synced.rawValue
+        let allSongs = Playlist.allSongsID
+        let tracks    = (try? fetchPendingTracks())?.count ?? 0
+        let albums    = (try? context.fetchCount(FetchDescriptor<AlbumEntity>(predicate: #Predicate { $0.syncStatus != synced }))) ?? 0
+        let artists   = (try? context.fetchCount(FetchDescriptor<ArtistEntity>(predicate: #Predicate { $0.syncStatus != synced }))) ?? 0
+        let playlists = (try? context.fetchCount(FetchDescriptor<PlaylistEntity>(predicate: #Predicate { $0.syncStatus != synced && $0.id != allSongs }))) ?? 0
+        let plays     = (try? context.fetchCount(FetchDescriptor<PlayHistoryEntity>(predicate: #Predicate { $0.syncStatus != synced }))) ?? 0
         return tracks + albums + artists + playlists + plays
     }
 
@@ -1987,9 +1995,9 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
         MixLog.sync.debug("Found \(playlists.count) playlist(s) needing artwork upload")
         guard !playlists.isEmpty else { return }
 
-        var uploadedAny = false
+        var uploaded = 0
         for entity in playlists {
-            guard !shouldStopWork else { return }
+            guard !shouldStopWork else { break }
             guard let rawData = entity.artworkData else { continue }
 
             guard let compressed = await compressArtwork(data: rawData) else {
@@ -2005,7 +2013,9 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
                 entity.artworkKey = remotePath
                 // Ours is now the bucket's copy, so the next listing mustn't read as a remote change.
                 entity.artworkRemoteStamp = Date()
-                uploadedAny = true
+                uploaded += 1
+                // Saved as it goes, so quitting midway doesn't redo the whole set next launch.
+                if uploaded % 25 == 0 { try? context.save() }
                 MixLog.sync.debug("Uploaded playlist artwork: \(entity.name) (\(compressed.count / 1024)KB) -> \(remotePath)")
             } catch {
                 MixLog.sync.error("Upload failed for playlist artwork (\(entity.name)): \(error)")
@@ -2013,7 +2023,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
         }
 
         // No re-push: `artworkKey` never leaves this device, so the server row hasn't changed.
-        if uploadedAny {
+        if uploaded > 0 {
             try context.save()
         }
     }
@@ -2050,9 +2060,9 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
         MixLog.sync.debug("Found \(tracks.count) track(s) needing artwork upload")
         guard !tracks.isEmpty else { return }
 
-        var uploadedAny = false
+        var uploaded = 0
         for entity in tracks {
-            guard !shouldStopWork else { return }
+            guard !shouldStopWork else { break }
             guard let rawData = entity.artworkData else { continue }
 
             guard let compressed = await compressArtwork(data: rawData) else {
@@ -2068,15 +2078,18 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
                 entity.artworkKey = remotePath
                 entity.syncStatus = SyncStatus.modified.rawValue
                 entity.syncLocalModifiedAt = Date()
-                uploadedAny = true
+                uploaded += 1
+                // Saved as it goes, so quitting midway doesn't redo the whole set next launch.
+                if uploaded % 25 == 0 { try? context.save() }
                 MixLog.sync.debug("Uploaded track artwork: \(entity.title) (\(compressed.count / 1024)KB) -> \(remotePath)")
             } catch {
                 MixLog.sync.error("Upload failed for track artwork (\(entity.title)): \(error)")
             }
         }
 
-        if uploadedAny {
+        if uploaded > 0 {
             try context.save()
+            guard !shouldStopWork else { return }
             try await pushTracks(userID: userID)
         }
     }
@@ -2086,9 +2099,9 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
         MixLog.sync.debug("Found \(albums.count) album(s) needing artwork upload")
         guard !albums.isEmpty else { return }
 
-        var uploadedAny = false
+        var uploaded = 0
         for entity in albums {
-            guard !shouldStopWork else { return }
+            guard !shouldStopWork else { break }
             guard let rawData = entity.artworkData else { continue }
 
             guard let compressed = await compressArtwork(data: rawData) else {
@@ -2104,15 +2117,18 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
                 entity.artworkKey = remotePath
                 entity.syncStatus = SyncStatus.modified.rawValue
                 entity.syncLocalModifiedAt = Date()
-                uploadedAny = true
+                uploaded += 1
+                // Saved as it goes, so quitting midway doesn't redo the whole set next launch.
+                if uploaded % 25 == 0 { try? context.save() }
                 MixLog.sync.debug("Uploaded album artwork: \(entity.title) (\(compressed.count / 1024)KB) -> \(remotePath)")
             } catch {
                 MixLog.sync.error("Upload failed for album artwork (\(entity.title)): \(error)")
             }
         }
 
-        if uploadedAny {
+        if uploaded > 0 {
             try context.save()
+            guard !shouldStopWork else { return }
             try await pushAlbums(userID: userID)
         }
     }
@@ -2122,9 +2138,9 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
         MixLog.sync.debug("Found \(artists.count) artist(s) needing artwork upload")
         guard !artists.isEmpty else { return }
 
-        var uploadedAny = false
+        var uploaded = 0
         for entity in artists {
-            guard !shouldStopWork else { return }
+            guard !shouldStopWork else { break }
             guard let rawData = entity.artworkData else { continue }
 
             guard let compressed = await compressArtwork(data: rawData) else {
@@ -2140,15 +2156,18 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
                 entity.artworkKey = remotePath
                 entity.syncStatus = SyncStatus.modified.rawValue
                 entity.syncLocalModifiedAt = Date()
-                uploadedAny = true
+                uploaded += 1
+                // Saved as it goes, so quitting midway doesn't redo the whole set next launch.
+                if uploaded % 25 == 0 { try? context.save() }
                 MixLog.sync.debug("Uploaded artist artwork: \(entity.name) (\(compressed.count / 1024)KB) -> \(remotePath)")
             } catch {
                 MixLog.sync.error("Upload failed for artist artwork (\(entity.name)): \(error)")
             }
         }
 
-        if uploadedAny {
+        if uploaded > 0 {
             try context.save()
+            guard !shouldStopWork else { return }
             try await pushArtists(userID: userID)
         }
     }
@@ -2162,13 +2181,13 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
     private static let artworkConcurrency = 4
 
     /// Remaining requests in this run, shared by all four artwork kinds.
-    private var artworkDownloadsLeft = 0
+    @ObservationIgnored private var artworkDownloadsLeft = 0
 
     /// This run ran out of budget with covers still to fetch.
-    private var artworkBacklog = false
+    @ObservationIgnored private var artworkBacklog = false
 
     /// Whether this run put anything in the disk cache worth trimming for.
-    private var artworkCacheGrew = false
+    @ObservationIgnored private var artworkCacheGrew = false
 
     /// Covers for `keys`, from the disk cache if present, otherwise from the bucket. A key missing from the
     /// result was out of budget, not missing. Only bucket fetches spend the budget.
@@ -2530,7 +2549,7 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
     }
 
     private func fetchTracksNeedingArtworkUpload() throws -> [TrackEntity] {
-        let descriptor = FetchDescriptor<TrackEntity>(
+        var descriptor = FetchDescriptor<TrackEntity>(
             predicate: #Predicate {
                 $0.artworkKey == nil && $0.isSoftDeleted == false && $0.artworkData != nil
             }
@@ -2538,11 +2557,13 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
         let legacy = FetchDescriptor<TrackEntity>(
             predicate: #Predicate { $0.artworkKey == nil && $0.isSoftDeleted == false }
         )
+        // Ids only: small covers live inline in the row, and fetching whole rows read every one on main.
+        descriptor.propertiesToFetch = [\.id]
         return try fetchTolerantly(descriptor, legacy: legacy, label: "tracks/upload") { $0.artworkData != nil }
     }
 
     private func fetchAlbumsNeedingArtworkUpload() throws -> [AlbumEntity] {
-        let descriptor = FetchDescriptor<AlbumEntity>(
+        var descriptor = FetchDescriptor<AlbumEntity>(
             predicate: #Predicate {
                 $0.artworkKey == nil && $0.isSoftDeleted == false && $0.artworkData != nil
             }
@@ -2550,11 +2571,13 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
         let legacy = FetchDescriptor<AlbumEntity>(
             predicate: #Predicate { $0.artworkKey == nil && $0.isSoftDeleted == false }
         )
+        // Ids only: small covers live inline in the row, and fetching whole rows read every one on main.
+        descriptor.propertiesToFetch = [\.id]
         return try fetchTolerantly(descriptor, legacy: legacy, label: "albums/upload") { $0.artworkData != nil }
     }
 
     private func fetchArtistsNeedingArtworkUpload() throws -> [ArtistEntity] {
-        let descriptor = FetchDescriptor<ArtistEntity>(
+        var descriptor = FetchDescriptor<ArtistEntity>(
             predicate: #Predicate {
                 $0.artworkKey == nil && $0.isSoftDeleted == false && $0.artworkData != nil
             }
@@ -2562,11 +2585,13 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
         let legacy = FetchDescriptor<ArtistEntity>(
             predicate: #Predicate { $0.artworkKey == nil && $0.isSoftDeleted == false }
         )
+        // Ids only: small covers live inline in the row, and fetching whole rows read every one on main.
+        descriptor.propertiesToFetch = [\.id]
         return try fetchTolerantly(descriptor, legacy: legacy, label: "artists/upload") { $0.artworkData != nil }
     }
 
     private func fetchPlaylistsNeedingArtworkUpload() throws -> [PlaylistEntity] {
-        let descriptor = FetchDescriptor<PlaylistEntity>(
+        var descriptor = FetchDescriptor<PlaylistEntity>(
             predicate: #Predicate {
                 $0.artworkKey == nil && $0.isSoftDeleted == false && $0.artworkData != nil
             }
@@ -2574,6 +2599,8 @@ public final class SupabaseSyncService: ObservableObject, SyncServiceProtocol {
         let legacy = FetchDescriptor<PlaylistEntity>(
             predicate: #Predicate { $0.artworkKey == nil && $0.isSoftDeleted == false }
         )
+        // Ids only: small covers live inline in the row, and fetching whole rows read every one on main.
+        descriptor.propertiesToFetch = [\.id]
         return try fetchTolerantly(descriptor, legacy: legacy, label: "playlists/upload") { $0.artworkData != nil }
     }
 

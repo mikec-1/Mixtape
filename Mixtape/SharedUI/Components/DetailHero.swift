@@ -5,25 +5,29 @@
 
 import SwiftUI
 import Combine
+import Observation
 
 // MARK: - Artwork wash
 
 /// Colour at the top of the current wash; macOS tints the titlebar with it.
 /// Nil restores system chrome.
+@Observable
 @MainActor
-final class ArtworkWashTint: ObservableObject {
+final class ArtworkWashTint {
 
     static let shared = ArtworkWashTint()
 
-    @Published private(set) var color: Color?
+    private(set) var color: Color? { didSet { changed.send() } }
 
     /// Sampled colours and strength, so the sidebar can draw the same ramp.
-    @Published private(set) var stops: [Color] = []
-    @Published private(set) var intensity: Double = 1
+    private(set) var stops: [Color] = [] { didSet { changed.send() } }
+    private(set) var intensity: Double = 1 { didSet { changed.send() } }
+    /// Fires when any of the above changes, for AppKit callers.
+    let changed = PassthroughSubject<Void, Never>()
 
     /// Only the wash that set the colour can clear it; appear/disappear order
     /// between screens isn't guaranteed.
-    private var owner: UUID?
+    @ObservationIgnored private var owner: UUID?
 
     func publish(colors: [Color], intensity: Double, from id: UUID) {
         owner = id

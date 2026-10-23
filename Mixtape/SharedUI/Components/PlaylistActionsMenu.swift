@@ -24,8 +24,8 @@ struct PlaylistActionsMenu: View {
     let confirmDelete: () -> Void
     let confirmStopLikedSongs: () -> Void
 
-    @EnvironmentObject private var deps: AppDependencies
-    @ObservedObject private var meta = PlaylistMetadataService.shared
+    @Environment(AppDependencies.self) private var deps
+    private var meta: PlaylistMetadataService { .shared }
 
     var body: some View {
         if ids.count > 1 {
@@ -398,9 +398,9 @@ private struct PlaylistActionsModifier: ViewModifier {
     /// Used only when this row is in the selection, like Finder.
     let selection: Set<UUID>
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
     #if os(macOS)
-    @EnvironmentObject private var appState: MacAppState
+    @Environment(MacAppState.self) private var appState
     #endif
 
     @State private var sheet: PlaylistActionSheet?
@@ -455,19 +455,19 @@ private struct PlaylistActionsModifier: ViewModifier {
                 switch which {
                 case .edit:
                     PlaylistEditorSheet(editingPlaylist: live)
-                        .environmentObject(deps)
+                        .environment(deps)
                 case .spotifyExport:
                     // No `.frame(minWidth:)` wrapper; MixSheet sizes itself.
                     SpotifyExportView(playlistName: live.name,
                                       tracks: songs(of: live),
                                       playlistID: live.id)
-                        .environmentObject(deps)
+                        .environment(deps)
                 case .collaborate:
                     InviteCollaboratorsSheet(playlist: live, tracks: songs(of: live))
-                        .environmentObject(deps)
+                        .environment(deps)
                 case .dub:
                     DubSheet(playlist: live, tracks: songs(of: live))
-                        .environmentObject(deps)
+                        .environment(deps)
                 }
             }
             .mixConfirmationDialog(deleteRequest?.title ?? "",

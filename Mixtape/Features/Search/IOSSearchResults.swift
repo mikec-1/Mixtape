@@ -15,11 +15,11 @@ struct IOSSearchResults: View {
     @Binding var filter: IOSSearchFilter
     let onOpen: (DiscoverDestination) -> Void
 
-    @EnvironmentObject private var deps:        AppDependencies
-    @EnvironmentObject private var engine:      PlaybackEngine
-    @EnvironmentObject private var coordinator: OnlinePlaybackCoordinator
+    @Environment(AppDependencies.self) private var deps
+    @Environment(PlaybackEngine.self) private var engine
+    @Environment(OnlinePlaybackCoordinator.self) private var coordinator
 
-    @ObservedObject private var store = DiscoverSessionStore.shared
+    private var store: DiscoverSessionStore { .shared }
 
     /// All shows this many songs; the Songs pill shows the rest.
     private static let collapsedSongs = 5

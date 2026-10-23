@@ -13,6 +13,7 @@ import Combine
 
 #if canImport(AppKit)
 import AppKit
+import Observation
 #endif
 
 // MARK: - Appearance
@@ -63,7 +64,8 @@ public nonisolated enum BrandAccent {
 
 // MARK: - Manager
 
-public final class ThemeManager: ObservableObject {
+@Observable
+public final class ThemeManager {
 
     public static let shared = ThemeManager()
 
@@ -75,7 +77,7 @@ public final class ThemeManager: ObservableObject {
         static let backdrop   = "theme.backdrop"
     }
 
-    @Published public var appearance: AppAppearance {
+    public var appearance: AppAppearance {
         didSet {
             UserDefaults.standard.set(appearance.rawValue, forKey: Keys.appearance)
             applyAppKitAppearance()
@@ -83,29 +85,31 @@ public final class ThemeManager: ObservableObject {
     }
 
     /// How much room the layout gives itself. See `MixDensity`.
-    @Published public var density: MixDensity {
+    public var density: MixDensity {
         didSet { UserDefaults.standard.set(density.rawValue, forKey: Keys.density) }
     }
 
     /// See `MixMotion`. Mirrored into `MixMotion.current` for `withMixAnimation`.
-    @Published public var motion: MixMotion {
+    public var motion: MixMotion {
         didSet {
+            motionSubject.send(motion)
             UserDefaults.standard.set(motion.rawValue, forKey: Keys.motion)
             MixMotion.current = motion
         }
     }
 
     /// Token for the system Reduce Motion observer.
-    private var motionObserver: NSObjectProtocol?
+    @ObservationIgnored private var motionObserver: NSObjectProtocol?
 
     /// How much the app decorates. See `MixChrome`.
-    @Published public var chrome: MixChrome {
+    public var chrome: MixChrome {
         didSet { UserDefaults.standard.set(chrome.rawValue, forKey: Keys.chrome) }
     }
 
     /// A colour mixed into the app's background, nil for plain. Follows the account.
-    @Published public var backdrop: MixBackdrop? {
+    public var backdrop: MixBackdrop? {
         didSet {
+            backdropSubject.send(backdrop)
             guard backdrop != oldValue else { return }
             UserDefaults.standard.set(backdrop?.raw, forKey: Keys.backdrop)
             guard !isApplyingRemote else { return }
@@ -122,7 +126,9 @@ public final class ThemeManager: ObservableObject {
     }
 
     /// A picture in place of the colour, on this device only. See `MixWallpaper`.
-    @Published private(set) var wallpaper: MixWallpaper.Picture?
+    private(set) var wallpaper: MixWallpaper.Picture? {
+        didSet { wallpaperSubject.send(wallpaper) }
+    }
 
     func setWallpaper(_ data: Data) async throws {
         wallpaper = try await MixWallpaper.save(data)
@@ -134,10 +140,18 @@ public final class ThemeManager: ObservableObject {
     }
 
     /// Writes the raw value to `user_metadata`. Nil in previews.
-    public var backdropWriter: ((String) -> Void)?
-    private var backdropPush: Task<Void, Never>?
-    private var isApplyingRemote = false
-    private var lastLocalBackdropChange = Date.distantPast
+    /// Backdrop, motion and wallpaper streams for the backdrop renderer; sent after the set.
+    public var backdropPublisher: AnyPublisher<MixBackdrop?, Never> { backdropSubject.prepend(backdrop).eraseToAnyPublisher() }
+    public var motionPublisher: AnyPublisher<MixMotion, Never> { motionSubject.prepend(motion).eraseToAnyPublisher() }
+    @ObservationIgnored private let backdropSubject = PassthroughSubject<MixBackdrop?, Never>()
+    @ObservationIgnored private let motionSubject = PassthroughSubject<MixMotion, Never>()
+    var wallpaperPublisher: AnyPublisher<MixWallpaper.Picture?, Never> { wallpaperSubject.prepend(wallpaper).eraseToAnyPublisher() }
+    @ObservationIgnored private let wallpaperSubject = PassthroughSubject<MixWallpaper.Picture?, Never>()
+
+    @ObservationIgnored public var backdropWriter: ((String) -> Void)?
+    @ObservationIgnored private var backdropPush: Task<Void, Never>?
+    @ObservationIgnored private var isApplyingRemote = false
+    @ObservationIgnored private var lastLocalBackdropChange = Date.distantPast
 
     /// The account's colour wins. Nil (never set) leaves the local one alone.
     public func adoptRemoteBackdrop(_ raw: String?) {

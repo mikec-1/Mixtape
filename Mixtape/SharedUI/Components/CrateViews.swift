@@ -66,13 +66,13 @@ struct CrateCover: View {
 
 struct CrateDetailView: View {
     let crateID: UUID
-    @ObservedObject var library: LibraryService
+    var library: LibraryService
 
-    @ObservedObject private var service = CrateService.shared
+    private var service: CrateService { .shared }
     #if os(macOS)
-    @EnvironmentObject private var appState: MacAppState
+    @Environment(MacAppState.self) private var appState
     #else
-    @EnvironmentObject private var iosAppState: IOSAppState
+    @Environment(IOSAppState.self) private var iosAppState
     @Environment(\.dismiss) private var dismiss
     #endif
 
@@ -248,8 +248,8 @@ struct CrateDetailView: View {
 
 /// Crates above the playlists in Your Library. Nothing when there are none.
 struct CratesShelf: View {
-    @ObservedObject var library: LibraryService
-    @ObservedObject private var service = CrateService.shared
+    var library: LibraryService
+    private var service: CrateService { .shared }
 
     var body: some View {
         if !service.crates.isEmpty {
@@ -285,7 +285,7 @@ struct CratesShelf: View {
 /// A submenu in an item's actions menu. Picking a crate toggles the item in it.
 struct AddToCrateMenu: View {
     let item: CrateItem
-    @ObservedObject private var service = CrateService.shared
+    private var service: CrateService { .shared }
 
     var body: some View {
         Menu {
@@ -311,7 +311,7 @@ struct AddToCrateMenu: View {
 /// The sheet for `CrateService.requestNewCrate`, hosted once at the root.
 struct NewCratePrompt: ViewModifier {
     let library: LibraryService
-    @ObservedObject private var service = CrateService.shared
+    private var service: CrateService { .shared }
 
     func body(content: Content) -> some View {
         content.sheet(isPresented: Binding(
@@ -325,7 +325,7 @@ struct NewCratePrompt: ViewModifier {
 
 /// New crate or rename, laid out like the playlist editor. The cover is derived, so it only previews.
 struct CrateEditorSheet: View {
-    @ObservedObject var library: LibraryService
+    var library: LibraryService
     var crate: Crate? = nil
     /// The first item of a new crate.
     var item: CrateItem? = nil
@@ -383,7 +383,7 @@ struct CrateEditorSheet: View {
 struct CrateShareMenuItems: View {
     let crate: Crate
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
 
     var body: some View {
         Group {

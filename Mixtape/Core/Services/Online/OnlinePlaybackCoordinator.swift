@@ -11,26 +11,31 @@ import Foundation
 import Combine
 import AVFoundation
 import OSLog
+import Observation
 
+@Observable
 @MainActor
-public final class OnlinePlaybackCoordinator: ObservableObject {
+public final class OnlinePlaybackCoordinator {
 
     /// ID of the OnlineTrack currently being resolved (drives per-row spinners).
-    @Published public private(set) var resolvingID: String? = nil
+    public private(set) var resolvingID: String? = nil
     /// The OnlineTrack playing through the engine, for Discover's now-playing
     /// indicator. Nil when no online track plays.
-    @Published public private(set) var nowPlayingID: String? = nil
+    public private(set) var nowPlayingID: String? = nil
     /// Non-nil briefly when a play attempt fails. Auto-clears after 4 s.
-    @Published public private(set) var errorMessage: String? = nil
+    public private(set) var errorMessage: String? = nil { didSet { errorMessageSubject.send(errorMessage) } }
+    /// `$errorMessage` for Combine users; sent after the set.
+    public var errorMessagePublisher: AnyPublisher<String?, Never> { errorMessageSubject.eraseToAnyPublisher() }
+    @ObservationIgnored private let errorMessageSubject = PassthroughSubject<String?, Never>()
     /// Non-error status (e.g. a "wrong version" result). Goes to the app toast.
-    public var onStatus: ((String) -> Void)?
+    @ObservationIgnored public var onStatus: ((String) -> Void)?
 
     /// The song the user is waiting on and its progress. Drives the loading bar
     /// above the player. Only songs asked for, never prefetches or cache fills.
-    @Published public private(set) var preparing: PreparingTrack? = nil
+    public private(set) var preparing: PreparingTrack? = nil
 
     /// Asked after "Wrong version" lands on a new upload: keep it, try another, or go back.
-    @Published public private(set) var versionCheck: VersionCheck? = nil
+    public private(set) var versionCheck: VersionCheck? = nil
 
     public struct VersionCheck: Identifiable {
         public let id = UUID()
@@ -69,59 +74,59 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
 
     /// Whether there's a network, supplied by AppDependencies. beginSession
     /// refuses to start a resolve that can only time out.
-    public var isOnline: () -> Bool = { true }
+    @ObservationIgnored public var isOnline: () -> Bool = { true }
 
     /// Bumped on every play(). A slow download checks it before playing so a
     /// newer click wins.
-    private var playToken = 0
+    @ObservationIgnored private var playToken = 0
 
     /// The song playFromContext is resolving, so a second tap on the same row
     /// doesn't restart it. resolvingID is the published row-spinner state.
-    private var resolvingTrackID: String?
+    @ObservationIgnored private var resolvingTrackID: String?
     /// Bumped each time playFromContext claims resolvingTrackID, so only the run
     /// that made the claim can release it. Otherwise a cancelled resolve could clear
     /// a retry's claim, or leave its own stale claim blocking the retry.
-    private var resolveRun = 0
+    @ObservationIgnored private var resolveRun = 0
 
     /// Running download tasks keyed by OnlineTrack.id. Added by prefetch(),
     /// reused or replaced by play(), removed on completion.
-    private var prefetchTasks: [String: Task<ResolvedAudio, Error>] = [:]
+    @ObservationIgnored private var prefetchTasks: [String: Task<ResolvedAudio, Error>] = [:]
 
     /// Speculative downloads currently running (see `maxConcurrentPrefetches`).
-    private var inFlightPrefetches = 0
+    @ObservationIgnored private var inFlightPrefetches = 0
 
     /// Songs warmed on the resolver this session. One warm per song is enough.
-    private var warmedTrackIDs: Set<String> = []
+    @ObservationIgnored private var warmedTrackIDs: Set<String> = []
     /// Warms currently in flight, capped alongside prefetches.
-    private var inFlightWarms = 0
+    @ObservationIgnored private var inFlightWarms = 0
 
     /// OnlineTrack.id -> resolved YouTube videoID. Loaded lazily from index.json.
-    private var _videoIDIndex: [String: String]? = nil
+    @ObservationIgnored private var _videoIDIndex: [String: String]? = nil
 
     /// The list the current online track was played from. Skip and auto-advance
     /// step through it. Empty when no online context is active.
-    private var context: [OnlineTrack] = []
+    @ObservationIgnored private var context: [OnlineTrack] = []
     /// One lane per context slot (see QueueOrigin). The queue panel mirrors this
     /// list during a session, so lanes follow their slots and keep the local queue's
     /// order: manual, context, recommendation. alignedContextLanes() is the backstop.
-    private var contextLanes: [QueueOrigin] = []
+    @ObservationIgnored private var contextLanes: [QueueOrigin] = []
     /// Index of the currently playing track within `context`.
-    private var contextIndex = 0
+    @ObservationIgnored private var contextIndex = 0
     /// `context` as Tracks for the Queue panel. Built when the context is set;
     /// the playing slot is swapped for the full track so its artwork shows.
-    private var contextDisplayTracks: [Track] = []
+    @ObservationIgnored private var contextDisplayTracks: [Track] = []
     /// Bumped on each mirror rebuild so a slow artwork fetch can't overwrite a newer one.
-    private var displayArtworkToken = 0
+    @ObservationIgnored private var displayArtworkToken = 0
     /// Artwork the UI handed over for the current play.
-    private var contextArtwork: Data?
+    @ObservationIgnored private var contextArtwork: Data?
     /// Which song contextArtwork belongs to, so a session started without artwork
     /// doesn't show the previous session's cover.
-    private var contextArtworkID: String?
+    @ObservationIgnored private var contextArtworkID: String?
     /// Track details already fetched this launch, keyed by Deezer track id.
-    private var trackDetails: [Int: (contributors: [String], coverURL: URL?)] = [:]
+    @ObservationIgnored private var trackDetails: [Int: (contributors: [String], coverURL: URL?)] = [:]
     /// Library tracks standing in for context slots, keyed by OnlineTrack.id.
     /// Mixed lists (Jump back in, history) play owned songs from their own file.
-    private var localSubstitutes: [String: Track] = [:]
+    @ObservationIgnored private var localSubstitutes: [String: Track] = [:]
 
     public init(
         ytdlp: any TrackResolver,
@@ -139,19 +144,19 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
 
         // Probe whenever the queue changes, not when the preload depth reaches a
         // song, or the warning shows up too late to be useful.
-        engine.queue.$queue
+        engine.queue.queuePublisher
             .sink { [weak self] _ in self?.scanQueueAvailability() }
             .store(in: &scanCancellables)
-        engine.queue.$currentIndex
+        engine.queue.currentIndexPublisher
             .sink { [weak self] _ in self?.scanQueueAvailability() }
             .store(in: &scanCancellables)
     }
 
     // MARK: - Availability scan
 
-    private var scanCancellables = Set<AnyCancellable>()
-    private var scanTask: Task<Void, Never>?
-    private var scanDirty = false
+    @ObservationIgnored private var scanCancellables = Set<AnyCancellable>()
+    @ObservationIgnored private var scanTask: Task<Void, Never>?
+    @ObservationIgnored private var scanDirty = false
 
     /// How far down the queue to probe. Same preference as prefetch depth.
     private var scanDepth: Int { PlaybackPrefetchSettings.shared.queueDepth.rawValue }
@@ -269,7 +274,7 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
         PlaybackCache.directory.appendingPathComponent("online-rejected.json")
     }
 
-    private var _rejectedVideoIDs: [String: [String]]? = nil
+    @ObservationIgnored private var _rejectedVideoIDs: [String: [String]]? = nil
 
     private var rejectedVideoIDs: [String: [String]] {
         get {
@@ -308,7 +313,7 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
         PlaybackCache.directory.appendingPathComponent("online-confirmed.json")
     }
 
-    private var _confirmedVideoIDs: [String: String]? = nil
+    @ObservationIgnored private var _confirmedVideoIDs: [String: String]? = nil
 
     private var confirmedVideoIDs: [String: String] {
         get {
@@ -627,7 +632,7 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
 
     /// When a preload last failed, by song. Separate from UnavailableTracks: this is
     /// "back off", not "missing". Session only, like ClientPenaltyBox.
-    private var preloadFailedAt: [String: Date] = [:]
+    @ObservationIgnored private var preloadFailedAt: [String: Date] = [:]
     private static let preloadBackoff: TimeInterval = 5 * 60
 
     /// Prefetches as deep into the queue as the setting and budget allow. Cheap
@@ -847,13 +852,22 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
         let carriedDisplay = Dictionary(carriedManual.compactMap { slot in
             slot.display.map { (slot.online.id, $0) }
         }, uniquingKeysWith: { _, new in new })
-        self.contextDisplayTracks = self.context.map {
-            carriedDisplay[$0.id] ?? self.localSubstitutes[$0.id] ?? $0.asTrack(deviceID: deviceID)
+        if displayMemo.count > 5_000 { displayMemo.removeAll() }
+        self.contextDisplayTracks = self.context.map { online in
+            if let row = carriedDisplay[online.id] ?? self.localSubstitutes[online.id] { return row }
+            if let row = displayMemo[online] { return row }
+            let row = online.asTrack(deviceID: deviceID)
+            displayMemo[online] = row
+            return row
         }
         loadDisplayArtwork()
         await playFromContext(at: contextIndex, artworkData: artworkData,
                               skippingUnfindable: false)
     }
+
+    /// Display rows by song. Every skip in a big playlist rebuilds the whole mirror, and the title parsing in
+    /// asTrack was most of that.
+    @ObservationIgnored private var displayMemo: [OnlineTrack: Track] = [:]
 
     /// Manual rows still ahead of playback, carried into the next session.
     private func carryableManualSlots() -> [(online: OnlineTrack, display: Track?)] {
@@ -875,17 +889,17 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
 
     /// Context plays in flight. Keeps hasActiveOnlineSession true in the gap
     /// between the engine dropping its handlers and this reinstalling them.
-    private var startingCount = 0
+    @ObservationIgnored private var startingCount = 0
 
     /// The slot actually playing, or -1. Not contextIndex, which moves on click
     /// while the previous song still plays. Set at each handoff.
-    private var playingSlot: Int = -1
+    @ObservationIgnored private var playingSlot: Int = -1
 
     /// Set while a new session is built but its first song hasn't started.
     /// Mirror pushes in that window would carry the new list with an index into the
     /// old one, showing an unrelated song on the player bar. So the push waits.
     /// Needs no reset on failure: it only holds while something is playing.
-    private var awaitingHandoff = false
+    @ObservationIgnored private var awaitingHandoff = false
 
     /// Pushes the display mirror to the player's queue. The list always goes out
     /// so added songs show at once. The index names the slot actually playing, so
@@ -1021,7 +1035,7 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
     }
 
     /// Supersedes an in-flight substitutes pass when a new session starts.
-    private var substitutesToken: UInt64 = 0
+    @ObservationIgnored private var substitutesToken: UInt64 = 0
 
     /// Something AVPlayer can open for a library song without touching the queue: the
     /// playback cache, else a stream. Nil when neither works.
@@ -2038,7 +2052,7 @@ public final class OnlinePlaybackCoordinator: ObservableObject {
     }
 
     /// Generation counter so a stale auto-clear task can't wipe a newer message.
-    private var errorGeneration = 0
+    @ObservationIgnored private var errorGeneration = 0
 
     // MARK: - Preparing state
 

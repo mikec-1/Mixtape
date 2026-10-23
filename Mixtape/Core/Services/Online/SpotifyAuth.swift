@@ -6,9 +6,11 @@ import AuthenticationServices
 import Combine
 import CryptoKit
 import Supabase
+import Observation
 
+@Observable
 @MainActor
-public final class SpotifyAuth: NSObject, ObservableObject {
+public final class SpotifyAuth: NSObject {
 
     // PKCE only needs the public client ID, no secret.
     private static let clientID    = "0e312a528cc34744b92021bed3f6edc9"
@@ -43,23 +45,23 @@ public final class SpotifyAuth: NSObject, ObservableObject {
 
     /// Whether this account adds its Spotify plays to recaps. Lives on the
     /// spotify_connections row so every device and the server job see the same answer.
-    @Published public private(set) var historySync = false
+    public private(set) var historySync = false
 
-    @Published public private(set) var isAuthorized: Bool
+    public private(set) var isAuthorized: Bool
 
     /// True when the stored token predates the library scopes. It still refreshes
     /// and reads playlists but 403s on Liked Songs, so we prompt for re-consent.
-    @Published public private(set) var needsReauthorization: Bool
+    public private(set) var needsReauthorization: Bool
 
     /// The connected account, cached so Settings doesn't refetch it and sign-out
     /// can drop it with the token.
-    @Published public private(set) var profile: SpotifyProfile?
+    public private(set) var profile: SpotifyProfile?
 
-    private var session: ASWebAuthenticationSession?
-    private var profileLoad: Task<Void, Never>?
+    @ObservationIgnored private var session: ASWebAuthenticationSession?
+    @ObservationIgnored private var profileLoad: Task<Void, Never>?
     /// The account that already claimed or was refused the grant. Supabase
     /// republishes .authenticated on every refresh.
-    private var claimedAccount: UUID?
+    @ObservationIgnored private var claimedAccount: UUID?
 
     /// Starts disconnected. The grant's owner isn't known until Supabase restores
     /// a session; accountDidChange enables it once there's a user to check.
@@ -70,9 +72,19 @@ public final class SpotifyAuth: NSObject, ObservableObject {
         super.init()
     }
 
+    #if DEBUG || PERFOPT
+    // TEMP perf: a fresh build waits on a keychain prompt, so timed runs leave the grant alone.
+    private static var perfOffline: Bool {
+        UserDefaults.standard.bool(forKey: "PerfScenario") && !UserDefaults.standard.bool(forKey: "PerfImport")
+    }
+    #else
+    private static let perfOffline = false
+    #endif
+
     /// The stored grant, only if it belongs to the signed-in account. Anything
     /// else is never read, refreshed or pushed.
     private static func currentTokens() -> StoredTokens? {
+        guard !perfOffline else { return nil }
         guard let stored = Keychain.load(),
               let userID = SupabaseConfig.client.auth.currentUser?.id,
               stored.owner == userID
@@ -97,7 +109,7 @@ public final class SpotifyAuth: NSObject, ObservableObject {
 
     /// Whether this connection can write to Spotify. Read from the stored grant;
     /// a refresh can't widen scopes.
-    @Published public private(set) var canWrite: Bool = false
+    public private(set) var canWrite: Bool = false
 
     private static func coversWriteScopes(_ granted: String?) -> Bool {
         guard let granted else { return false }
@@ -204,6 +216,7 @@ public final class SpotifyAuth: NSObject, ObservableObject {
     public func accountDidChange(to userID: UUID, previous: String?) {
         guard claimedAccount != userID else { return }
         claimedAccount = userID
+        guard !Self.perfOffline else { return }
         profileLoad?.cancel()
         profileLoad = nil
         profile = nil
@@ -283,6 +296,7 @@ public final class SpotifyAuth: NSObject, ObservableObject {
     /// Adopts a connection made on another device or the web. A device with its
     /// own grant publishes it instead. Waits for Supabase to restore a user first.
     public func adoptAccountConnection() async {
+        guard !Self.perfOffline else { return }
         // ponytail: polls up to ~20s for the session; hook the auth-state stream if launches get slower.
         for _ in 0..<20 where SupabaseConfig.client.auth.currentUser == nil {
             try? await Task.sleep(nanoseconds: 1_000_000_000)

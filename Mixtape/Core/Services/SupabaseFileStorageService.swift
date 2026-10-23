@@ -7,6 +7,7 @@
 import Foundation
 import Supabase
 import Combine
+import Observation
 
 // MARK: - Errors
 
@@ -32,8 +33,9 @@ public enum FileStorageError: LocalizedError {
 
 // MARK: - Service
 
+@Observable
 @MainActor
-public final class SupabaseFileStorageService: ObservableObject, FileStorageProtocol {
+public final class SupabaseFileStorageService: FileStorageProtocol {
 
     // MARK: - Progress Publishers
 
@@ -51,11 +53,11 @@ public final class SupabaseFileStorageService: ObservableObject, FileStorageProt
 
     // Deferred: building the client is slow and must stay off the launch path.
     private let clientProvider: () -> SupabaseClient
-    private lazy var client: SupabaseClient = clientProvider()
+    @ObservationIgnored private lazy var client: SupabaseClient = clientProvider()
     static let bucket = "audio"
 
     /// Set by AppDependencies when the user signs in; cleared on sign-out.
-    public var currentUserID: UUID?
+    @ObservationIgnored public var currentUserID: UUID?
 
     // MARK: - Init
 

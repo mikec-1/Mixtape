@@ -3,9 +3,11 @@
 
 import Foundation
 import Combine
+import Observation
 
+@Observable
 @MainActor
-public final class QueueSuggestionService: ObservableObject {
+public final class QueueSuggestionService {
 
     // MARK: - Tuning
 
@@ -20,10 +22,10 @@ public final class QueueSuggestionService: ObservableObject {
     private unowned let engine:      PlaybackEngine
     private unowned let library:     LibraryService
     private let itunes:      ITunesSearchClient
-    private weak  var coordinator: OnlinePlaybackCoordinator?
+    @ObservationIgnored private weak  var coordinator: OnlinePlaybackCoordinator?
 
-    private var cancellables = Set<AnyCancellable>()
-    private var isReplenishing = false
+    @ObservationIgnored private var cancellables = Set<AnyCancellable>()
+    @ObservationIgnored private var isReplenishing = false
 
     // MARK: - Init
 
@@ -39,15 +41,15 @@ public final class QueueSuggestionService: ObservableObject {
         self.coordinator = coordinator
 
         // React whenever the current track or the queue contents change.
-        queue.$currentIndex
+        queue.currentIndexPublisher
             .sink { [weak self] _ in self?.scheduleReplenishIfNeeded() }
             .store(in: &cancellables)
-        queue.$queue
+        queue.queuePublisher
             .sink { [weak self] _ in self?.scheduleReplenishIfNeeded() }
             .store(in: &cancellables)
 
         // Only listens for switch-on; `setShuffle` removes the picks on switch-off.
-        queue.$shuffleEnabled
+        queue.shuffleEnabledPublisher
             .removeDuplicates()
             .sink { [weak self] on in
                 guard on else { return }

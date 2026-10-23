@@ -4,9 +4,11 @@
 
 import Foundation
 import Combine
+import Observation
 
+@Observable
 @MainActor
-public final class ShufflePreferences: ObservableObject {
+public final class ShufflePreferences {
 
     public static let shared = ShufflePreferences()
 
@@ -30,7 +32,7 @@ public final class ShufflePreferences: ObservableObject {
     private let defaults: UserDefaults
 
     /// Only lists that shuffle are stored, so the set stays small.
-    @Published private var shuffling: Set<String>
+    private var shuffling: Set<String>
 
     init(defaults: UserDefaults = .standard) {
         self.defaults  = defaults

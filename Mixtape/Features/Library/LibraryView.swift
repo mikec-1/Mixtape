@@ -2,10 +2,10 @@ import SwiftUI
 
 public struct LibraryView: View {
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
     /// Observed directly: `deps.visibleSmartPlaylists` doesn't republish through `deps`.
-    @EnvironmentObject private var smartService: SmartPlaylistService
-    @StateObject private var vm: LibraryViewModel
+    @Environment(SmartPlaylistService.self) private var smartService
+    @State private var vm: LibraryViewModel
 
     // The + menu and its chosen sheet. Separate because the sheet waits for the
     // menu to dismiss; see `pendingRoute`.
@@ -21,11 +21,11 @@ public struct LibraryView: View {
     @State private var navPath = NavigationPath()
 
     #if os(iOS)
-    @EnvironmentObject private var iosAppState: IOSAppState
+    @Environment(IOSAppState.self) private var iosAppState
     #endif
 
     public init(libraryService: LibraryService) {
-        _vm = StateObject(wrappedValue: LibraryViewModel(libraryService: libraryService))
+        _vm = State(initialValue: LibraryViewModel(libraryService: libraryService))
     }
 
     /// Reordering only makes sense in the unsorted, unfiltered playlist list.
@@ -93,13 +93,13 @@ public struct LibraryView: View {
                            spotifyClient: deps.spotifyClient,
                            spotifyImportService: deps.spotifyImportService,
                            spotifyAuth: deps.spotifyAuth)
-                    .environmentObject(deps)
+                    .environment(deps)
             }
             .navigationDestination(for: Album.self)    { AlbumDetailView(album: $0) }
             .navigationDestination(for: Artist.self)   { ArtistDetailView(artist: $0) }
             .navigationDestination(for: Playlist.self) {
                 PlaylistDetailView(playlist: $0)
-                    .environmentObject(deps)
+                    .environment(deps)
             }
             .navigationDestination(for: Crate.self) {
                 CrateDetailView(crateID: $0.id, library: deps.libraryService)
@@ -150,24 +150,24 @@ public struct LibraryView: View {
         switch route {
         case .playlist:
             PlaylistEditorSheet()
-                .environmentObject(deps)
+                .environment(deps)
         case .smartPlaylist:
             SmartPlaylistEditorView(service: deps.smartPlaylistService)
-                .environmentObject(deps)
+                .environment(deps)
         case .generateMix:
             GenerateMixSheet()
-                .environmentObject(deps)
+                .environment(deps)
         case .crate:
             EmptyView()
         case .joinShared:
             JoinSharedPlaylistSheet()
-                .environmentObject(deps)
+                .environment(deps)
         case .importSongs:
             ImportView(importService: deps.importService,
                        spotifyClient: deps.spotifyClient,
                        spotifyImportService: deps.spotifyImportService,
                        spotifyAuth: deps.spotifyAuth)
-                .environmentObject(deps)
+                .environment(deps)
         }
     }
 
@@ -243,7 +243,7 @@ public struct LibraryView: View {
         case .smart:
             SmartPlaylistsSection(service: deps.smartPlaylistService,
                                   onCreate: { activeRoute = .smartPlaylist })
-                .environmentObject(deps)
+                .environment(deps)
         case .albums:
             if vm.layout == .grid {
                 AlbumsGridView(albums: vm.visibleAlbums)
@@ -342,8 +342,8 @@ private struct PlaylistsListView: View {
     var smart: [SmartPlaylist] = []
     /// Set outside Custom Order: everything interleaved by the sort.
     var mixed: [LibraryItem]? = nil
-    @EnvironmentObject private var deps: AppDependencies
-    @ObservedObject private var meta = PlaylistMetadataService.shared
+    @Environment(AppDependencies.self) private var deps
+    private var meta: PlaylistMetadataService { .shared }
     /// Swipe-to-delete asks first, with counts, since it removes songs and downloads too.
     @State private var deleteTarget: Playlist? = nil
 
@@ -378,7 +378,7 @@ private struct PlaylistsListView: View {
         NavigationLink(value: playlist) {
             PlaylistRowView(playlist: playlist)
                 // The offline badge observes the manager directly; `deps` doesn't republish it.
-                .environmentObject(deps.downloadManager)
+                .environment(deps.downloadManager)
         }
         .listRowBackground(MixRowBackground())
         .listRowSeparatorTint(Color.mixSeparator)
@@ -426,11 +426,11 @@ private struct PlaylistsListView: View {
     private func smartRow(_ item: SmartPlaylist) -> some View {
                   NavigationLink {
                       SmartPlaylistDetailView(playlist: item, service: deps.smartPlaylistService)
-                          .environmentObject(deps)
+                          .environment(deps)
                   } label: {
                       PlaylistRowView(playlist: item.asPlaylist(trackIDs: deps.smartTrackIDs(item)),
                                       kind: "Smart Playlist")
-                          .environmentObject(deps.downloadManager)
+                          .environment(deps.downloadManager)
                   }
                   .listRowBackground(MixRowBackground())
                   .listRowSeparatorTint(Color.mixSeparator)
@@ -524,7 +524,7 @@ private struct PlaylistsListView: View {
 /// The grid layout. A `ScrollView`, not a `List`, since swipe actions mean nothing on tiles.
 private struct PlaylistsGridView: View {
     let items: [LibraryItem]
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
 
     private let columns = [
         GridItem(.flexible(), spacing: 16),
@@ -546,7 +546,7 @@ private struct PlaylistsGridView: View {
                         case .playlist(let playlist):
                             NavigationLink(value: playlist) {
                                 PlaylistGridCell(playlist: playlist)
-                                    .environmentObject(deps.downloadManager)
+                                    .environment(deps.downloadManager)
                             }
                             .buttonStyle(.plain).mixHandCursor()
                             .playlistActions(playlist)
@@ -556,10 +556,10 @@ private struct PlaylistsGridView: View {
                         case .smart(let smart):
                             NavigationLink {
                                 SmartPlaylistDetailView(playlist: smart, service: deps.smartPlaylistService)
-                                    .environmentObject(deps)
+                                    .environment(deps)
                             } label: {
                                 PlaylistGridCell(playlist: smart.asPlaylist(trackIDs: deps.smartTrackIDs(smart)))
-                                    .environmentObject(deps.downloadManager)
+                                    .environment(deps.downloadManager)
                             }
                             .buttonStyle(.plain).mixHandCursor()
                         }
@@ -611,10 +611,10 @@ private struct AlbumsGridView: View {
 /// `displayTracks`, or this would be empty whenever online.
 struct DownloadedSongsView: View {
 
-    @EnvironmentObject private var deps:    AppDependencies
-    @EnvironmentObject private var engine:  PlaybackEngine
-    @EnvironmentObject private var library: LibraryService
-    @ObservedObject var downloads: DownloadManager
+    @Environment(AppDependencies.self) private var deps
+    @Environment(PlaybackEngine.self) private var engine
+    @Environment(LibraryService.self) private var library
+    var downloads: DownloadManager
     var query: String = ""
     /// Drawn inside another ScrollView (Home) instead of owning the screen.
     var embedded: Bool = false
@@ -807,10 +807,7 @@ public struct TrackRowView: View {
             }
             .buttonStyle(.plain).mixHandCursor()
         } else if isCurrent {
-            Image(systemName: "waveform")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Color.mixPrimary)
-                .mixVariableColor(isActive: isPlaying)
+            PlayingWave(size: 13, isPlaying: isPlaying)
         } else {
             Text(track.formattedDuration)
                 .font(.mixCaption)
@@ -858,7 +855,7 @@ public struct AlbumCardView: View {
 /// A saved album in the library list, dressed like a playlist row.
 struct AlbumRowView: View {
     let album: Album
-    @ObservedObject var downloads: DownloadManager
+    var downloads: DownloadManager
 
     var body: some View {
         HStack(spacing: 12) {
@@ -910,9 +907,9 @@ public struct PlaylistRowView: View {
     let playlist: Playlist
     /// Replaces "Playlist • owner", e.g. "Smart Playlist".
     var kind: String? = nil
-    @ObservedObject private var meta = PlaylistMetadataService.shared
-    @EnvironmentObject private var engine:    PlaybackEngine
-    @EnvironmentObject private var downloads: DownloadManager
+    private var meta: PlaylistMetadataService { .shared }
+    @Environment(PlaybackEngine.self) private var engine
+    @Environment(DownloadManager.self) private var downloads
 
     /// Every song is on disk (the whole library, for All Songs). Mirrors the macOS
     /// sidebar and Playlists page.
@@ -1039,5 +1036,5 @@ public struct ArtworkThumbnail: View {
 #Preview {
     let deps = AppDependencies()
     LibraryView(libraryService: deps.libraryService)
-        .environmentObject(deps)
+        .environment(deps)
 }

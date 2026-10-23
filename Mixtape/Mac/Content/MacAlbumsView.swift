@@ -6,26 +6,32 @@ import Combine
 
 struct MacAlbumsView: View {
 
-    @EnvironmentObject private var library:  LibraryService
-    @EnvironmentObject private var engine:   PlaybackEngine
-    @EnvironmentObject private var appState: MacAppState
+    @Environment(LibraryService.self) private var library
+    @Environment(PlaybackEngine.self) private var engine
+    @Environment(MacAppState.self) private var appState
 
     let searchText: String
 
-    @ObservedObject private var saved = SavedAlbumsService.shared
-    @EnvironmentObject private var deps: AppDependencies
+    private var saved: SavedAlbumsService { .shared }
+    @Environment(AppDependencies.self) private var deps
 
     /// Only albums the user added. See `SavedAlbumsService`.
+    /// One key lookup per album: sorting on `savedAt` rebuilt both keys on every comparison.
     private var albums: [Album] {
-        library.albums.filter { saved.isSaved($0) && (!library.downloadedOnly || deps.downloadManager.isFullyDownloaded($0.trackIDs)) }
-            .sorted { (saved.savedAt($0) ?? .distantPast) > (saved.savedAt($1) ?? .distantPast) }
+        library.albums.compactMap { album -> (Album, Date)? in
+            guard let at = saved.savedAt(album),
+                  !library.downloadedOnly || deps.downloadManager.isFullyDownloaded(album.trackIDs) else { return nil }
+            return (album, at)
+        }
+        .sorted { $0.1 > $1.1 }
+        .map(\.0)
     }
 
     private let cardMinWidth: CGFloat = 150
     private let cardMaxWidth: CGFloat = 200
     private let gridSpacing:  CGFloat = 16
 
-    private var filteredAlbums: [Album] {
+    private func filtered(_ albums: [Album]) -> [Album] {
         guard !searchText.isEmpty else { return albums }
         return albums.filter {
             $0.title.localizedCaseInsensitiveContains(searchText)      ||
@@ -34,29 +40,32 @@ struct MacAlbumsView: View {
     }
 
     var body: some View {
+        // Built once per pass; the empty checks, grid and subtitle each rebuilt it.
+        let albums = self.albums
+        let shown = filtered(albums)
         Group {
             if albums.isEmpty {
                 MacEmptyLibraryView(context: .albums)
-            } else if filteredAlbums.isEmpty {
+            } else if shown.isEmpty {
                 MacNoResultsView(query: searchText, context: "albums")
             } else {
-                albumGrid
+                albumGrid(shown)
             }
         }
         .navigationTitle("Albums")
-        .navigationSubtitle(subtitle)
+        .navigationSubtitle(searchText.isEmpty ? "\(albums.count) albums" : "\(shown.count) of \(albums.count) albums")
     }
 
     // MARK: - Grid
 
-    private var albumGrid: some View {
+    private func albumGrid(_ albums: [Album]) -> some View {
         ScrollView {
             LazyVGrid(
                 columns: [GridItem(.adaptive(minimum: cardMinWidth, maximum: cardMaxWidth),
                                    spacing: gridSpacing)],
                 spacing: gridSpacing
             ) {
-                ForEach(filteredAlbums) { album in
+                ForEach(albums) { album in
                     MacAlbumCard(album: album) {
                         appState.selectedAlbum = album     // routed by MacContentRouter
                     }
@@ -67,12 +76,6 @@ struct MacAlbumsView: View {
         .scrollContentBackground(.hidden)
         .background(MixPageBackground())
     }
-
-    private var subtitle: String {
-        searchText.isEmpty
-            ? "\(albums.count) albums"
-            : "\(filteredAlbums.count) of \(albums.count) albums"
-    }
 }
 
 // MARK: - Album Card
@@ -81,8 +84,8 @@ private struct MacAlbumCard: View {
     let album:    Album
     let onSelect: () -> Void          // single tap -> open detail
 
-    @EnvironmentObject private var library: LibraryService
-    @EnvironmentObject private var engine:  PlaybackEngine
+    @Environment(LibraryService.self) private var library
+    @Environment(PlaybackEngine.self) private var engine
 
     @State private var isHovered = false
 
@@ -163,10 +166,10 @@ struct MacAlbumDetailView: View {
 
     let album: Album
 
-    @EnvironmentObject private var library:  LibraryService
-    @EnvironmentObject private var engine:   PlaybackEngine
-    @EnvironmentObject private var appState: MacAppState
-    @EnvironmentObject private var deps:     AppDependencies
+    @Environment(LibraryService.self) private var library
+    @Environment(PlaybackEngine.self) private var engine
+    @Environment(MacAppState.self) private var appState
+    @Environment(AppDependencies.self) private var deps
 
     @State private var selectedIDs: Set<Track.ID> = []
     /// Album order until a column header is clicked.

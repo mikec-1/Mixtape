@@ -3,7 +3,7 @@
 
 import Foundation
 
-enum LyricVersion {
+nonisolated enum LyricVersion {
 
     /// Bracketed groups and the "- suffix", lowercased.
     static func qualifierSegments(_ title: String) -> [String] {

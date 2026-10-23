@@ -8,9 +8,11 @@
 import Foundation
 import OSLog
 import Combine
+import Observation
 
+@Observable
 @MainActor
-public final class SpotifyExportService: ObservableObject {
+public final class SpotifyExportService {
 
     // MARK: - Plan
 
@@ -93,9 +95,9 @@ public final class SpotifyExportService: ObservableObject {
     // MARK: - Published
 
     /// Songs looked up so far, out of how many, while a plan is being built.
-    @Published public private(set) var planned: (done: Int, total: Int)?
+    public private(set) var planned: (done: Int, total: Int)?
     /// Songs written so far, out of how many, while a plan is being committed.
-    @Published public private(set) var pushed: (done: Int, total: Int)?
+    public private(set) var pushed: (done: Int, total: Int)?
 
     // MARK: - Dependencies
 
@@ -139,8 +141,8 @@ public final class SpotifyExportService: ObservableObject {
     /// that a newly added record surfaces without anyone thinking about it.
     private static let missTTL: TimeInterval = 30 * 24 * 60 * 60
 
-    private var matchCache: [String: CachedMatch] = [:]
-    private var missCache:  [String: CachedMiss]  = [:]
+    @ObservationIgnored private var matchCache: [String: CachedMatch] = [:]
+    @ObservationIgnored private var missCache:  [String: CachedMiss]  = [:]
     private static let matchCacheKey = "spotify.export.matchCache.v1"
     private static let missCacheKey  = "spotify.export.missCache.v1"
 

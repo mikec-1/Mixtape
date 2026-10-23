@@ -38,9 +38,16 @@ public enum PlaybackCache {
     /// Online cache names derive from the resolver key, so lookup is a
     /// `fileExists`. The coordinator's index is only an optimisation.
     private static func stem(forSourceRef ref: String) -> String {
+        if let hit = stems[ref] { return hit }
         let digest = SHA256.hash(data: Data(ref.utf8))
-        return "online-" + digest.prefix(16).map { String(format: "%02x", $0) }.joined()
+        let stem = "online-" + digest.prefix(16).map { String(format: "%02x", $0) }.joined()
+        if stems.count > 20_000 { stems.removeAll() }
+        stems[ref] = stem
+        return stem
     }
+
+    /// Every skip in a big playlist asks for each song's file, and hashing plus formatting was most of it.
+    private static var stems: [String: String] = [:]
 
     /// Extensions worth probing when we know the stem but not the container.
     nonisolated private static let knownExtensions = ["m4a", "mp3", "opus", "webm", "aac", "flac", "wav", "aiff", "aif", "ogg", "m4b"]
@@ -50,7 +57,7 @@ public enum PlaybackCache {
     /// The cached file for a Discover song, if this device still has it.
     public static func fileURL(forSourceRef ref: String) -> URL? {
         guard !ref.isEmpty else { return nil }
-        return existingFile(stem: stem(forSourceRef: ref), in: directory)
+        return existingFile(stem: stem(forSourceRef: ref))
             ?? legacyOnlineFile(forSourceRef: ref)
     }
 
@@ -63,17 +70,16 @@ public enum PlaybackCache {
     /// The cached copy of a Supabase-backed library file, if present.
     public static func fileURL(forRemoteHash hash: String) -> URL? {
         guard !hash.isEmpty else { return nil }
-        return existingFile(stem: hash, in: directory)
+        return existingFile(stem: hash)
     }
 
-    private static func existingFile(stem: String, in dir: URL) -> URL? {
-        let fm = FileManager.default
-        for ext in knownExtensions {
-            let candidate = dir.appendingPathComponent("\(stem).\(ext)")
-            if fm.fileExists(atPath: candidate.path(percentEncoded: false)) { return candidate }
-        }
-        return nil
+    /// Read without `directory`, which creates the folder on every access.
+    private static func existingFile(stem: String) -> URL? {
+        let dir = AudioPaths.cacheDirectory
+        return listing.files(in: dir)[stem].map { dir.appendingPathComponent($0) }
     }
+
+    nonisolated private static let listing = StemListing(extensions: knownExtensions)
 
     /// Old Discover files are named by video id and only found via the
     /// coordinator's index. Registered at launch.

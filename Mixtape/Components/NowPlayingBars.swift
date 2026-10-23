@@ -18,7 +18,7 @@ struct NowPlayingBars: View {
 
     @State private var animating = false
     @Environment(\.mixMotion) private var motion
-    @ObservedObject private var visibility = AppVisibility.shared
+    private var visibility: AppVisibility { .shared }
 
     /// Reduced motion shows static bars.
     var body: some View {

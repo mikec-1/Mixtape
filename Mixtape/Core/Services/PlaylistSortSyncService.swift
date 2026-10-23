@@ -4,14 +4,16 @@
 
 import Foundation
 import Combine
+import Observation
 
+@Observable
 @MainActor
-public final class PlaylistSortSyncService: ObservableObject {
+public final class PlaylistSortSyncService {
 
     public static let shared = PlaylistSortSyncService()
 
     /// Mirrored both ways by `MacAppState.playlistSortOrder` and iOS's `LibraryViewModel.sortOrder`.
-    @Published public var sortOrder: LibrarySortOrder = .manual {
+    public var sortOrder: LibrarySortOrder = .manual {
         didSet {
             guard sortOrder != oldValue else { return }
             UserDefaults.standard.set(sortOrder.rawValue, forKey: Self.key)
@@ -22,9 +24,9 @@ public final class PlaylistSortSyncService: ObservableObject {
     }
 
     /// Writes the raw value to `user_metadata`. Nil in previews and tests.
-    public var pushWriter: ((String) -> Void)?
+    @ObservationIgnored public var pushWriter: ((String) -> Void)?
 
-    private var isApplyingRemote = false
+    @ObservationIgnored private var isApplyingRemote = false
     private static let key = "library.sortOrder"
 
     private init() {

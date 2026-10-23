@@ -4,6 +4,7 @@
 
 import SwiftUI
 import Combine
+import Observation
 
 public enum BackdropMotion: String, CaseIterable, Identifiable, Sendable {
     case still, floating
@@ -55,27 +56,32 @@ public struct MixBackdrop: Equatable, Sendable {
 /// Draws the field once, small, for every surface to share. The blobs are wide
 /// and soft, so a low-resolution image scaled up looks the same.
 /// With hardware acceleration each surface draws it with a shader instead (`live`).
+@Observable
 @MainActor
-final class BackdropRenderer: ObservableObject {
+final class BackdropRenderer {
 
     static let shared = BackdropRenderer()
 
     /// Nil when no colour is set, and always with hardware acceleration. A wallpaper,
     /// cropped to the window's shape, whenever one is set.
-    @Published private(set) var image: CGImage?
+    private(set) var image: CGImage? { didSet { changed.send() } }
     /// The wallpaper's frosted copy for panels; nil without one.
-    @Published private(set) var glass: CGImage?
+    private(set) var glass: CGImage?
     /// What the GPU draws; nil when no colour is set or without hardware acceleration.
-    @Published private(set) var live: Live?
+    private(set) var live: Live?
     /// The window in points; set by `RootView`. Every surface lays the image out against it.
-    @Published var fieldSize: CGSize = .zero
+    var fieldSize: CGSize = .zero { didSet { fieldSizes.send(fieldSize); changed.send() } }
+    /// Combine twins for AppKit callers: @Observable has no `$` publishers.
+    let fieldSizes = CurrentValueSubject<CGSize, Never>(.zero)
+    /// Fires when `image` or `fieldSize` changes.
+    let changed = PassthroughSubject<Void, Never>()
 
-    private var backdrop: MixBackdrop?
-    private var size: CGSize = .zero
-    private var timer: Timer?
+    @ObservationIgnored private var backdrop: MixBackdrop?
+    @ObservationIgnored private var size: CGSize = .zero
+    @ObservationIgnored private var timer: Timer?
     /// Bumped by every change, so a draw that finishes late doesn't land over a newer one.
-    private var generation = 0
-    private var bag = Set<AnyCancellable>()
+    @ObservationIgnored private var generation = 0
+    @ObservationIgnored private var bag = Set<AnyCancellable>()
 
     struct Live: Equatable {
         let palette: BackdropField.Palette
@@ -88,9 +94,9 @@ final class BackdropRenderer: ObservableObject {
         let theme = ThemeManager.shared
         // Values from the sink, not the properties: @Published fires before the store.
         Publishers.CombineLatest(
-            Publishers.CombineLatest4(theme.$backdrop, theme.$motion,
-                                      AppVisibility.shared.$isForeground, $fieldSize.removeDuplicates()),
-            theme.$wallpaper)
+            Publishers.CombineLatest4(theme.backdropPublisher, theme.motionPublisher,
+                                      AppVisibility.shared.foreground, fieldSizes.removeDuplicates()),
+            theme.wallpaperPublisher)
             .sink { [weak self] values, wallpaper in
                 let (backdrop, motion, foreground, size) = values
                 self?.configure(backdrop, still: motion.isReduced || !foreground, size: size, wallpaper: wallpaper)
@@ -107,8 +113,9 @@ final class BackdropRenderer: ObservableObject {
         // A picture wins over the colour. Cropping shares its pixels, so a resize is cheap.
         if let wallpaper, size.width > 0, size.height > 0 {
             live = nil
-            image = wallpaper.full.filling(size)
+            // Glass first: `image` fires `changed`, and listeners read both.
             glass = wallpaper.frosted.filling(size)
+            image = wallpaper.full.filling(size)
             return
         }
         // Leaving a wallpaper: drop its picture too, or it stays up over the colour.
@@ -303,7 +310,7 @@ struct MixPageBackground: View {
     /// Panels: frosted over a wallpaper, solid under Reduce Transparency. Same as a page otherwise.
     var glass = false
 
-    @ObservedObject private var renderer = BackdropRenderer.shared
+    private var renderer: BackdropRenderer { .shared }
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
@@ -360,7 +367,7 @@ struct BackdropFieldView: View {
     var origin: CGPoint
     var size: CGSize
 
-    @ObservedObject private var renderer = BackdropRenderer.shared
+    private var renderer: BackdropRenderer { .shared }
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
@@ -381,7 +388,7 @@ struct BackdropFieldView: View {
 /// Glass over a wallpaper, else `fallback`: for panels that aren't the page colour.
 struct MixGlassBackground<Fallback: View>: View {
     @ViewBuilder var fallback: Fallback
-    @ObservedObject private var theme = ThemeManager.shared
+    private var theme: ThemeManager { .shared }
     var body: some View {
         if theme.wallpaper != nil { MixPageBackground(glass: true) } else { fallback }
     }
@@ -389,7 +396,7 @@ struct MixGlassBackground<Fallback: View>: View {
 
 /// For list rows: clear over a custom colour or wallpaper so the page shows through, else the page colour.
 struct MixRowBackground: View {
-    @ObservedObject private var theme = ThemeManager.shared
+    private var theme = ThemeManager.shared
     var body: some View {
         theme.backdrop == nil && theme.wallpaper == nil ? Color.mixBackground : Color.clear
     }

@@ -5,12 +5,12 @@ public struct ArtistDetailView: View {
 
     let artist: Artist
 
-    @EnvironmentObject private var deps:   AppDependencies
-    @EnvironmentObject private var engine: PlaybackEngine
+    @Environment(AppDependencies.self) private var deps
+    @Environment(PlaybackEngine.self) private var engine
     /// Observed directly: `engine.queue` doesn't republish through the engine.
-    @EnvironmentObject private var queueService: QueueService
+    @Environment(QueueService.self) private var queueService
     /// The header shuffle is this list's setting. See `ShufflePreferences`.
-    @ObservedObject private var shufflePrefs = ShufflePreferences.shared
+    private var shufflePrefs: ShufflePreferences { .shared }
 
     private var tracks: [Track] {
         deps.libraryService.tracks(by: artist)
@@ -251,8 +251,8 @@ public struct ArtistDetailView: View {
 #Preview {
     NavigationStack {
         ArtistDetailView(artist: Artist.previewArtists[0])
-            .environmentObject(AppDependencies())
-            .environmentObject(PlaybackEngine(
+            .environment(AppDependencies())
+            .environment(PlaybackEngine(
                 queue: QueueService(),
                 fileStorage: SupabaseFileStorageService(client: SupabaseConfig.client),
                 equalizer: AudioEqualizer()

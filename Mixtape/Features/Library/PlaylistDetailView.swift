@@ -8,16 +8,22 @@ public struct PlaylistDetailView: View {
     /// downloads, profile and sharing don't apply, and delete goes to the smart playlist service.
     var isSmart = false
 
-    @EnvironmentObject private var deps:   AppDependencies
-    @EnvironmentObject private var engine: PlaybackEngine
+    @Environment(AppDependencies.self) private var deps
+    @Environment(PlaybackEngine.self) private var engine
     /// Observed directly so the + button flips the moment it's pressed.
-    @EnvironmentObject private var smartService: SmartPlaylistService
+    @Environment(SmartPlaylistService.self) private var smartService
     /// Observed directly: `engine.queue` doesn't republish through the engine.
-    @EnvironmentObject private var queueService: QueueService
+    @Environment(QueueService.self) private var queueService
     /// The header shuffle is this list's setting. See `ShufflePreferences`.
-    @ObservedObject private var shufflePrefs = ShufflePreferences.shared
+    private var shufflePrefs: ShufflePreferences { .shared }
 
+    #if os(iOS)
     @Environment(\.dismiss) private var dismiss
+    #else
+    /// The Mac page is never presented, so there's nothing to dismiss. Reading `\.dismiss`
+    /// re-ran this body on every window resize frame.
+    private func dismiss() {}
+    #endif
 
     // Rename
     /// Confirming a press that would delete downloaded audio.
@@ -33,7 +39,7 @@ public struct PlaylistDetailView: View {
     @State private var syncError: String?
     /// Set once a sync has been running long enough to be worth mentioning.
     @State private var syncIsSlow = false
-    @ObservedObject private var throttle = SpotifyThrottle.shared
+    private var throttle: SpotifyThrottle { .shared }
     @State private var showEditSheet     = false
     // Delete
     @State private var showDeleteConfirm = false
@@ -77,8 +83,8 @@ public struct PlaylistDetailView: View {
     @State private var trackSort = TrackSort()
     /// Observed so a sort changed on another device lands on an open page.
     /// Equality guards stop this and `setSort` looping.
-    @ObservedObject private var trackSorts = PlaylistTrackSortService.shared
-    @ObservedObject private var transitions = PlaylistTransitionService.shared
+    private var trackSorts: PlaylistTrackSortService { .shared }
+    private var transitions: PlaylistTransitionService { .shared }
 
     /// Resolved/filtered/sorted rows, recomputed only on real changes. See `TrackListMemo`.
     @State private var memo = TrackListMemo()
@@ -262,16 +268,16 @@ public struct PlaylistDetailView: View {
     #endif
 
     private var totalDuration: String {
-        let secs = Int(tracks.map(\.duration).reduce(0, +))
+        let secs = lists.totalSeconds
         if secs >= 3600 { return "\(secs / 3600) hr \((secs % 3600) / 60) min" }
         return "\(secs / 60) min"
     }
 
     #if os(macOS)
-    @EnvironmentObject private var appState: MacAppState
+    @Environment(MacAppState.self) private var appState
     #else
     /// For switching tabs: "Find in Discover" leaves the Library tab, which a push can't do.
-    @EnvironmentObject private var iosAppState: IOSAppState
+    @Environment(IOSAppState.self) private var iosAppState
     /// "Go to Artist/Album" targets. macOS swaps the content column; iOS pushes onto the NavigationStack.
     @State private var navAlbum:  Album?  = nil
     @State private var navOnlineAlbum: OnlineAlbum? = nil
@@ -364,7 +370,7 @@ public struct PlaylistDetailView: View {
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             .toolbarColorScheme(.dark, for: .navigationBar)
-            .navigationDestination(item: $navAlbum)  { AlbumDetailView(album: $0).environmentObject(deps) }
+            .navigationDestination(item: $navAlbum)  { AlbumDetailView(album: $0).environment(deps) }
             .navigationDestination(item: $navOnlineAlbum) { album in
                 IOSDiscoverAlbumPage(
                     album: album,
@@ -396,7 +402,7 @@ public struct PlaylistDetailView: View {
         // Cover/name/description editor: from the header cover, and the "..." menu on iOS.
         .sheet(isPresented: $showEditSheet) {
             PlaylistEditorSheet(editingPlaylist: livePlaylist)
-                .environmentObject(deps)
+                .environment(deps)
         }
         .alert("Couldn't change visibility",
                isPresented: Binding(get: { publicError != nil },
@@ -536,7 +542,7 @@ public struct PlaylistDetailView: View {
         .sheet(isPresented: Binding(get: { !tracksForAddToPlaylist.isEmpty },
                                     set: { if !$0 { tracksForAddToPlaylist = [] } })) {
             AddToPlaylistSheet(tracks: tracksForAddToPlaylist, sourcePlaylistID: playlist.id)
-                .environmentObject(deps)
+                .environment(deps)
         }
         #else
         // macOS shows the corner panel instead of a sheet.
@@ -549,27 +555,27 @@ public struct PlaylistDetailView: View {
         .sheet(isPresented: $showSpotifyExport) {
             // No `.frame(minWidth:)`: MixSheet sizes itself, and a wrapper makes the window narrower than its content.
             SpotifyExportView(playlistName: playlist.name, tracks: tracks, playlistID: playlist.id)
-                .environmentObject(deps)
+                .environment(deps)
         }
         // Opening this publishes the playlist if it was never shared.
         .sheet(isPresented: $showCollabShare) {
             InviteCollaboratorsSheet(playlist: livePlaylist, tracks: tracks)
-                .environmentObject(deps)
+                .environment(deps)
         }
         .sheet(isPresented: $showDubSheet) {
             DubSheet(playlist: livePlaylist, tracks: tracks)
-                .environmentObject(deps)
+                .environment(deps)
         }
         .sheet(isPresented: $showLinerNotes) {
             LinerNotesSheet(playlist: livePlaylist, tracks: tracks)
-                .environmentObject(deps)
+                .environment(deps)
         }
         #if os(iOS)
         // A sheet, not a push: this page lives in several tabs' stacks.
         .sheet(item: $profileSheet) { profile in
             NavigationStack {
                 ProfilePageView(profile: profile)
-                    .environmentObject(deps)
+                    .environment(deps)
                     .toolbar {
                         ToolbarItem(placement: .topBarTrailing) {
                             Button("Done") { profileSheet = nil }
@@ -2286,8 +2292,8 @@ struct AddToPlaylistSheet: View {
         self.onClose          = onClose
     }
 
-    @EnvironmentObject private var deps: AppDependencies
-    @ObservedObject private var meta = PlaylistMetadataService.shared
+    @Environment(AppDependencies.self) private var deps
+    private var meta: PlaylistMetadataService { .shared }
     @Environment(\.dismiss) private var dismiss
 
     @State private var query = ""
@@ -2305,9 +2311,6 @@ struct AddToPlaylistSheet: View {
 
     /// Per-row counter that fires the unfile bounce.
     @State private var unfilePops: [UUID: Int] = [:]
-
-    /// Bumped when the library publishes, since `deps` doesn't republish `libraryService` changes.
-    @State private var libraryTick = 0
 
     /// Stands in for the "New playlist" row in `hoveredID`.
     private static let newRowID = UUID()
@@ -2355,9 +2358,6 @@ struct AddToPlaylistSheet: View {
         platformBody
             .task(id: tracks.map(\.id)) {
                 (membership, partialMembership) = storedMembership()
-            }
-            .onReceive(deps.libraryService.objectWillChange) { _ in
-                libraryTick &+= 1
             }
     }
 
@@ -2816,8 +2816,8 @@ struct AddToPlaylistSheet: View {
             name: "Liked Songs",
             sync: SyncMetadata(deviceID: "preview")
         ))
-        .environmentObject(AppDependencies())
-        .environmentObject(PlaybackEngine(
+        .environment(AppDependencies())
+        .environment(PlaybackEngine(
             queue: QueueService(),
             fileStorage: SupabaseFileStorageService(client: SupabaseConfig.client),
             equalizer: AudioEqualizer()

@@ -3,20 +3,22 @@
 
 import Foundation
 import Combine
+import Observation
 
+@Observable
 @MainActor
-final class PlaylistTransitionService: ObservableObject {
+final class PlaylistTransitionService {
 
     static let shared = PlaylistTransitionService()
 
     /// Playlist id -> mode. Absent means the Settings default.
-    @Published private(set) var modes: [UUID: CrossfadeMode] = [:]
+    private(set) var modes: [UUID: CrossfadeMode] = [:]
 
     /// Writes the encoded map to `user_metadata`.
-    var pushWriter: ((String) -> Void)?
+    @ObservationIgnored var pushWriter: ((String) -> Void)?
 
-    private var isApplyingRemote = false
-    private var pushTask: Task<Void, Never>?
+    @ObservationIgnored private var isApplyingRemote = false
+    @ObservationIgnored private var pushTask: Task<Void, Never>?
     private static let key = "playlist.transitions"
 
     private init() {

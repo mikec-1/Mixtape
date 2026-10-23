@@ -4,12 +4,12 @@ import SwiftUI
 /// `inset` is how far the track starts in from the view's edges (a Slider's knob radius).
 struct CommentDots: View {
 
-    @ObservedObject var queue: QueueService
+    var queue: QueueService
     let duration: Double
     var inset: CGFloat = 0
     var color: Color = .mixPrimary
 
-    @ObservedObject private var marks = PlayingPostMarks.shared
+    private var marks: PlayingPostMarks { .shared }
 
     var body: some View {
         if marks.post != nil, marks.post == queue.currentTrack?.id, duration > 0 {

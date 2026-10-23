@@ -236,7 +236,7 @@ struct RecapCardSlide: View {
     let mac: Bool
     let onWatchAgain: () -> Void
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
     @State private var look = 0
     @State private var saved = false
 
@@ -384,7 +384,7 @@ struct RecapHomeCard: View {
     let tape: SmartPlaylist?
     let onTape: (SmartPlaylist) -> Void
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
 
     #if os(macOS)
     private let mac = true
@@ -537,8 +537,8 @@ struct RecapShelfTile: View {
 
 /// The Home card while last month's recap is unwatched.
 struct RecapHomeSlot: View {
-    @ObservedObject var recap: RecapService
-    @EnvironmentObject private var smartService: SmartPlaylistService
+    var recap: RecapService
+    @Environment(SmartPlaylistService.self) private var smartService
     let onTape: (SmartPlaylist) -> Void
 
     var body: some View {
@@ -555,7 +555,7 @@ struct RecapHomeSlot: View {
 /// The Recaps section on a profile. Your own shows every month; anyone else's
 /// only the ones they've shared.
 struct RecapShelf: View {
-    @ObservedObject var recap: RecapService
+    var recap: RecapService
     let profile: UserProfile
     let isMe: Bool
     /// Someone else's shared recaps.

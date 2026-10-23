@@ -8,9 +8,9 @@ import SwiftUI
 
 struct MacLyricsView: View {
 
-    @EnvironmentObject private var engine:   PlaybackEngine
-    @EnvironmentObject private var appState: MacAppState
-    @StateObject private var lyricsService = LyricsService.shared
+    @Environment(PlaybackEngine.self) private var engine
+    @Environment(MacAppState.self) private var appState
+    private var lyricsService: LyricsService { .shared }
 
     @State private var isLoading = false
 
@@ -353,7 +353,7 @@ private struct LyricsFrame: ViewModifier {
 private struct MacSyncedLyrics: View {
     let lines: [LyricLine]
     /// Observed here so clock ticks only redraw this view. See `PlaybackClock`.
-    @ObservedObject var clock: PlaybackClock
+    var clock: PlaybackClock
     /// Stops the per-frame sweep redrawing a line that isn't moving.
     let isPlaying: Bool
     let fontSize: CGFloat
@@ -368,7 +368,7 @@ private struct MacSyncedLyrics: View {
     @State private var hovered: Int? = nil
 
     /// Karaoke drops the hover highlight since the pointer is hidden.
-    @EnvironmentObject private var appState: MacAppState
+    @Environment(MacAppState.self) private var appState
 
     /// Per-word spans, cached since body runs every tick.
     @State private var words: [[LyricWord]] = []
@@ -398,7 +398,9 @@ private struct MacSyncedLyrics: View {
     }
 
     var body: some View {
-        ScrollViewReader { proxy in
+        // Once per tick, not per line: each read scans every line.
+        let active = activeIndex
+        return ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
                 LazyVStack(alignment: .leading, spacing: 22) {
                     // Leading space so the first line can scroll to center.
@@ -417,7 +419,7 @@ private struct MacSyncedLyrics: View {
                             .id("gap-\(i)")
                         }
                         Group {
-                            if i == activeIndex, !byLine, i < words.count, !words[i].isEmpty {
+                            if i == active, !byLine, i < words.count, !words[i].isEmpty {
                                 // Only the active line draws per word.
                                 TimelineView(.animation(paused: !isPlaying)) { _ in
                                     WordSweepLine(
@@ -431,7 +433,7 @@ private struct MacSyncedLyrics: View {
                             } else {
                                 Text(line.text.isEmpty ? "♪" : line.text)
                                     .font(.system(size: fontSize, weight: .bold))
-                                    .foregroundStyle(color(for: i))
+                                    .foregroundStyle(color(for: i, active: active))
                                     .opacity(0.85)
                             }
                         }
@@ -439,7 +441,7 @@ private struct MacSyncedLyrics: View {
                             .contentShape(Rectangle())
                             .onHover { hovered = $0 ? i : (hovered == i ? nil : hovered) }
                             .onTapGesture { onSeek(line.time + offset) }
-                            .mixAnimation(.easeInOut(duration: 0.25), value: activeIndex)
+                            .mixAnimation(.easeInOut(duration: 0.25), value: active)
                             .id("line-\(i)")
                     }
 
@@ -467,8 +469,8 @@ private struct MacSyncedLyrics: View {
     }
 
     /// Active line: bright white. Past/upcoming: dimmed white. Hovered: brighten.
-    private func color(for i: Int) -> Color {
-        if i == activeIndex { return .white }
+    private func color(for i: Int, active: Int?) -> Color {
+        if i == active { return .white }
         if i == hovered, !appState.karaokeActive { return .white.opacity(0.85) }
         return .white.opacity(0.45)
     }

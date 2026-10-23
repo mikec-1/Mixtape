@@ -8,7 +8,7 @@ struct AlbumSaveButton: View {
     /// Discover imports its songs here.
     var onSave: (() -> Void)? = nil
 
-    @ObservedObject private var saved = SavedAlbumsService.shared
+    private var saved: SavedAlbumsService { .shared }
 
     private var isSaved: Bool { saved.isSaved(title: title, artistName: artistName) }
 
@@ -31,7 +31,7 @@ struct AlbumSaveButton: View {
 struct AlbumDownloadButton: View {
     /// The album's songs as library ids.
     let ids: [UUID]
-    @ObservedObject var downloads: DownloadManager
+    var downloads: DownloadManager
     let library: LibraryService
     /// Discover saves the album first so there are rows to download.
     var prepare: (() async -> Void)? = nil

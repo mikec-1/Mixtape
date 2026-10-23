@@ -6,9 +6,9 @@ import SwiftUI
 
 struct MacHomeSurface: View {
 
-    @EnvironmentObject private var deps:     AppDependencies
-    @EnvironmentObject private var engine:   PlaybackEngine
-    @EnvironmentObject private var appState: MacAppState
+    @Environment(AppDependencies.self) private var deps
+    @Environment(PlaybackEngine.self) private var engine
+    @Environment(MacAppState.self) private var appState
 
     /// Which part of Home to draw: greeting and shelf above "Made for you", library rows below.
     var bands: HomeBands = .all

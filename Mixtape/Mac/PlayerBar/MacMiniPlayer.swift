@@ -83,8 +83,8 @@ final class MacMiniPlayer {
 }
 
 struct MacMiniPlayerView: View {
-    @ObservedObject var engine: PlaybackEngine
-    @ObservedObject var queue: QueueService
+    var engine: PlaybackEngine
+    var queue: QueueService
 
     /// Big artwork on top, or one compact row.
     @AppStorage("miniPlayerLarge") private var large = false
@@ -162,7 +162,7 @@ struct MacMiniPlayerView: View {
 
     private var scrubber: some View {
         MacProgressScrubber(clock: engine.clock)
-            .environmentObject(engine)
+            .environment(engine)
     }
 
     /// The cover itself, blurred and darkened, behind everything.

@@ -8,7 +8,7 @@ import AppKit
 struct DownloadMenuItems: View {
 
     let track: Track
-    @ObservedObject var downloads: DownloadManager
+    var downloads: DownloadManager
 
     @ViewBuilder
     var body: some View {
@@ -69,7 +69,7 @@ struct DownloadMenuItems: View {
 struct BulkDownloadMenuItems: View {
 
     let tracks: [Track]
-    @ObservedObject var downloads: DownloadManager
+    var downloads: DownloadManager
 
     /// Songs with nothing on disk and somewhere to fetch from.
     private var downloadable: [Track] {

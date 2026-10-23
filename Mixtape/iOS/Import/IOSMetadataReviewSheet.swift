@@ -8,8 +8,8 @@ struct IOSMetadataReviewSheet: View {
 
     let item: MetadataReviewItem
 
-    @EnvironmentObject private var deps:     AppDependencies
-    @EnvironmentObject private var appState: IOSAppState
+    @Environment(AppDependencies.self) private var deps
+    @Environment(IOSAppState.self) private var appState
 
     @State private var draft: MetadataDraft
 
@@ -129,9 +129,8 @@ struct IOSMetadataReviewSheet: View {
                         .overlay(ProgressView().tint(Color.mixTextTertiary))
                 }
             }
-        } else if let data = item.track.displayArtwork,
-                  let ui   = UIImage(data: data) {
-            Image(uiImage: ui).resizable()
+        } else if let data = item.track.displayArtwork, let img = mixImage(from: data) {
+            img.resizable()
         } else {
             artworkPlaceholder
         }

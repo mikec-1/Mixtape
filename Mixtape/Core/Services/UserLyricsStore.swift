@@ -7,9 +7,11 @@
 import Foundation
 import Combine
 import CryptoKit
+import Observation
 
+@Observable
 @MainActor
-public final class UserLyricsStore: ObservableObject {
+public final class UserLyricsStore {
 
     public static let shared = UserLyricsStore()
 
@@ -26,7 +28,9 @@ public final class UserLyricsStore: ObservableObject {
     }()
 
     /// Cached directory listing. Nil means not read yet; mutations clear it.
-    private var cachedKeys: Set<String>?
+    @ObservationIgnored private var cachedKeys: Set<String>?
+    /// Bumped on every mutation so views reading the listing redraw.
+    private var revision = 0
 
     private init() {
         // A wipe removes lyrics too; their songs are gone.
@@ -207,6 +211,7 @@ public final class UserLyricsStore: ObservableObject {
     }
 
     private func keys() -> Set<String> {
+        _ = revision
         if let cachedKeys { return cachedKeys }
         let names = (try? FileManager.default.contentsOfDirectory(atPath: Self.directory.path)) ?? []
         let built = Set(names.filter { $0.hasSuffix(".lrc") }
@@ -217,6 +222,6 @@ public final class UserLyricsStore: ObservableObject {
 
     private func invalidate() {
         cachedKeys = nil
-        objectWillChange.send()
+        revision += 1
     }
 }

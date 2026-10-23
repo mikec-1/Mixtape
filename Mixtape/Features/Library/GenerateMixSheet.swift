@@ -5,7 +5,7 @@ import SwiftUI
 
 struct GenerateMixSheet: View {
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
     @Environment(\.dismiss) private var dismiss
 
     @State private var vibe: MixVibe = .yourTaste

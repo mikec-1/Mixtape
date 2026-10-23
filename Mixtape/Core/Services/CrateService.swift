@@ -3,19 +3,21 @@
 
 import Foundation
 import Combine
+import Observation
 
+@Observable
 @MainActor
-public final class CrateService: ObservableObject {
+public final class CrateService {
 
     public static let shared = CrateService()
 
-    @Published public private(set) var crates: [Crate] = []
+    public private(set) var crates: [Crate] = []
 
     /// Asks the root for a name. A context menu is gone before its alert could show.
     public struct NewCrateRequest { public var item: CrateItem? }
-    @Published public var newCrateRequest: NewCrateRequest?
+    public var newCrateRequest: NewCrateRequest?
 
-    public var pushWriter: ((String) -> Void)?
+    @ObservationIgnored public var pushWriter: ((String) -> Void)?
 
     private static let key = "library.crates"
 

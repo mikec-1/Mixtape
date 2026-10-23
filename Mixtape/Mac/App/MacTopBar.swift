@@ -12,12 +12,12 @@ import UniformTypeIdentifiers
 
 struct MacTopBar: View {
 
-    @EnvironmentObject private var appState: MacAppState
-    @EnvironmentObject private var deps:     AppDependencies
-    @EnvironmentObject private var sync:     SupabaseSyncService
+    @Environment(MacAppState.self) private var appState
+    @Environment(AppDependencies.self) private var deps
+    @Environment(SupabaseSyncService.self) private var sync
 
     /// The bar feeds the type-ahead panel and owns its keyboard; MacRootView draws it.
-    @ObservedObject private var suggestions = SearchSuggestionsStore.shared
+    private var suggestions: SearchSuggestionsStore { .shared }
 
     /// So a blur can close the panel without racing a click on a row.
     @State private var fieldFocused = false
@@ -69,7 +69,7 @@ struct MacTopBar: View {
 
             // Centred on the window, sidebar or not.
             MacSearchField(
-                text: $appState.searchText,
+                text: Bindable(appState).searchText,
                 prompt: "What do you want to listen to?",
                 focusToken: appState.searchFocusToken,
                 onMoveDown: { appState.focusResults() },
@@ -115,25 +115,25 @@ struct MacTopBar: View {
                     .buttonStyle(.plain)
                     .mixHandCursor()
                     .help("Inbox")
-                    .environmentObject(deps)
-                    .environmentObject(appState)
+                    .environment(deps)
+                    .environment(appState)
                 MessagesButton(hitSize: 28)
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(Color.mixTextSecondary)
                     .buttonStyle(.plain)
                     .mixHandCursor()
                     .help("Messages")
-                    .environmentObject(appState)
+                    .environment(appState)
                 MacAddMenu()
-                    .environmentObject(deps)
-                    .environmentObject(appState)
+                    .environment(deps)
+                    .environment(appState)
                 MacSyncButton()
-                    .environmentObject(deps)
-                    .environmentObject(sync)
+                    .environment(deps)
+                    .environment(sync)
                 // Outermost, where every desktop app that has one puts it.
                 ProfileMenuButton()
-                    .environmentObject(deps)
-                    .environmentObject(appState)
+                    .environment(deps)
+                    .environment(appState)
             }
             .padding(.trailing, 14)
         }
@@ -241,9 +241,9 @@ private struct MacHistoryButton: View {
 /// The HStack gives NSHostingView a single root view.
 struct MacHistoryButtons: View {
 
-    @EnvironmentObject private var appState: MacAppState
+    @Environment(MacAppState.self) private var appState
     /// The recap and the song editor cover the window, titlebar included.
-    @ObservedObject var recap: RecapService
+    var recap: RecapService
 
     private var covered: Bool { recap.presented != nil || appState.editTrack != nil }
 
@@ -272,8 +272,8 @@ struct MacHistoryButtons: View {
 // Device-to-device sync only; it never scans the export folder, which would resurrect deleted songs.
 
 private struct MacSyncButton: View {
-    @EnvironmentObject private var deps: AppDependencies
-    @EnvironmentObject private var sync: SupabaseSyncService
+    @Environment(AppDependencies.self) private var deps
+    @Environment(SupabaseSyncService.self) private var sync
     @State private var isSpinning = false
 
     var body: some View {
@@ -319,8 +319,8 @@ public extension Notification.Name {
 // "+" for every way music enters the library, each named by source.
 
 private struct MacAddMenu: View {
-    @EnvironmentObject private var deps:     AppDependencies
-    @EnvironmentObject private var appState: MacAppState
+    @Environment(AppDependencies.self) private var deps
+    @Environment(MacAppState.self) private var appState
 
     @State private var isImporting  = false
     @State private var showSpotify  = false
@@ -377,8 +377,8 @@ private struct MacAddMenu: View {
         }
         .sheet(item: $linkService) { service in
             LinkImportView(service: service)
-                .environmentObject(deps)
-                .environmentObject(appState)
+                .environment(deps)
+                .environment(appState)
         }
         .sheet(isPresented: $showSpotify) {
             SpotifyImportView(spotifyClient: deps.spotifyClient,
@@ -386,19 +386,19 @@ private struct MacAddMenu: View {
                               auth: deps.spotifyAuth,
                               followService: deps.spotifyFollowService,
                               ledger: deps.spotifyImportLedger)
-                .environmentObject(deps)
+                .environment(deps)
         }
         .sheet(isPresented: $showPlaylist) {
             PlaylistEditorSheet()
-                .environmentObject(deps)
+                .environment(deps)
         }
         .sheet(isPresented: $showSmartPlaylist) {
             SmartPlaylistEditorView(service: deps.smartPlaylistService)
-                .environmentObject(deps)
+                .environment(deps)
         }
         .sheet(isPresented: $showGenerateMix) {
             GenerateMixSheet()
-                .environmentObject(deps)
+                .environment(deps)
         }
     }
 }

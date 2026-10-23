@@ -8,7 +8,7 @@ import SwiftUI
 public struct SpotifyLibraryPickerView: View {
 
     @StateObject private var model: SpotifyLibraryPickerModel
-    @ObservedObject private var auth: SpotifyAuth
+    private var auth: SpotifyAuth
 
     public init(spotifyClient: SpotifyClient,
                 importService: SpotifyImportService,

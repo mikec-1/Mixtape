@@ -7,17 +7,17 @@ import Combine
 
 struct OnlineDiscoverView: View {
 
-    @EnvironmentObject private var deps:        AppDependencies
-    @EnvironmentObject private var coordinator: OnlinePlaybackCoordinator
-    @EnvironmentObject private var engine:      PlaybackEngine
-    @EnvironmentObject private var appState:    MacAppState
+    @Environment(AppDependencies.self) private var deps
+    @Environment(OnlinePlaybackCoordinator.self) private var coordinator
+    @Environment(PlaybackEngine.self) private var engine
+    @Environment(MacAppState.self) private var appState
 
     /// The toolbar search box drives Discover. `activeSearchText`, so typing alone stays
     /// on the landing until Return; the searches run off raw `searchText` so results are warm.
     private var query: String { appState.activeSearchText }
 
     /// In the store, since MacContentRouter swaps this column out on section change.
-    @ObservedObject private var store = DiscoverSessionStore.shared
+    @Bindable private var store = DiscoverSessionStore.shared
 
     /// People search, on its own debounce so songs don't wait for it.
     @StateObject private var people = PeopleSearch()
@@ -33,7 +33,7 @@ struct OnlineDiscoverView: View {
         nonmutating set { store.path = newValue }
     }
 
-    @ObservedObject private var washTint = ArtworkWashTint.shared
+    private var washTint: ArtworkWashTint { .shared }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -55,11 +55,11 @@ struct OnlineDiscoverView: View {
         }
         // First launch appears before the library loads, so retry once songs exist.
         // `dropFirst` since `$tracks` replays on resubscribe; deferred a tick since it fires in `willSet`.
-        .onReceive(deps.libraryService.$tracks.map(\.isEmpty).removeDuplicates().dropFirst()) { _ in
+        .onReceive(deps.libraryService.tracksPublisher.map(\.isEmpty).removeDuplicates().dropFirst()) { _ in
             DispatchQueue.main.async { loadPersonal() }
         }
         .sheet(isPresented: $showGenerateMix) {
-            GenerateMixSheet().environmentObject(deps)
+            GenerateMixSheet().environment(deps)
         }
         .onChange(of: appState.pendingDiscover) { _, _ in consumePendingDeepLink() }
         .onChange(of: appState.searchText) { _, newValue in
@@ -721,7 +721,8 @@ struct OnlineDiscoverView: View {
 
     private func landingScroll<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) { content() }
+            // Lazy: the landing is a dozen bands and about 200 cards, all built on every visit otherwise.
+            LazyVStack(alignment: .leading, spacing: 24) { content() }
                 .padding(.horizontal, 24)
                 .padding(.top, 18)
                 .padding(.bottom, 40)
@@ -1415,10 +1416,7 @@ private struct SongRow: View {
             Group {
                 if isCurrent {
                     // Animated waveform at the very right, like the offline player.
-                    Image(systemName: "waveform")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Color.mixPrimary)
-                        .mixVariableColor(isActive: isPlaying)
+                    PlayingWave(size: 13, isPlaying: isPlaying)
                 } else if song.duration > 0 {
                     Text(Self.formatTime(song.duration))
                         .font(.system(size: 12).monospacedDigit())
@@ -1549,11 +1547,11 @@ private struct DiscoverArtistPage: View {
     let onPrefetch: (OnlineTrack) -> Void
     let onBack: () -> Void
 
-    @EnvironmentObject private var deps:        AppDependencies
-    @EnvironmentObject private var coordinator: OnlinePlaybackCoordinator
-    @EnvironmentObject private var engine:      PlaybackEngine
+    @Environment(AppDependencies.self) private var deps
+    @Environment(OnlinePlaybackCoordinator.self) private var coordinator
+    @Environment(PlaybackEngine.self) private var engine
 
-    @ObservedObject private var store = DiscoverSessionStore.shared
+    @Bindable private var store = DiscoverSessionStore.shared
 
     @State private var topTracks: [OnlineTrack]  = []
     @State private var albums:    [OnlineAlbum]  = []
@@ -1791,11 +1789,11 @@ private struct DiscoverAlbumPage: View {
     let onPrefetch: (OnlineTrack) -> Void
     let onOpenArtist: (OnlineArtist) -> Void
 
-    @EnvironmentObject private var deps:        AppDependencies
-    @EnvironmentObject private var coordinator: OnlinePlaybackCoordinator
-    @EnvironmentObject private var engine:      PlaybackEngine
+    @Environment(AppDependencies.self) private var deps
+    @Environment(OnlinePlaybackCoordinator.self) private var coordinator
+    @Environment(PlaybackEngine.self) private var engine
 
-    @ObservedObject private var store = DiscoverSessionStore.shared
+    @Bindable private var store = DiscoverSessionStore.shared
 
     @State private var tracks: [OnlineTrack] = []
     @State private var loading = true
@@ -1960,7 +1958,7 @@ private struct LinkCursor: ViewModifier {
 /// Square or circular remote artwork with a music-note placeholder.
 private func artworkView(url: URL?, circle: Bool, size: CGFloat) -> some View {
     let shape = RoundedRectangle(cornerRadius: circle ? size / 2 : 6, style: .continuous)
-    return CachedRemoteImage(url: url) { image in
+    return CachedRemoteImage(url: url, points: size) { image in
         image.resizable().scaledToFill()
     } placeholder: {
         ZStack {
@@ -2067,7 +2065,7 @@ private struct GenreTile: View {
                 .foregroundStyle(.white)
                 .lineLimit(2)
                 .padding(14)
-            CachedRemoteImage(url: genre.pictureURL) { image in
+            CachedRemoteImage(url: genre.pictureURL, points: 70) { image in
                 image.resizable().scaledToFill()
             } placeholder: { Color.clear }
                 .frame(width: 70, height: 70)
@@ -2098,9 +2096,9 @@ private struct DiscoverGenrePage: View {
     let genre: BrowseGenre
     let onOpenArtist: (OnlineArtist) -> Void
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
 
-    @ObservedObject private var store = DiscoverSessionStore.shared
+    @Bindable private var store = DiscoverSessionStore.shared
 
     @State private var artists: [OnlineArtist] = []
     @State private var loading = true

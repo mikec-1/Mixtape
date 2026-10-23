@@ -208,8 +208,8 @@ enum PlaylistDescriptor {
 struct PlaylistGridCell: View {
 
     let playlist: Playlist
-    @EnvironmentObject private var downloads: DownloadManager
-    @ObservedObject private var meta = PlaylistMetadataService.shared
+    @Environment(DownloadManager.self) private var downloads
+    private var meta: PlaylistMetadataService { .shared }
 
     private var isFullyDownloaded: Bool {
         downloads.isFullyDownloaded(playlist.trackIDs)

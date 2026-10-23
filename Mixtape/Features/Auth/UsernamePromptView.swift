@@ -5,7 +5,7 @@ import SwiftUI
 
 struct UsernamePromptView: View {
 
-    @ObservedObject var authService: SupabaseAuthService
+    var authService: SupabaseAuthService
     @Environment(\.dismiss) private var dismiss
 
     @State private var displayName: String = ""

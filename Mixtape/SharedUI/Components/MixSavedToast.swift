@@ -3,6 +3,7 @@
 
 import SwiftUI
 import Combine
+import Observation
 
 // MARK: - Destination
 
@@ -82,12 +83,13 @@ public struct SavedToast: Identifiable, Equatable {
 
 /// Owns the current pill. Separate from `deps` so showing it doesn't invalidate
 /// the whole view tree. Held as a plain `let`.
+@Observable
 @MainActor
-public final class SavedToastCenter: ObservableObject {
+public final class SavedToastCenter {
 
-    @Published public private(set) var current: SavedToast? = nil
+    public private(set) var current: SavedToast? = nil
 
-    private var dismissal: Task<Void, Never>? = nil
+    @ObservationIgnored private var dismissal: Task<Void, Never>? = nil
 
     public init() {}
 
@@ -120,7 +122,7 @@ struct MixSavedToast: View {
     let toast: SavedToast
     var action: Toast.Action? = nil
 
-    @EnvironmentObject private var library: LibraryService
+    @Environment(LibraryService.self) private var library
 
     var body: some View {
         ToastChrome(message: toast.text, action: action) { cover }
@@ -151,7 +153,7 @@ struct MixSavedToast: View {
 /// Hosts the pill with its own spring, scoped so it doesn't animate the window.
 public struct SavedToastHost: View {
 
-    @ObservedObject private var center: SavedToastCenter
+    private var center: SavedToastCenter
     /// Gap below the pill; carried by the pill so an empty host takes no space.
     private let bottomGap: CGFloat
 

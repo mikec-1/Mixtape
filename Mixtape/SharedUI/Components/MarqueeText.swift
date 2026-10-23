@@ -27,7 +27,7 @@ struct MarqueeScroller<Content: View>: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.mixMotion) private var motion
     /// Pauses in the background. See `AppVisibility`.
-    @ObservedObject private var visibility = AppVisibility.shared
+    private var visibility: AppVisibility { .shared }
 
     @State private var measured = Measurement(identity: "", width: 0)
     @State private var containerWidth: CGFloat = 0

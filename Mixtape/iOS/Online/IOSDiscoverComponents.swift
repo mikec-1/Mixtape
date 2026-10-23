@@ -55,7 +55,7 @@ struct ExplicitBadge: View {
 /// Square or circular remote artwork with a placeholder.
 func discoverArtwork(url: URL?, circle: Bool, size: CGFloat) -> some View {
     let shape = RoundedRectangle(cornerRadius: circle ? size / 2 : 6, style: .continuous)
-    return CachedRemoteImage(url: url) { image in
+    return CachedRemoteImage(url: url, points: size) { image in
         image.resizable().scaledToFill()
     } placeholder: {
         ZStack {
@@ -132,10 +132,7 @@ struct IOSSongRow: View {
             // Fixed width so the save button doesn't shift when the duration becomes the waveform.
             Group {
                 if isCurrent {
-                    Image(systemName: "waveform")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(Color.mixPrimary)
-                        .mixVariableColor(isActive: isPlaying)
+                    PlayingWave(size: 14, isPlaying: isPlaying)
                 } else if song.duration > 0 {
                     Text(Self.formatTime(song.duration))
                         .font(.system(size: MixFontScale.size(12)).monospacedDigit())
@@ -536,9 +533,9 @@ struct IOSDiscoverArtistPage: View {
     /// Nil pushes onto Home's stack, which is where this page used to live.
     var onOpenMix: ((PersonalMix) -> Void)? = nil
 
-    @EnvironmentObject private var deps:        AppDependencies
-    @EnvironmentObject private var coordinator: OnlinePlaybackCoordinator
-    @EnvironmentObject private var engine:      PlaybackEngine
+    @Environment(AppDependencies.self) private var deps
+    @Environment(OnlinePlaybackCoordinator.self) private var coordinator
+    @Environment(PlaybackEngine.self) private var engine
 
     @State private var topTracks: [OnlineTrack]  = []
     @State private var albums:    [OnlineAlbum]  = []
@@ -740,9 +737,9 @@ struct IOSDiscoverAlbumPage: View {
     let onPlay: (OnlineTrack, [OnlineTrack]) -> Void
     let onOpenArtist: (OnlineArtist) -> Void
 
-    @EnvironmentObject private var deps:        AppDependencies
-    @EnvironmentObject private var coordinator: OnlinePlaybackCoordinator
-    @EnvironmentObject private var engine:      PlaybackEngine
+    @Environment(AppDependencies.self) private var deps
+    @Environment(OnlinePlaybackCoordinator.self) private var coordinator
+    @Environment(PlaybackEngine.self) private var engine
 
     @State private var tracks: [OnlineTrack] = []
     @State private var loading = true
@@ -898,7 +895,7 @@ struct IOSGenreTile: View {
                 .foregroundStyle(.white)
                 .lineLimit(2)
                 .padding(14)
-            CachedRemoteImage(url: genre.pictureURL) { image in
+            CachedRemoteImage(url: genre.pictureURL, points: 70) { image in
                 image.resizable().scaledToFill()
             } placeholder: { Color.clear }
                 .frame(width: 70, height: 70)
@@ -924,7 +921,7 @@ struct IOSDiscoverGenrePage: View {
     let genre: BrowseGenre
     let onOpenArtist: (OnlineArtist) -> Void
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
 
     @State private var artists: [OnlineArtist] = []
     @State private var loading = true

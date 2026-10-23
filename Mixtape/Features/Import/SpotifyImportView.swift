@@ -7,7 +7,7 @@ public struct SpotifyImportView: View {
 
     private let spotifyClient: SpotifyClient
     private let importService: SpotifyImportService
-    @ObservedObject private var auth: SpotifyAuth
+    private var auth: SpotifyAuth
     private let followService: SpotifyFollowService?
     private let ledger: SpotifyImportLedger?
 

@@ -6,7 +6,7 @@ import SwiftUI
 
 struct MacSearchSuggestions: View {
 
-    @ObservedObject var store: SearchSuggestionsStore
+    var store: SearchSuggestionsStore
     let onPick: (SearchSuggestion) -> Void
 
     var body: some View {
@@ -198,7 +198,7 @@ private struct SuggestionRow: View {
                 .foregroundStyle(Color.mixTextSecondary)
                 .frame(width: Self.thumb, height: Self.thumb)
         } else {
-            CachedRemoteImage(url: suggestion.imageURL) { image in
+            CachedRemoteImage(url: suggestion.imageURL, points: Self.thumb) { image in
                 image.resizable().scaledToFill()
             } placeholder: {
                 ZStack {

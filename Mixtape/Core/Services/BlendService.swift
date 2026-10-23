@@ -8,9 +8,11 @@ import Foundation
 import Combine
 import os
 import Supabase
+import Observation
 
+@Observable
 @MainActor
-public final class BlendService: ObservableObject {
+public final class BlendService {
 
     public struct Blend: Identifiable, Hashable, Sendable {
         public let id: UUID
@@ -21,7 +23,7 @@ public final class BlendService: ObservableObject {
         public var isPending: Bool { otherName == nil }
     }
 
-    @Published public private(set) var blends: [Blend] = []
+    public private(set) var blends: [Blend] = []
 
     private let client: SupabaseClient
     private let catalog: ITunesSearchClient

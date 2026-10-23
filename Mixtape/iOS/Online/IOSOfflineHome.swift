@@ -7,10 +7,10 @@ import SwiftUI
 
 struct IOSOfflineHome: View {
 
-    @EnvironmentObject private var deps:        AppDependencies
-    @EnvironmentObject private var engine:      PlaybackEngine
-    @EnvironmentObject private var iosAppState: IOSAppState
-    @ObservedObject var downloads: DownloadManager
+    @Environment(AppDependencies.self) private var deps
+    @Environment(PlaybackEngine.self) private var engine
+    @Environment(IOSAppState.self) private var iosAppState
+    var downloads: DownloadManager
 
     @State private var showsAllSongs = false
 
@@ -247,8 +247,8 @@ struct OfflineMixPage: View {
     let title: String
     let ids: [UUID]
 
-    @EnvironmentObject private var deps:   AppDependencies
-    @EnvironmentObject private var engine: PlaybackEngine
+    @Environment(AppDependencies.self) private var deps
+    @Environment(PlaybackEngine.self) private var engine
 
     var body: some View {
         // Looked up live, so a removed download drops out.

@@ -6,11 +6,11 @@ import SwiftUI
 
 public struct ProfilePageView: View {
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
     #if os(macOS)
-    @EnvironmentObject private var appState: MacAppState
+    @Environment(MacAppState.self) private var appState
     #else
-    @EnvironmentObject private var iosAppState: IOSAppState
+    @Environment(IOSAppState.self) private var iosAppState
     #endif
 
     private let profile: UserProfile
@@ -114,7 +114,7 @@ public struct ProfilePageView: View {
         // Pushed, not presented: this page always lives in a NavigationStack on iOS.
         .navigationDestination(item: $openPlaylist) { summary in
             PublicPlaylistPage(summary: summary, ownerName: profile.name)
-                .environmentObject(deps)
+                .environment(deps)
         }
         .navigationDestination(item: $pushedPost) { PushedPost(code: $0) }
         .navigationDestination(item: $pushedProfile) { ProfilePageView(profile: $0) }
@@ -126,11 +126,11 @@ public struct ProfilePageView: View {
                                      coverData: coverData(for: summary),
                                      // Only reachable from `isMe`, and the rows were fetched by owner id.
                                      isOwner: true)
-                .environmentObject(deps)
+                .environment(deps)
         }
         .sheet(item: $editingPlaylist) { playlist in
             PlaylistEditorSheet(editingPlaylist: playlist)
-                .environmentObject(deps)
+                .environment(deps)
         }
         .mixConfirmationDialog(
             "Delete “\(pendingDelete?.name ?? "")”?",

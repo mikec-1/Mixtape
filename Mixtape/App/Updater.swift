@@ -5,9 +5,11 @@
 import SwiftUI
 import Combine
 import Sparkle
+import Observation
 
 /// Owns the Sparkle updater and opts into the beta channel when enabled.
-final class UpdaterController: NSObject, ObservableObject, SPUUpdaterDelegate {
+@Observable
+final class UpdaterController: NSObject, SPUUpdaterDelegate {
 
     /// Backs the "Receive development builds" toggle.
     static let receiveDevelopmentBuildsKey = "updates.receiveDevelopmentBuilds"
@@ -18,9 +20,10 @@ final class UpdaterController: NSObject, ObservableObject, SPUUpdaterDelegate {
         return value.isEmpty ? nil : value
     }()
 
-    private(set) var updaterController: SPUStandardUpdaterController!
+    @ObservationIgnored private(set) var updaterController: SPUStandardUpdaterController!
 
-    @Published var canCheckForUpdates = false
+    var canCheckForUpdates = false
+    @ObservationIgnored private var bag = Set<AnyCancellable>()
 
     override init() {
         super.init()
@@ -33,7 +36,8 @@ final class UpdaterController: NSObject, ObservableObject, SPUUpdaterDelegate {
 
         updaterController.updater
             .publisher(for: \.canCheckForUpdates)
-            .assign(to: &$canCheckForUpdates)
+            .sink { [weak self] in self?.canCheckForUpdates = $0 }
+            .store(in: &bag)
     }
 
     func checkForUpdates() {
@@ -53,7 +57,7 @@ final class UpdaterController: NSObject, ObservableObject, SPUUpdaterDelegate {
 
 /// The "Check for Updates..." menu command.
 struct CheckForUpdatesView: View {
-    @ObservedObject var updater: UpdaterController
+    var updater: UpdaterController
 
     var body: some View {
         Button("Check for Updates…") {

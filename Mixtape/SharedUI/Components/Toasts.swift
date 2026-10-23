@@ -6,6 +6,7 @@ import SwiftUI
 import Combine
 #if os(iOS)
 import UIKit
+import Observation
 #endif
 
 // MARK: - Model
@@ -93,11 +94,12 @@ extension Notification.Name {
 // MARK: - Presenter
 
 /// Owns the current toast. Separate from `deps` so showing one doesn't redraw every view watching deps.
+@Observable
 @MainActor
-public final class ToastCenter: ObservableObject {
+public final class ToastCenter {
 
-    @Published public private(set) var current: Toast?
-    private var dismissal: Task<Void, Never>?
+    public private(set) var current: Toast?
+    @ObservationIgnored private var dismissal: Task<Void, Never>?
 
     /// Replaces whatever is showing.
     public func show(_ toast: Toast) {
@@ -224,7 +226,7 @@ struct ToastCard: View {
 /// Draws the current toast. Tap it, or swipe it down, to dismiss.
 struct ToastHost: View {
 
-    @ObservedObject var center: ToastCenter
+    var center: ToastCenter
     @State private var drag: CGFloat = 0
 
     var body: some View {
@@ -314,13 +316,13 @@ private struct ToastLayer: View {
 
     let deps: AppDependencies
     // Watched so the clearance is read again whenever a card appears.
-    @ObservedObject var toasts: ToastCenter
-    @ObservedObject var saved: SavedToastCenter
+    var toasts: ToastCenter
+    var saved: SavedToastCenter
     weak var main: UIWindow?
     let claim: (CGRect) -> Void
 
-    @ObservedObject private var keyboard = KeyboardVisibility.shared
-    @ObservedObject private var theme = ThemeManager.shared
+    private var keyboard: KeyboardVisibility { .shared }
+    private var theme: ThemeManager { .shared }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -333,8 +335,8 @@ private struct ToastLayer: View {
         .padding(.horizontal, 8)
         .padding(.bottom, clearance)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-        .environmentObject(deps)
-        .environmentObject(deps.libraryService)
+        .environment(deps)
+        .environment(deps.libraryService)
         .mixAppearance(density: theme.density, motion: theme.motion, chrome: theme.chrome)
         .tint(theme.accentColor)
         .preferredColorScheme(theme.preferredColorScheme)

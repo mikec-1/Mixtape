@@ -6,8 +6,8 @@ import SwiftUI
 
 struct SpotifyLikesPushPage: View {
 
-    @EnvironmentObject private var deps: AppDependencies
-    @ObservedObject var service: SpotifyExportService
+    @Environment(AppDependencies.self) private var deps
+    var service: SpotifyExportService
     let onBack: () -> Void
 
     /// The favourites playlist, in order, minus anything tombstoned.

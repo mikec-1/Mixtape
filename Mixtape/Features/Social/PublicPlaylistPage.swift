@@ -28,7 +28,7 @@ public struct PublicPlaylistPage: View {
     private let summary: PublicPlaylistSummary
     private let ownerName: String
 
-    @EnvironmentObject private var deps: AppDependencies
+    @Environment(AppDependencies.self) private var deps
 
     @StateObject private var artwork = ProfileArtworkStore()
 
@@ -158,7 +158,7 @@ public struct PublicPlaylistPage: View {
                                      name: summary.name,
                                      coverData: cover,
                                      isOwner: isMine)
-                .environmentObject(deps)
+                .environment(deps)
         }
         .alert("Couldn't do that",
                isPresented: Binding(get: { actionError != nil },

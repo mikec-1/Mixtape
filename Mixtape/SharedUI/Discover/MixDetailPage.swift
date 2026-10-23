@@ -21,13 +21,13 @@ struct MixDetailPage: View {
     /// Open one of the artists named in the header. Nil leaves them plain text.
     var onOpenArtist: ((String) -> Void)? = nil
 
-    @EnvironmentObject private var deps:        AppDependencies
-    @EnvironmentObject private var coordinator: OnlinePlaybackCoordinator
-    @EnvironmentObject private var engine:      PlaybackEngine
+    @Environment(AppDependencies.self) private var deps
+    @Environment(OnlinePlaybackCoordinator.self) private var coordinator
+    @Environment(PlaybackEngine.self) private var engine
     /// Observed directly: `engine.queue` doesn't republish through the engine.
-    @EnvironmentObject private var queueService: QueueService
+    @Environment(QueueService.self) private var queueService
     #if os(macOS)
-    @EnvironmentObject private var appState:    MacAppState
+    @Environment(MacAppState.self) private var appState
     #endif
 
     @State private var saveError: String?
@@ -111,7 +111,7 @@ struct MixDetailPage: View {
         .sheet(isPresented: Binding(get: { !tracksForAddToPlaylist.isEmpty },
                                     set: { if !$0 { tracksForAddToPlaylist = [] } })) {
             AddToPlaylistSheet(tracks: tracksForAddToPlaylist)
-                .environmentObject(deps)
+                .environment(deps)
         }
         #else
         // macOS raises the corner panel instead of a sheet. Handled here so the menus mean the same on both platforms.
@@ -842,7 +842,7 @@ struct MixDetailPage: View {
     }
 
     private func tile(_ url: URL?, side: CGFloat) -> some View {
-        CachedRemoteImage(url: url) { image in
+        CachedRemoteImage(url: url, points: side) { image in
             image.resizable().scaledToFill()
         } placeholder: {
             Color.mixSurface2

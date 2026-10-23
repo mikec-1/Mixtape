@@ -2,12 +2,12 @@ import SwiftUI
 
 public struct SignInView: View {
 
-    @StateObject   private var vm:          AuthViewModel
-    @ObservedObject private var authService: SupabaseAuthService
+    @State   private var vm:          AuthViewModel
+    private var authService: SupabaseAuthService
 
     public init(authService: SupabaseAuthService) {
-        _vm          = StateObject(wrappedValue: AuthViewModel(authService: authService))
-        _authService = ObservedObject(wrappedValue: authService)
+        _vm          = State(initialValue: AuthViewModel(authService: authService))
+        self.authService = authService
     }
 
     public var body: some View {
@@ -67,7 +67,7 @@ public struct SignInView: View {
 /// isSignUpMode picks the fields. Forgot password opens vm.showForgotPassword.
 struct AuthCard: View {
 
-    @ObservedObject var vm: AuthViewModel
+    @Bindable var vm: AuthViewModel
 
     // Same Unsplash photos as the web AuthCard.
     /// Seeds that land on four different blobs.
@@ -267,7 +267,7 @@ private struct AuthPillStyle: ButtonStyle {
 
 private struct IOSSetNewPasswordView: View {
 
-    @ObservedObject var vm: AuthViewModel
+    @Bindable var vm: AuthViewModel
 
     var body: some View {
         ScrollView {
@@ -358,7 +358,7 @@ private struct IOSSetNewPasswordView: View {
 
 private struct CheckEmailView: View {
 
-    @ObservedObject var vm: AuthViewModel
+    @Bindable var vm: AuthViewModel
     @State private var didResend = false
 
     var body: some View {

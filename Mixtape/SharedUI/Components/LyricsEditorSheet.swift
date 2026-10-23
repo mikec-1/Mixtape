@@ -9,7 +9,7 @@ struct LyricsEditorSheet: View {
 
     let track: Track
 
-    @StateObject private var lyricsService = LyricsService.shared
+    private var lyricsService: LyricsService { .shared }
     @Environment(\.dismiss) private var dismiss
 
     @State private var text: String = ""

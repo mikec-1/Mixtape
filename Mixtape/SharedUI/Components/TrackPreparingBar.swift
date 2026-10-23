@@ -6,8 +6,8 @@ import SwiftUI
 
 public struct TrackPreparingBar: View {
 
-    @ObservedObject private var coordinator: OnlinePlaybackCoordinator
-    @ObservedObject private var unavailable = UnavailableTracks.shared
+    private var coordinator: OnlinePlaybackCoordinator
+    private var unavailable: UnavailableTracks { .shared }
 
     /// Sticks once opened.
     @State private var isExpanded = false
@@ -302,7 +302,7 @@ struct PreparingProgressTrack: View {
 
     let fraction: Double?
     @State private var sweep: CGFloat = -0.4
-    @ObservedObject private var visibility = AppVisibility.shared
+    private var visibility: AppVisibility { .shared }
 
     var body: some View {
         GeometryReader { geo in

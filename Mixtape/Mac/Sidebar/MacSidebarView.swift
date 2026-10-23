@@ -9,14 +9,14 @@ import AppKit
 
 struct MacSidebarView: View {
 
-    @EnvironmentObject private var appState: MacAppState
-    @EnvironmentObject private var library:  LibraryService
-    @EnvironmentObject private var deps:     AppDependencies
-    @EnvironmentObject private var engine:   PlaybackEngine
+    @Environment(MacAppState.self) private var appState
+    @Environment(LibraryService.self) private var library
+    @Environment(AppDependencies.self) private var deps
+    @Environment(PlaybackEngine.self) private var engine
     /// Observed directly; nested ObservableObject changes don't reach this view.
-    @EnvironmentObject private var smartService: SmartPlaylistService
-    @ObservedObject private var crateService = CrateService.shared
-    @ObservedObject private var meta = PlaylistMetadataService.shared
+    @Environment(SmartPlaylistService.self) private var smartService
+    private var crateService: CrateService { .shared }
+    private var meta: PlaylistMetadataService { .shared }
 
     /// Draws the insertion line, or the drop highlight for songs.
     @State private var hoveredPlaylistID: UUID? = nil
@@ -301,7 +301,7 @@ struct MacSidebarView: View {
                     appState.clearPlaylistSelection()
                     appState.showSmartPlaylist(smart)
                 }
-                .environmentObject(deps.downloadManager)
+                .environment(deps.downloadManager)
                 .contextMenu {
                     SmartPlaylistActionsMenu(playlist: smart, service: smartService)
                 }
@@ -345,7 +345,7 @@ struct MacSidebarView: View {
             }
         }
         // The badge needs the live manager, not a value read once through `deps`.
-        .environmentObject(deps.downloadManager)
+        .environment(deps.downloadManager)
         // Same actions as the playlist's "..." menu.
         .playlistActions(playlist, selection: appState.selectedPlaylistIDs)
         // `.onDrag` so a reorder can clear a stale song-drag flag. `handleDrop` only
@@ -505,11 +505,11 @@ struct MacSidebarView: View {
 /// Playlists keep their covers so the rail stays usable.
 struct MacSidebarRail: View {
 
-    @EnvironmentObject private var appState: MacAppState
-    @EnvironmentObject private var library:  LibraryService
-    @EnvironmentObject private var deps:     AppDependencies
-    @EnvironmentObject private var engine:   PlaybackEngine
-    @ObservedObject private var meta = PlaylistMetadataService.shared
+    @Environment(MacAppState.self) private var appState
+    @Environment(LibraryService.self) private var library
+    @Environment(AppDependencies.self) private var deps
+    @Environment(PlaybackEngine.self) private var engine
+    private var meta: PlaylistMetadataService { .shared }
 
     @State private var hoveredPlaylistID: UUID? = nil
 
@@ -792,9 +792,9 @@ private struct MacSidebarPlaylistRow: View {
     var onContextClick: () -> Void = {}
     let action:     () -> Void
 
-    @EnvironmentObject private var engine:    PlaybackEngine
-    @EnvironmentObject private var downloads: DownloadManager
-    @ObservedObject private var meta = PlaylistMetadataService.shared
+    @Environment(PlaybackEngine.self) private var engine
+    @Environment(DownloadManager.self) private var downloads
+    private var meta: PlaylistMetadataService { .shared }
 
     @State private var isHovered = false
 

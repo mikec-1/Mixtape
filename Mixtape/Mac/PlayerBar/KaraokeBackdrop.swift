@@ -8,7 +8,7 @@ import SwiftUI
 
 struct KaraokeBackdrop: View {
 
-    @EnvironmentObject private var queueService: QueueService
+    @Environment(QueueService.self) private var queueService
 
     /// Up to five cover colours, saturated. Two stops read as one flat colour.
     @State private var palette: [Color] = []

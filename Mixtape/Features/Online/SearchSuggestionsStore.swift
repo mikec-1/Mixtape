@@ -5,9 +5,11 @@
 
 import Foundation
 import Combine
+import Observation
 
+@Observable
 @MainActor
-final class SearchSuggestionsStore: ObservableObject {
+final class SearchSuggestionsStore {
 
     static let shared = SearchSuggestionsStore()
 
@@ -15,30 +17,30 @@ final class SearchSuggestionsStore: ObservableObject {
 
     // MARK: - State
 
-    @Published private(set) var suggestions: [SearchSuggestion] = []
+    private(set) var suggestions: [SearchSuggestion] = []
 
     /// Rows the user picked, newest first. Shown when the field is focused and empty.
-    @Published private(set) var recents: [SearchSuggestion] = []
+    private(set) var recents: [SearchSuggestion] = []
 
     /// True while the dropdown is standing in for an empty query.
-    @Published private(set) var showsRecents = false
+    private(set) var showsRecents = false
 
     /// What the dropdown draws. Everything downstream reads this so recents behave like suggestions.
     var rows: [SearchSuggestion] { showsRecents ? recents : suggestions }
 
     /// Keyboard row, nil for none. Down enters at 0; up off the top gives the caret back.
-    @Published var highlighted: Int?
+    var highlighted: Int?
 
     /// Set by Esc, Return or picking a row. Cleared by the next keystroke.
-    @Published private(set) var isDismissed = false
+    private(set) var isDismissed = false
 
     /// The query `suggestions` answer, so a slow old response can't overwrite newer rows.
-    private var loadedQuery = ""
-    private var task: Task<Void, Never>?
+    @ObservationIgnored private var loadedQuery = ""
+    @ObservationIgnored private var task: Task<Void, Never>?
 
     /// A picked completion. Writing it into the field looks like typing, so this stops
     /// the panel reopening. Cleared by the next edit.
-    private var acceptedQuery: String?
+    @ObservationIgnored private var acceptedQuery: String?
 
     private static let debounce = Duration.milliseconds(140)
 
@@ -46,7 +48,7 @@ final class SearchSuggestionsStore: ObservableObject {
     private static let leadIn: TimeInterval = 0.5
 
     /// When a request last went out, after the debounce.
-    private var lastDispatch = Date.distantPast
+    @ObservationIgnored private var lastDispatch = Date.distantPast
 
     var isShowing: Bool { !isDismissed && !rows.isEmpty }
 

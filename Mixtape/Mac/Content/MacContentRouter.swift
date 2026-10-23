@@ -7,10 +7,10 @@ import SwiftUI
 
 struct MacContentRouter: View {
 
-    @EnvironmentObject private var appState: MacAppState
-    @EnvironmentObject private var library:  LibraryService
-    @EnvironmentObject private var engine:   PlaybackEngine
-    @EnvironmentObject private var deps:     AppDependencies
+    @Environment(MacAppState.self) private var appState
+    @Environment(LibraryService.self) private var library
+    @Environment(PlaybackEngine.self) private var engine
+    @Environment(AppDependencies.self) private var deps
 
     var body: some View {
         contentBody.mixPageTransition(pageKey)
@@ -51,25 +51,25 @@ struct MacContentRouter: View {
         } else if appState.isSearching {
             // Every search lands in Discover, library matches included.
             OnlineDiscoverView()
-                .environmentObject(deps.onlineCoordinator)
+                .environment(deps.onlineCoordinator)
         } else if appState.discoverLinkActive {
             // A Discover page opened from a name link. Above the drill-downs so Back returns to them,
             // below search so typing still takes the column.
             OnlineDiscoverView()
-                .environmentObject(deps.onlineCoordinator)
+                .environment(deps.onlineCoordinator)
         } else if let album = appState.selectedAlbum {
             // Drill-downs render flat: a NavigationStack in the detail column made sidebar clicks unresponsive.
             MacAlbumDetailView(album: album)
         } else if let smart = appState.selectedSmartPlaylist {
             SmartPlaylistDetailView(playlist: smart, service: deps.smartPlaylistService)
-                .environmentObject(deps)
-                .environmentObject(engine)
-                .environmentObject(appState)
+                .environment(deps)
+                .environment(engine)
+                .environment(appState)
         } else if let playlist = appState.selectedPlaylist {
             PlaylistDetailView(playlist: playlist)
-                .environmentObject(deps)
-                .environmentObject(engine)
-                .environmentObject(appState)
+                .environment(deps)
+                .environment(engine)
+                .environment(appState)
         } else if let crateID = appState.selectedCrateID {
             CrateDetailView(crateID: crateID, library: library)
         } else {
@@ -77,7 +77,7 @@ struct MacContentRouter: View {
             case .home, .discover:
                 // Home and Discover are tabs of one landing page; the `.onChange` below picks the tab.
                 OnlineDiscoverView()
-                    .environmentObject(deps.onlineCoordinator)
+                    .environment(deps.onlineCoordinator)
             case .library, .songs, .albums, .artists, .playlists:
                 // The old sections open as tabs of the Library page.
                 MacLibraryView()
@@ -106,7 +106,7 @@ struct MacContentRouter: View {
 
 struct MacAccountPage: View {
 
-    @EnvironmentObject private var appState: MacAppState
+    @Environment(MacAppState.self) private var appState
 
     var body: some View {
         AccountSettingsView()
@@ -128,7 +128,7 @@ struct MacProfilePage: View {
 
     let profile: UserProfile
 
-    @EnvironmentObject private var appState: MacAppState
+    @Environment(MacAppState.self) private var appState
 
     var body: some View {
         ProfilePageView(profile: profile)
@@ -144,7 +144,7 @@ struct MacPublicPlaylistPage: View {
 
     let target: PublicPlaylistTarget
 
-    @EnvironmentObject private var appState: MacAppState
+    @Environment(MacAppState.self) private var appState
 
     var body: some View {
         PublicPlaylistPage(summary: target.summary, ownerName: target.ownerName)
@@ -161,7 +161,7 @@ struct MacMessagesPage: View {
 
     let page: MacAppState.MessagesPage
 
-    @EnvironmentObject private var appState: MacAppState
+    @Environment(MacAppState.self) private var appState
     @State private var picking = false
 
     private var person: UserProfile? {
@@ -230,11 +230,11 @@ struct MacTrackInspector: View {
     /// Shown only when nothing is playing; otherwise the panel follows the current track.
     let fallbackTrack: Track
 
-    @EnvironmentObject private var engine:   PlaybackEngine
-    @EnvironmentObject private var queue:    QueueService
-    @EnvironmentObject private var library:  LibraryService
-    @EnvironmentObject private var appState: MacAppState
-    @EnvironmentObject private var deps:     AppDependencies
+    @Environment(PlaybackEngine.self) private var engine
+    @Environment(QueueService.self) private var queue
+    @Environment(LibraryService.self) private var library
+    @Environment(MacAppState.self) private var appState
+    @Environment(AppDependencies.self) private var deps
 
     @State private var fileSize:   String = ""
     @State private var fileFormat: String = ""
@@ -436,8 +436,8 @@ struct MacTrackInspector: View {
 
     private var artworkHero: some View {
         Group {
-            if let data = track.displayArtwork, let nsImg = NSImage(data: data) {
-                Image(nsImage: nsImg).resizable().scaledToFill()
+            if let data = track.displayArtwork, let img = mixImage(from: data) {
+                img.resizable().scaledToFill()
             } else {
                 Rectangle()
                     .fill(Color.mixSurface)

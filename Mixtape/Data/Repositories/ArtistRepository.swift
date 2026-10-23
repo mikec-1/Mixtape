@@ -57,6 +57,57 @@ public final class ArtistRepository {
         return artist
     }
 
+    /// `findOrCreate(name:)` for many names, a few fetches in all instead of several per name: per-name
+    /// fetches against thousands of pending inserts froze the end of a big import for a minute.
+    /// Rows come back without artwork; `bare` holds the ids that have none, new rows included.
+    public func findOrCreate(names: Set<String>, deviceID: String) throws -> (rows: [String: Artist], bare: Set<UUID>) {
+        var rows: [String: Artist] = [:]
+        var bare = Set<UUID>()
+        let all = Array(names)
+        // Under SQLite's bound-parameter limit.
+        for start in stride(from: 0, to: all.count, by: 500) {
+            let chunk = Array(all[start..<min(start + 500, all.count)])
+            // Soft-deleted rows too: they still hold the unique name, so they're revived, not duplicated.
+            var d = FetchDescriptor<ArtistEntity>(predicate: #Predicate { chunk.contains($0.name) })
+            d.propertiesToFetch = [\.id]
+            for entity in try context.fetch(d) {
+                if entity.isSoftDeleted {
+                    entity.isSoftDeleted = false
+                    entity.syncStatus    = SyncStatus.localOnly.rawValue
+                    entity.syncLocalModifiedAt = Date()
+                }
+                rows[entity.name] = entity.toDomain(includingArtwork: false)
+            }
+            var noArt = FetchDescriptor<ArtistEntity>(predicate: #Predicate { chunk.contains($0.name) && $0.artworkData == nil })
+            noArt.propertiesToFetch = [\.id]
+            bare.formUnion(try context.fetch(noArt).map(\.id))
+        }
+        for name in names where rows[name] == nil {
+            let artist = Artist(name: name, sync: SyncMetadata(deviceID: deviceID))
+            context.insert(ArtistEntity(from: artist))
+            rows[name] = artist
+            bare.insert(artist.id)
+        }
+        try context.saveBatched()
+        return (rows, bare)
+    }
+
+    /// `save(_:)` for rows from `findOrCreate(names:)`, matched by id in one fetch per 500.
+    public func save(_ artists: [Artist]) throws {
+        var byID: [UUID: ArtistEntity] = [:]
+        let ids = artists.map(\.id)
+        for start in stride(from: 0, to: ids.count, by: 500) {
+            let chunk = Array(ids[start..<min(start + 500, ids.count)])
+            var d = FetchDescriptor<ArtistEntity>(predicate: #Predicate { chunk.contains($0.id) })
+            d.propertiesToFetch = [\.id]
+            for entity in try context.fetch(d) { byID[entity.id] = entity }
+        }
+        for artist in artists {
+            if let existing = byID[artist.id] { existing.update(from: artist) } else { try save(artist) }
+        }
+        try context.saveBatched()
+    }
+
     // MARK: - Save
 
     public func save(_ artist: Artist) throws {

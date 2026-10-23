@@ -14,14 +14,14 @@ struct IOSDiscoverView: View {
     /// Opens Settings, which MainTabView owns. Optional for pushed pages and previews without a tab bar.
     var onOpenSettings: (() -> Void)? = nil
 
-    @EnvironmentObject private var deps:        AppDependencies
-    @EnvironmentObject private var coordinator: OnlinePlaybackCoordinator
-    @EnvironmentObject private var engine:      PlaybackEngine
-    @EnvironmentObject private var iosAppState:  IOSAppState
+    @Environment(AppDependencies.self) private var deps
+    @Environment(OnlinePlaybackCoordinator.self) private var coordinator
+    @Environment(PlaybackEngine.self) private var engine
+    @Environment(IOSAppState.self) private var iosAppState
 
     /// All state lives in the store so the tab comes back as it was left (on macOS, MacContentRouter destroys
     /// Discover on every section switch). A typed path because NavigationPath can't be persisted.
-    @ObservedObject private var store = DiscoverSessionStore.shared
+    @Bindable private var store = DiscoverSessionStore.shared
 
     private var results: DiscoverResults { store.results }
     private var browse: BrowseLanding { store.browse }
@@ -113,8 +113,8 @@ struct IOSDiscoverView: View {
                         PostPageView(code: code, onOpenProfile: { path.append(DiscoverDestination.profile($0)) })
                     case .smart(let playlist):
                         SmartPlaylistDetailView(playlist: playlist, service: deps.smartPlaylistService)
-                            .environmentObject(deps)
-                            .environmentObject(engine)
+                            .environment(deps)
+                            .environment(engine)
                     case .downloads(let title, let ids):
                         OfflineMixPage(title: title, ids: ids)
                     }
@@ -130,11 +130,11 @@ struct IOSDiscoverView: View {
         // First launch appears before the library loads, and an empty library can't seed a personal landing,
         // so retry once songs exist. `dropFirst`: `onReceive` resubscribes on every redraw and `$tracks` replays;
         // `onAppear` covers the first load. Deferred a tick: `$tracks` fires in `willSet`.
-        .onReceive(deps.libraryService.$tracks.map(\.isEmpty).removeDuplicates().dropFirst()) { _ in
+        .onReceive(deps.libraryService.tracksPublisher.map(\.isEmpty).removeDuplicates().dropFirst()) { _ in
             DispatchQueue.main.async { loadPersonal() }
         }
         .sheet(isPresented: $showGenerateMix) {
-            GenerateMixSheet().environmentObject(deps)
+            GenerateMixSheet().environment(deps)
         }
         .onAppear {
             store.loadBrowseIfNeeded(using: deps.itunesClient)
@@ -210,7 +210,7 @@ struct IOSDiscoverView: View {
     private var header: some View {
         HStack(spacing: 10) {
             ProfileMenuButton(size: 32)
-                .environmentObject(deps)
+                .environment(deps)
             IOSFilterPills(filters: isOffline ? [.downloaded] : HomeFilter.allCases, selection: $filter)
             if let onOpenSettings {
                 Button(action: onOpenSettings) {

@@ -40,13 +40,13 @@ struct LibrarySongMenu: View {
     /// Display rows have no artwork, so the surface shares its catalogue copy.
     var shareItem: ShareItem? = nil
 
-    @EnvironmentObject private var deps:        AppDependencies
-    @EnvironmentObject private var engine:      PlaybackEngine
-    @EnvironmentObject private var coordinator: OnlinePlaybackCoordinator
+    @Environment(AppDependencies.self) private var deps
+    @Environment(PlaybackEngine.self) private var engine
+    @Environment(OnlinePlaybackCoordinator.self) private var coordinator
     #if os(macOS)
-    @EnvironmentObject private var appState:    MacAppState
+    @Environment(MacAppState.self) private var appState
     #else
-    @EnvironmentObject private var iosAppState: IOSAppState
+    @Environment(IOSAppState.self) private var iosAppState
     #endif
 
     var body: some View {

@@ -6,9 +6,11 @@
 import Foundation
 import Network
 import Combine
+import Observation
 
+@Observable
 @MainActor
-public final class JamNearby: ObservableObject {
+public final class JamNearby {
 
     public struct Found: Hashable, Identifiable, Sendable {
         public let code: String
@@ -19,17 +21,17 @@ public final class JamNearby: ObservableObject {
     /// Also listed under NSBonjourServices in Info.plist.
     nonisolated static let serviceType = "_mixtape-jam._tcp"
 
-    @Published public private(set) var found: [Found] = []
+    public private(set) var found: [Found] = []
 
-    private var listener: NWListener?
-    private var advertised: String?
-    private var browser: NWBrowser?
-    private var watchers = 0
+    @ObservationIgnored private var listener: NWListener?
+    @ObservationIgnored private var advertised: String?
+    @ObservationIgnored private var browser: NWBrowser?
+    @ObservationIgnored private var watchers = 0
 
     /// The session this device is already in, which isn't news.
-    var joined: String?
-    private var watching = false
-    private var announced: Set<String> = []
+    @ObservationIgnored var joined: String?
+    @ObservationIgnored private var watching = false
+    @ObservationIgnored private var announced: Set<String> = []
     /// Set once the Jam screens have browsed, so watching never raises the Local Network prompt itself.
     private static let usedKey = "jam.nearby.used"
 
