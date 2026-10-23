@@ -62,7 +62,7 @@ struct MacPlayerBar: View {
                     Color.black.opacity(0.22)
                 }
             } else {
-                Color.mixSurface
+                MixGlassBackground { Color.mixSurface }
             }
         }
         .onAppear(perform: refreshKaraokeTint)
@@ -88,6 +88,7 @@ struct MacPlayerBar: View {
                 HStack(spacing: 10) {
                     MacArtworkView(data: track.artworkData, artworkRef: .track(track.id), size: 44, cornerRadius: 6)
                         .mixShadow(color: .black.opacity(0.25), radius: 4, y: 2)
+                        .modifier(MiniPlayerCoverButton())
 
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 5) {

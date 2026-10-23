@@ -223,6 +223,8 @@ enum SettingsSearchIndex {
             .init(id: "general.backdrop", title: "Background Colour", category: .general,
                   keywords: ["background", "colour", "color", "gradient", "tint", "custom",
                              "wallpaper", "floating", "moving", "aesthetic"]),
+            .init(id: "general.wallpaper", title: "Wallpaper", category: .general,
+                  keywords: ["wallpaper", "picture", "photo", "image", "background", "glass"]),
             .init(id: "general.allSongs", title: "Show All Songs", category: .general,
                   keywords: ["all songs", "library", "sidebar", "everything",
                              "every song", "hide", "liked songs"]),

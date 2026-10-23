@@ -244,6 +244,12 @@ struct ControlsCommands: Commands {
             Button("Get Info") { NotificationCenter.default.post(name: .mixShowInfo, object: nil) }
                 .keyboardShortcut("i", modifiers: .command)
                 .disabled(track == nil)
+
+            Divider()
+
+            // Same keys as the global hot key, which wins while it's registered.
+            Button("Mini Player") { MacMiniPlayer.shared.toggle() }
+                .keyboardShortcut("m", modifiers: [.command, .option, .control])
         }
     }
 

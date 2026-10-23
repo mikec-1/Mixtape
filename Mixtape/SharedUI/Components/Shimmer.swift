@@ -177,7 +177,8 @@ public struct CarouselSkeleton: View {
                 }
             }
             .padding(.horizontal, 2)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            // minWidth 0, or the row's full width pushes the page wider than the window.
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
             .clipped()
         }
         .shimmering()

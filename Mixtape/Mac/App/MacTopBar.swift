@@ -148,7 +148,7 @@ struct MacTopBar: View {
         }
         .background {
             ZStack {
-                MixPageBackground()
+                MixPageBackground(glass: true)
                 tint
             }
             // Must not intercept clicks, or the window stops being draggable here.

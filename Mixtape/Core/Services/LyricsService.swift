@@ -43,11 +43,51 @@ public struct TrackLyrics: Equatable, Sendable {
     public var plain: String?
     /// From `UserLyricsStore`. The UI offers Edit/Remove, and `resolve` won't refetch over it.
     public var isUserProvided: Bool = false
+    /// Where these came from; an edit keeps its original's.
+    public var source: LyricsSource? = nil
 
     public var hasSynced: Bool { !synced.isEmpty }
     public var hasAny: Bool { hasSynced || (plain?.isEmpty == false) }
 
     public static let empty = TrackLyrics(synced: [], plain: nil)
+
+    /// The same words without timing.
+    var plainOnly: TrackLyrics? {
+        let text = plain?.isEmpty == false ? plain : (hasSynced ? synced.map(\.text).joined(separator: "\n") : nil)
+        return text.map { TrackLyrics(synced: [], plain: $0, isUserProvided: isUserProvided) }
+    }
+}
+
+/// Where a song's lyrics came from. The lyrics view lets the listener pick another one.
+public enum LyricsSource: String, CaseIterable, Sendable {
+    case yours, file, wordTimed, lrclib, netease, plain
+
+    public var title: String {
+        switch self {
+        case .yours:     "Your Lyrics"
+        case .file:      "From File"
+        case .wordTimed: "Word-Timed"
+        case .lrclib:    "LRCLIB"
+        case .netease:   "NetEase"
+        case .plain:     "Plain Text"
+        }
+    }
+}
+
+/// The source picked for each song, keyed like user lyrics. This device only.
+enum LyricsSourceChoice {
+    private static let key = "lyricsSources"
+
+    static func get(for track: Track) -> LyricsSource? {
+        (UserDefaults.standard.dictionary(forKey: key)?[UserLyricsStore.key(for: track)] as? String)
+            .flatMap(LyricsSource.init(rawValue:))
+    }
+
+    static func set(_ source: LyricsSource?, for track: Track) {
+        var all = UserDefaults.standard.dictionary(forKey: key) ?? [:]
+        all[UserLyricsStore.key(for: track)] = source?.rawValue
+        UserDefaults.standard.set(all, forKey: key)
+    }
 }
 
 // MARK: - Service
@@ -62,6 +102,9 @@ public final class LyricsService: ObservableObject {
 
     /// In-flight fetches by track id, so prefetch and resolve share one request.
     private var inFlight: [UUID: Task<TrackLyrics, Never>] = [:]
+
+    /// Every source's lyrics per track, for the switcher. Not published: only the switcher reads it.
+    private var probed: [UUID: [LyricsSource: TrackLyrics]] = [:]
 
     private let session: URLSession
 
@@ -81,7 +124,7 @@ public final class LyricsService: ObservableObject {
     }
 
     /// Drops the cache so the next resolve refetches (and can find synced lyrics).
-    public func clearCache() { cache.removeAll() }
+    public func clearCache() { cache.removeAll(); probed.removeAll() }
 
     // MARK: - The user's own lyrics
 
@@ -109,6 +152,10 @@ public final class LyricsService: ObservableObject {
 
         var parsed = Self.parse(trimmed)
         parsed.isUserProvided = true
+        parsed.source = .yours
+        // What they just typed beats a source picked earlier.
+        LyricsSourceChoice.set(nil, for: track)
+        probed[track.id] = nil
         // Otherwise a pending fetch would land over what the user just typed.
         inFlight[track.id]?.cancel()
         inFlight[track.id] = nil
@@ -119,6 +166,8 @@ public final class LyricsService: ObservableObject {
     /// Drops the user's lyrics so the next resolve goes back through tags, sidecar and lookups.
     public func removeUserLyrics(for track: Track) {
         UserLyricsStore.shared.remove(for: track)
+        LyricsSourceChoice.set(nil, for: track)
+        probed[track.id] = nil
         inFlight[track.id]?.cancel()
         inFlight[track.id] = nil
         cache[track.id] = nil
@@ -133,9 +182,9 @@ public final class LyricsService: ObservableObject {
     /// Resolves lyrics, using the cache when it has synced lyrics. Never throws; `hasAny` is false on a miss.
     @discardableResult
     public func resolve(for track: Track) async -> TrackLyrics {
-        // Only synced or user lyrics short-circuit. Misses and plain-only results are retried so
+        // Only synced, user or picked lyrics short-circuit. Misses and plain-only results are retried so
         // a track can pick up synced lyrics later.
-        if let hit = cache[track.id], hit.hasSynced || hit.isUserProvided { return hit }
+        if let hit = cache[track.id], isSettled(hit, for: track) { return hit }
 
         return await fetchTask(for: track).value
     }
@@ -143,8 +192,53 @@ public final class LyricsService: ObservableObject {
     /// Starts resolving on song tap so lyrics are cached by the time Now Playing opens.
     /// Shares the fetch with a concurrent `resolve`.
     public func prefetch(for track: Track) {
-        if let hit = cache[track.id], hit.hasSynced || hit.isUserProvided { return }
+        if let hit = cache[track.id], isSettled(hit, for: track) { return }
         _ = fetchTask(for: track)
+    }
+
+    private func isSettled(_ hit: TrackLyrics, for track: Track) -> Bool {
+        hit.hasSynced || hit.isUserProvided || (hit.source != nil && hit.source == LyricsSourceChoice.get(for: track))
+    }
+
+    // MARK: - Switching source
+
+    /// Every source with lyrics for this song. Looked up once per song, then kept.
+    public func sources(for track: Track) async -> [LyricsSource: TrackLyrics] {
+        if let hit = probed[track.id] { return hit }
+        async let yours = lyrics(from: .yours, for: track)
+        async let file = lyrics(from: .file, for: track)
+        async let wordTimed = lyrics(from: .wordTimed, for: track)
+        async let lrclibTask = fetchLRCLib(for: track)
+        async let neteaseTask = fetchNetEaseCandidates(for: track)
+        let (y, f, w) = await (yours, file, wordTimed)
+        let (exact, searched) = await lrclibTask
+        let lrclib = Self.bestLRCLib(exact, searched)
+        let netease = Self.bestNetEase(await neteaseTask, accuratePlain: searched?.plain ?? exact?.plain)
+
+        var found: [LyricsSource: TrackLyrics] = [:]
+        found[.yours] = y
+        found[.file] = f
+        found[.wordTimed] = w
+        found[.lrclib] = lrclib
+        found[.netease] = netease
+        found = found.filter { $0.value.hasAny }
+        // Plain is the words the cascade would pick, untimed. Only worth offering over timed ones.
+        let remote = [lrclib, netease].compactMap { $0 }.first(where: \.hasSynced) ?? lrclib ?? netease
+        if found.values.contains(where: \.hasSynced), var plain = (y ?? f ?? w ?? remote)?.plainOnly {
+            plain.source = .plain
+            found[.plain] = plain
+        }
+        probed[track.id] = found
+        return found
+    }
+
+    /// Shows `source` for this song, now and next time.
+    public func use(_ source: LyricsSource, for track: Track) {
+        guard let hit = probed[track.id]?[source] else { return }
+        LyricsSourceChoice.set(source, for: track)
+        inFlight[track.id]?.cancel()
+        inFlight[track.id] = nil
+        cache[track.id] = hit
     }
 
     /// Returns the in-flight fetch for `track`, starting one if needed.
@@ -170,13 +264,16 @@ public final class LyricsService: ObservableObject {
     // MARK: - Resolution pipeline
 
     private func load(for track: Track) async -> TrackLyrics {
-        // 0. The user's own lyrics, ahead of tags so the override always wins.
         MixLog.lyrics.debug("resolving \"\(track.title)\", \(track.artistName) (album: \(track.albumTitle), \(Int(track.duration))s)")
-        if let own = UserLyricsStore.shared.text(for: track) {
-            var parsed = Self.parse(own)
-            parsed.isUserProvided = true
-            if parsed.hasAny { return parsed }
-        }
+        // The source the listener picked for this song, when it still has it.
+        if track.edit == nil, let chosen = LyricsSourceChoice.get(for: track),
+           let hit = await lyrics(from: chosen, for: track) { return hit }
+        return await cascade(for: track)
+    }
+
+    private func cascade(for track: Track) async -> TrackLyrics {
+        // 0. The user's own lyrics, ahead of tags so the override always wins.
+        if let own = await lyrics(from: .yours, for: track) { return own }
 
         // An edit sings the original's words, faster or slower, trimmed or rearranged.
         if let edit = track.edit {
@@ -193,31 +290,50 @@ public final class LyricsService: ObservableObject {
             return lyrics
         }
 
-        // 1. Embedded lyrics on the track.
-        if let embedded = track.lyrics, !embedded.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            MixLog.lyrics.debug("source: embedded tags")
-            return Self.parse(embedded)
-        }
+        // 1-2. Embedded tags, then a .lrc sidecar. 3. Word-timed TTML, ahead of LRCLIB since every word has its own timing.
+        if let local = await lyrics(from: .file, for: track) { return local }
+        if let wordTimed = await lyrics(from: .wordTimed, for: track) { return wordTimed }
 
-        // 2. .lrc sidecar next to the local file.
-        if let sidecar = Self.readSidecar(for: track) {
-            let parsed = Self.parse(sidecar)
-            if parsed.hasAny { MixLog.lyrics.debug("source: .lrc sidecar"); return parsed }
-        }
-
-        // 3. Word-timed TTML, ahead of LRCLIB since every word has its own timing.
-        if let wordTimed = await fetchWordTimed(for: track) {
-            MixLog.lyrics.debug("source: TTML (word-timed)")
-            return wordTimed
-        }
-
-        // 4. Remote fetch from LRCLIB (silent on failure).
+        // 4. Remote fetch from LRCLIB and NetEase (silent on failure).
         if let remote = await fetchRemote(for: track) {
             MixLog.lyrics.debug("source: LRCLIB/NetEase")
             return remote
         }
 
         return .empty
+    }
+
+    /// One source on its own, nil when it has nothing for this song.
+    private func lyrics(from source: LyricsSource, for track: Track) async -> TrackLyrics? {
+        var hit: TrackLyrics?
+        switch source {
+        case .yours:
+            hit = UserLyricsStore.shared.text(for: track).map(Self.parse)
+            hit?.isUserProvided = true
+        case .file:
+            if let embedded = track.lyrics, !embedded.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                hit = Self.parse(embedded)
+            } else if let sidecar = Self.readSidecar(for: track) {
+                hit = Self.parse(sidecar)
+            }
+        case .wordTimed:
+            hit = await fetchWordTimed(for: track)
+        case .lrclib:
+            let (exact, searched) = await fetchLRCLib(for: track)
+            hit = Self.bestLRCLib(exact, searched)
+        case .netease:
+            // LRCLIB's text re-skins NetEase's timing, as in `fetchRemote`.
+            async let lrclib = fetchLRCLib(for: track)
+            let candidates = await fetchNetEaseCandidates(for: track)
+            let (exact, searched) = await lrclib
+            hit = Self.bestNetEase(candidates, accuratePlain: searched?.plain ?? exact?.plain)
+        case .plain:
+            hit = await cascade(for: track).plainOnly
+        }
+        guard var hit, hit.hasAny else { return nil }
+        MixLog.lyrics.debug("source: \(source.rawValue)")
+        hit.source = source
+        return hit
     }
 
     /// The original's title, artist and length from an edit's recipe, under the original's id so its cached
@@ -329,19 +445,29 @@ public final class LyricsService: ObservableObject {
         let (exact, searched) = await lrclibTask
 
         // LRCLIB synced wins; the NetEase task is cancelled on scope exit.
-        if let exact, exact.hasSynced { return exact }
-        if let searched, searched.hasSynced { return searched }
+        let lrclib = Self.bestLRCLib(exact, searched)
+        if let lrclib, lrclib.hasSynced { return lrclib }
 
         // No LRCLIB synced: use NetEase's timeline re-skinned with LRCLIB's plain text.
-        let accuratePlain = (searched?.plain) ?? (exact?.plain)
-        let candidates = await neteaseTask
-        if let netease = Self.selectNetEase(from: candidates, accuratePlain: accuratePlain),
-           netease.hasSynced {
-            return netease
-        }
+        let netease = Self.bestNetEase(await neteaseTask, accuratePlain: searched?.plain ?? exact?.plain)
+        if let netease, netease.hasSynced { return netease }
 
         // No synced lyrics anywhere: LRCLIB plain, then NetEase plain.
-        return exact ?? searched ?? candidates.first.map(Self.collapseEchoes)
+        return lrclib ?? netease
+    }
+
+    /// LRCLIB's pick, synced first.
+    private static func bestLRCLib(_ exact: TrackLyrics?, _ searched: TrackLyrics?) -> TrackLyrics? {
+        var hit = [exact, searched].compactMap { $0 }.first(where: \.hasSynced) ?? exact ?? searched
+        hit?.source = .lrclib
+        return hit
+    }
+
+    /// NetEase's pick, re-skinned with LRCLIB's words when they line up.
+    private static func bestNetEase(_ candidates: [TrackLyrics], accuratePlain: String?) -> TrackLyrics? {
+        var hit = selectNetEase(from: candidates, accuratePlain: accuratePlain)
+        hit?.source = .netease
+        return hit
     }
 
     /// Runs the LRCLIB chain (exact, exact without duration, search) and picks the record

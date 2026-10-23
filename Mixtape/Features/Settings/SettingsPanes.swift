@@ -228,15 +228,19 @@ struct GeneralPane: View {
             }
 
             SettingsGroup(title: "Background") {
-                SettingsRow(id: "general.backdrop",
-                            title: "Background Colour",
-                            subtitle: "Mixes a colour into the background of the whole app.",
-                            icon: "paintpalette") {
-                    ColorPicker("Background Colour", selection: backdropColour, supportsOpacity: false)
-                        .labelsHidden()
+                WallpaperSettingsRow(theme: theme)
+                // A picture replaces the colour, so the colour's rows wait until it's removed.
+                if theme.wallpaper == nil {
+                    SettingsRow(id: "general.backdrop",
+                                title: "Background Colour",
+                                subtitle: "Mixes a colour into the background of the whole app.",
+                                icon: "paintpalette") {
+                        ColorPicker("Background Colour", selection: backdropColour, supportsOpacity: false)
+                            .labelsHidden()
+                    }
+                    BackdropSwatches(theme: theme)
                 }
-                BackdropSwatches(theme: theme)
-                if theme.backdrop != nil {
+                if theme.backdrop != nil, theme.wallpaper == nil {
                     SettingsPickerRow(id: "general.backdropMotion",
                                       title: "Movement",
                                       subtitle: "Floating lets the colour drift around and off the edges.",

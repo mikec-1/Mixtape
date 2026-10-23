@@ -117,6 +117,9 @@ struct MacLyricsView: View {
             Spacer()
 
             if let track = engine.queue.currentTrack, let lyrics, lyrics.hasAny {
+                // Fullscreen keeps timing in the tuning popover.
+                LyricsSourceBar(track: track, lyrics: lyrics, offset: $offset, showsNudge: !fullscreen,
+                                fill: .white.opacity(0.12), ink: .white.opacity(0.85), height: 30)
                 headerButton(icon: MixtapeIcons.share, help: "Share lyrics as a card") {
                     appState.lyricCard = LyricCardRequest(track: track, lyrics: lyrics)
                     appState.lyricsPresented = false
@@ -369,6 +372,7 @@ private struct MacSyncedLyrics: View {
 
     /// Per-word spans, cached since body runs every tick.
     @State private var words: [[LyricWord]] = []
+    @AppStorage(LyricsSourceBar.byLineKey) private var byLine = false
 
     private var activeIndex: Int? {
         guard !lines.isEmpty else { return nil }
@@ -413,7 +417,7 @@ private struct MacSyncedLyrics: View {
                             .id("gap-\(i)")
                         }
                         Group {
-                            if i == activeIndex, i < words.count, !words[i].isEmpty {
+                            if i == activeIndex, !byLine, i < words.count, !words[i].isEmpty {
                                 // Only the active line draws per word.
                                 TimelineView(.animation(paused: !isPlaying)) { _ in
                                     WordSweepLine(

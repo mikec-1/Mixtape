@@ -163,6 +163,7 @@ enum SettingsReset {
         theme.appearance = .dark
         theme.preset     = .normal
         theme.backdrop   = nil
+        theme.removeWallpaper()
 
         deps.downloadManager.downloadQuality        = .normal
         deps.downloadManager.editQuality            = .normal

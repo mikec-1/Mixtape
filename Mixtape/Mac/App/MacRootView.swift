@@ -372,7 +372,7 @@ struct MacRootView: View {
     /// Same colour for MacTopBar, so the wash reaches the top of the window.
     private var chromeTintColor: Color? {
         // Over a background colour the wash stays translucent, so the colour shows through as below.
-        if theme.backdrop != nil, !(appState.lyricsPresented && appState.lyricsFullscreen) {
+        if theme.backdrop != nil || theme.wallpaper != nil, !(appState.lyricsPresented && appState.lyricsFullscreen) {
             return washTint.color
         }
         return chromeTint.map { Color(nsColor: $0) }
@@ -495,7 +495,7 @@ struct MacRootView: View {
                             Color.black.opacity(0.10).ignoresSafeArea()
                         } else {
                             ZStack(alignment: .top) {
-                                MixPageBackground()
+                                MixPageBackground(glass: true)
                                 ArtworkWashGradient(colors: washTint.stops,
                                                     intensity: washTint.chromeIntensity)
                             }
@@ -551,7 +551,7 @@ struct MacRootView: View {
         // On the container so it stays still through the cross-fade.
         .background(alignment: .top) {
             ZStack(alignment: .top) {
-                MixPageBackground()
+                MixPageBackground(glass: true)
                 ArtworkWashGradient(colors: washTint.stops, intensity: washTint.chromeIntensity)
             }
             .ignoresSafeArea()

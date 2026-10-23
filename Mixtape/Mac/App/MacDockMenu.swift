@@ -10,6 +10,10 @@ final class MacDockMenu: NSObject, NSApplicationDelegate {
     /// Set from `MixtapeApp`. Static because AppKit creates the delegate outside the SwiftUI environment.
     static weak var engine: PlaybackEngine?
 
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        MacMiniPlayer.shared.registerHotKey()
+    }
+
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
         guard let engine = Self.engine else { return nil }
         let menu = NSMenu()

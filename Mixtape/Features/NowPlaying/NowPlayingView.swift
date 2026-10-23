@@ -20,6 +20,8 @@ public struct NowPlayingView: View {
     @State private var ambientColors: [Color] = ArtworkColors.brandGradient
 
     @State private var isLoadingLyrics = false
+    /// Per-song lyrics timing, shared with karaoke and the Mac.
+    @State private var lyricsOffset: TimeInterval = 0
 
     /// Read straight from the service (`cache` is `@Published`) so saved lyrics show immediately.
     private var lyrics: TrackLyrics? {
@@ -79,7 +81,8 @@ public struct NowPlayingView: View {
         .onAppear { refreshForCurrentTrack() }
         .onReceive(deps.onlineCoordinator.$preparing) { preparing = $0 }
         #if os(iOS)
-        .fullScreenCover(isPresented: $showKaraoke) {
+        // Karaoke has its own timing control; pick up what it left.
+        .fullScreenCover(isPresented: $showKaraoke, onDismiss: refreshForCurrentTrack) {
             if let lyrics, lyrics.hasSynced {
                 KaraokeView(lines: lyrics.synced)
                     .environmentObject(engine)
@@ -482,9 +485,9 @@ public struct NowPlayingView: View {
                 Spacer()
             } else if let lyrics, lyrics.hasSynced {
                 SyncedLyricsView(lines: lyrics.synced, clock: engine.clock,
-                                 isPlaying: engine.state.isPlaying) { time in
-                    engine.seek(to: time)
-                }
+                                 isPlaying: engine.state.isPlaying,
+                                 onTapLine: { engine.seek(to: $0) },
+                                 offset: lyricsOffset)
                 #if os(iOS)
                 // Synced lyrics only.
                 Button {
@@ -530,10 +533,12 @@ public struct NowPlayingView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // Found lyrics can be wrong too, so the edit button stays available.
         .overlay(alignment: .topTrailing) {
-            if queueService.currentTrack != nil, lyrics?.hasAny == true {
+            if let track = queueService.currentTrack, let lyrics, lyrics.hasAny {
                 HStack(spacing: 6) {
+                    LyricsSourceBar(track: track, lyrics: lyrics, offset: $lyricsOffset)
+                    Spacer(minLength: 0)
                     lyricsPill("Share", icon: MixtapeIcons.share) { showLyricCard = true }
-                    lyricsEditorButton(lyrics?.isUserProvided == true ? "Edit" : "Fix", compact: true)
+                    lyricsEditorButton(lyrics.isUserProvided ? "Edit" : "Fix", compact: true)
                 }
                 .padding(.top, 2)
             }
@@ -769,8 +774,10 @@ public struct NowPlayingView: View {
         // Cached lyrics are already on screen; this only decides whether to fetch and show a spinner.
         guard let track = queueService.currentTrack else {
             isLoadingLyrics = false
+            lyricsOffset = 0
             return
         }
+        lyricsOffset = LyricsOffsets.get(for: track)
         // Plain or missing results still try to upgrade to synced. The user's own lyrics are exempt.
         let cached = lyricsService.cached(for: track)
         if let cached, cached.hasSynced || cached.isUserProvided {
@@ -910,6 +917,7 @@ struct SyncedLyricsView: View {
 
     /// Per-word spans, cached in state since the body runs on every clock tick.
     @State private var words: [[LyricWord]] = []
+    @AppStorage(LyricsSourceBar.byLineKey) private var byLine = false
 
     private var activeIndex: Int? {
         // No lead (see `MacSyncedLyrics.activeIndex`): a line holds until the next starts.
@@ -953,7 +961,7 @@ struct SyncedLyricsView: View {
                         }
                         let isActive = (i == activeIndex)
                         Group {
-                            if isActive, i < words.count, !words[i].isEmpty {
+                            if isActive, !byLine, i < words.count, !words[i].isEmpty {
                                 // Only the active line sweeps word by word.
                                 TimelineView(.animation(paused: !isPlaying)) { _ in
                                     WordSweepLine(
@@ -965,9 +973,10 @@ struct SyncedLyricsView: View {
                                     )
                                 }
                             } else {
+                                // Line by line lights the whole active line at once.
                                 Text(line.text.isEmpty ? " " : line.text)
-                                    .font(lineFont)
-                                    .foregroundStyle(unsung)
+                                    .font(isActive && byLine ? activeFont : lineFont)
+                                    .foregroundStyle(isActive && byLine ? sung : unsung)
                             }
                         }
                             .frame(maxWidth: .infinity, alignment: .leading)

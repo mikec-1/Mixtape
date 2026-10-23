@@ -121,6 +121,18 @@ public final class ThemeManager: ObservableObject {
         }
     }
 
+    /// A picture in place of the colour, on this device only. See `MixWallpaper`.
+    @Published private(set) var wallpaper: MixWallpaper.Picture?
+
+    func setWallpaper(_ data: Data) async throws {
+        wallpaper = try await MixWallpaper.save(data)
+    }
+
+    func removeWallpaper() {
+        MixWallpaper.remove()
+        wallpaper = nil
+    }
+
     /// Writes the raw value to `user_metadata`. Nil in previews.
     public var backdropWriter: ((String) -> Void)?
     private var backdropPush: Task<Void, Never>?
@@ -162,6 +174,10 @@ public final class ThemeManager: ObservableObject {
         MixMotion.current = self.motion
         applyAppKitAppearance()
         observeSystemMotionSetting()
+        Task { [weak self] in
+            let picture = await MixWallpaper.load()
+            self?.wallpaper = picture
+        }
     }
 
     /// Whether the OS is currently asking for reduced motion.
