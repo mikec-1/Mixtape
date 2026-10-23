@@ -514,50 +514,85 @@ public enum SpotifyAuthError: LocalizedError {
 
 // MARK: - Keychain
 
-/// Stores the token blob as a single generic-password item.
+/// Stores the token blob. iOS keeps it as a single generic-password item. macOS
+/// keeps it in a 0600 file beside the Supabase session (see FileAuthLocalStorage):
+/// the login keychain's per-app ACL prompts whenever the build's signature
+/// changes, which is every ad-hoc release, and that prompt blocked the main thread
+/// at launch. The data protection keychain needs a provisioning profile, which
+/// ad-hoc signing doesn't have.
 private enum Keychain {
     private static let service = "tech.mixtaped.spotify.oauth"
     private static let account = "tokens"
+    private static let query: [String: Any] = [
+        kSecClass as String: kSecClassGenericPassword,
+        kSecAttrService as String: service,
+        kSecAttrAccount as String: account,
+    ]
 
     static func save(_ tokens: StoredTokens) {
         guard let data = try? JSONEncoder().encode(tokens) else { return }
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
+        #if os(macOS)
+        // Drop the keychain copy only once the file holds the tokens.
+        guard (try? file.store(key: fileKey, value: data)) != nil else { return }
+        withoutPrompts { _ = SecItemDelete(query as CFDictionary) }
+        #else
         SecItemDelete(query as CFDictionary)
         var add = query
         add[kSecValueData as String] = data
         add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
         SecItemAdd(add as CFDictionary, nil)
+        #endif
     }
 
     static func load() -> StoredTokens? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data,
-              let tokens = try? JSONDecoder().decode(StoredTokens.self, from: data) else {
-            return nil
+        #if os(macOS)
+        if let data = try? file.retrieve(key: fileKey) {
+            return try? JSONDecoder().decode(StoredTokens.self, from: data)
         }
+        // One-time move out of the keychain. Only a build signed like the one that
+        // wrote the item can read it silently; any other grant comes back from the
+        // account copy in adoptAccountConnection.
+        guard let tokens = withoutPrompts({ keychainLoad() }) else { return nil }
+        save(tokens)
         return tokens
+        #else
+        return keychainLoad()
+        #endif
     }
 
     static func clear() {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
+        #if os(macOS)
+        try? file.remove(key: fileKey)
+        withoutPrompts { _ = SecItemDelete(query as CFDictionary) }
+        #else
         SecItemDelete(query as CFDictionary)
+        #endif
     }
+
+    private static func keychainLoad() -> StoredTokens? {
+        var query = query
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+              let data = item as? Data else { return nil }
+        return try? JSONDecoder().decode(StoredTokens.self, from: data)
+    }
+
+    #if os(macOS)
+    private static let file = FileAuthLocalStorage()
+    private static let fileKey = "spotify-tokens"
+
+    /// Runs keychain calls that fail rather than show the access prompt.
+    /// kSecUseAuthenticationUIFail doesn't cover the login keychain's ACL prompt.
+    private static func withoutPrompts<T>(_ body: () -> T) -> T {
+        var allowed: DarwinBoolean = true
+        SecKeychainGetUserInteractionAllowed(&allowed)
+        SecKeychainSetUserInteractionAllowed(false)
+        defer { SecKeychainSetUserInteractionAllowed(allowed.boolValue) }
+        return body()
+    }
+    #endif
 }
 
 // MARK: - Base64URL
